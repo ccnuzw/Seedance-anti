@@ -1,0 +1,164 @@
+.dashboard {
+  max-width: var(--page-width-normal);
+  margin: 0 auto;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--spacing-xl);
+}
+
+.dashboard-title {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.title-emoji {
+  font-size: var(--font-size-icon);
+}
+
+.dashboard-subtitle {
+  margin-top: var(--spacing-xs);
+  font-size: var(--font-size-md);
+}
+
+.dashboard-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+/* Empty state */
+.dashboard-empty {
+  text-align: center;
+  padding: var(--spacing-2xl) var(--spacing-xl);
+  background: var(--color-bg-card);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-xl);
+  margin-bottom: var(--spacing-xl);
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: var(--spacing-md);
+  opacity: 0.5;
+}
+
+.dashboard-empty h2 {
+  font-size: var(--font-size-lg);
+  margin-bottom: var(--spacing-sm);
+}
+
+.dashboard-empty p {
+  margin-bottom: var(--spacing-lg);
+  line-height: 1.8;
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-sm);
+}
+
+/* Stats */
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-md);
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+/* stat-icon, stat-value, stat-label → see global.css */
+
+/* Project grid */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+}
+
+.project-card {
+  cursor: pointer;
+}
+
+.project-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+.project-icon {
+  font-size: var(--font-size-lg);
+}
+
+.project-card-meta {
+  font-size: var(--font-size-sm);
+}
+
+.project-card-footer {
+  font-size: var(--font-size-xs);
+  margin-top: var(--spacing-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-header h3 {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-delete-btn {
+  opacity: 0;
+  padding: 2px 6px;
+  transition: all var(--transition-fast);
+}
+
+.project-card:hover .project-delete-btn {
+  opacity: 0.6;
+}
+
+.project-delete-btn:hover {
+  opacity: 1 !important;
+  color: var(--color-error);
+}
+
+/* New project dialog */
+.new-project-dialog {
+  margin-bottom: var(--spacing-lg);
+}
+
+.new-project-dialog h3 {
+  margin-bottom: var(--spacing-md);
+}
+
+/* form-grid, form-group, form-actions → see global.css */
+
+.dir-select {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.dir-select .input { flex: 1; }
+
+.about-card { padding: var(--spacing-md); }
+.about-row {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--spacing-xs) 0;
+  font-size: var(--font-size-sm);
+}
+

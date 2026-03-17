@@ -1,0 +1,444 @@
+.project-page {
+  max-width: var(--page-width-wide);
+  margin: 0 auto;
+}
+
+.project-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  text-align: center;
+  gap: var(--spacing-md);
+}
+
+.project-empty-state .empty-icon { font-size: 48px; opacity: 0.5; }
+.project-empty-state h2 { font-size: var(--font-size-lg); }
+
+.project-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--spacing-lg);
+}
+
+.project-name {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+}
+
+.project-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+}
+
+.meta-sep { opacity: 0.4; }
+
+/* Progress */
+.progress-section {
+  margin-bottom: var(--spacing-xl);
+}
+
+.progress-bar-bg {
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: var(--spacing-sm);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent), #8b5cf6);
+  border-radius: 3px;
+  transition: width var(--transition-slow);
+}
+
+.progress-text {
+  font-size: var(--font-size-sm);
+}
+
+/* Episode Table */
+.episode-table-wrapper {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.episode-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.episode-table th {
+  text-align: left;
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.episode-table td {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+}
+
+.episode-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.episode-row:last-child td {
+  border-bottom: none;
+}
+
+.ep-number {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}
+
+.table-empty {
+  text-align: center;
+  padding: var(--spacing-xl) !important;
+}
+
+/* File indicators */
+.file-indicators {
+  display: flex;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.fi-dot {
+  display: inline-block;
+  transition: opacity var(--transition-fast);
+}
+
+.fi-missing {
+  opacity: 0.2;
+  filter: grayscale(1);
+}
+
+/* Pipeline Settings Panel */
+.pipeline-settings-panel {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-lg);
+}
+
+.pipeline-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-lg);
+}
+
+.pipeline-settings-header h3 {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  margin: 0;
+}
+
+.pipeline-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.ps-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ps-item label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.ps-desc {
+  font-size: var(--font-size-xs);
+  line-height: 1.3;
+}
+
+.ps-item .input {
+  margin-top: 4px;
+}
+
+.pipeline-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+/* Active settings button */
+.btn-active {
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.project-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+/* View Toggle */
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  margin-bottom: var(--spacing-md);
+  justify-content: flex-end;
+}
+
+.view-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.view-toggle-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-tertiary);
+}
+
+.view-toggle-btn.active {
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* Episode Empty */
+.episode-empty {
+  text-align: center;
+  padding: var(--spacing-xl);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+/* =============================================
+   Episode Card Grid — V2 杂志编排风格
+   ============================================= */
+
+.episode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+/* ---- 卡片容器 ---- */
+.ep-card {
+  position: relative;
+  display: flex;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ep-card:hover {
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(99, 102, 241, 0.15);
+  transform: translateY(-2px) scale(1.008);
+}
+
+.ep-card--done {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+.ep-card--done:hover {
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(34, 197, 94, 0.15);
+}
+
+/* ---- 左侧色条 ---- */
+.ep-card-stripe {
+  width: 4px;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, #6366f1 0%, #a78bfa 100%);
+  transition: width 0.2s ease;
+}
+
+.ep-card:hover .ep-card-stripe {
+  width: 5px;
+}
+
+.stripe--done {
+  background: linear-gradient(180deg, #22c55e 0%, #4ade80 100%);
+}
+
+/* ---- 内容区 ---- */
+.ep-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 14px;
+  min-width: 0;
+}
+
+/* ---- 第一行：大编号 + 标题 / 状态 ---- */
+.ep-card-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.ep-num {
+  font-family: var(--font-mono);
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 0.85;
+  letter-spacing: -3px;
+  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.ep-card--done .ep-num {
+  background: linear-gradient(135deg, #22c55e, #86efac);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.ep-card-hero-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.ep-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
+}
+
+.ep-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  width: fit-content;
+  padding: 2px 0;
+}
+
+.ep-status.badge-info { color: var(--color-info); }
+.ep-status.badge-warning { color: var(--color-warning); }
+.ep-status.badge-success { color: var(--color-success); }
+
+/* ---- 产物指示器行 ---- */
+.ep-artifacts-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ep-artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+  opacity: 0.4;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.ep-artifact.on {
+  opacity: 1;
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-hover);
+}
+
+.ep-card--done .ep-artifact.on {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+/* ---- 底栏 ---- */
+.ep-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: auto;
+}
+
+.ep-meta {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0.2px;
+}
+
+.ep-meta-dot {
+  margin: 0 6px;
+  opacity: 0.5;
+}
+
+.ep-launch {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent);
+  letter-spacing: 0.5px;
+  transition: all 0.15s ease;
+}
+
+.ep-card:hover .ep-launch {
+  color: var(--color-accent-hover);
+  letter-spacing: 1.5px;
+}
+
+.ep-card--done .ep-launch {
+  color: var(--color-success);
+}
+.ep-card--done:hover .ep-launch {
+  color: #4ade80;
+}
+
+
+

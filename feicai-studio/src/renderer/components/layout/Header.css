@@ -1,0 +1,65 @@
+.header {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  flex-shrink: 0;
+}
+
+.header-title {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  padding: 3px 10px;
+  border-radius: var(--radius-md);
+}
+
+.header-status--running {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.header-status--done {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.header-status--error {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.header-ep-label {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: var(--font-size-xs);
+  color: var(--color-accent);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse 1.5s infinite;
+}
+
+.status-icon {
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+/* @keyframes pulse → see global.css */

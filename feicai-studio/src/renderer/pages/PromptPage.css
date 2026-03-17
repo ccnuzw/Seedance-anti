@@ -1,0 +1,236 @@
+.prompt-page {
+  max-width: var(--page-width-narrow);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--header-height) - var(--spacing-lg) * 2);
+  gap: var(--spacing-md);
+}
+
+.prompt-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.prompt-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.prompt-editor-textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  resize: none;
+}
+
+/* Episode navigation → see components/layout/EpisodeNav.css */
+
+/* ---- Tab 切换 ---- */
+.prompt-tabs {
+  display: flex;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-md);
+}
+
+/* ---- Product Viewer ---- */
+.product-viewer {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+}
+
+.product-viewer-header h2 {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  margin-bottom: var(--spacing-md);
+}
+
+.product-content {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-base);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-secondary);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+
+/* ---- Header ---- */
+.prompt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-lg);
+  gap: var(--spacing-xl);
+}
+
+.prompt-header h2 {
+  font-size: var(--font-size-lg);
+}
+
+.prompt-stats {
+  font-size: var(--font-size-sm);
+  margin-top: 2px;
+}
+
+/* Duration bar */
+.prompt-duration-bar {
+  flex: 1;
+  max-width: 300px;
+}
+
+.duration-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin-bottom: 4px;
+  text-align: right;
+}
+
+.duration-track {
+  position: relative;
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+.duration-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width var(--transition-normal);
+}
+
+.duration-fill.ok {
+  background: linear-gradient(90deg, var(--color-success), #4ade80);
+}
+
+.duration-fill.warn {
+  background: linear-gradient(90deg, var(--color-warning), #fbbf24);
+}
+
+.duration-marker {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 14px;
+  background: var(--color-text-tertiary);
+  transform: translateX(-1px);
+}
+
+/* Cards */
+.prompt-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.prompt-empty {
+  text-align: center;
+  padding: var(--spacing-2xl);
+}
+
+.prompt-card {
+  padding: var(--spacing-md);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.prompt-card.selected {
+  border-left-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+/* P00 素材对应表卡片 */
+.prompt-card-ref-table {
+  border-left-color: var(--color-warning) !important;
+  background: rgba(234, 179, 8, 0.04);
+}
+
+.prompt-card-ref-table:hover {
+  background: rgba(234, 179, 8, 0.08);
+}
+
+.prompt-card-ref-table.selected {
+  border-left-color: var(--color-warning) !important;
+  background: rgba(234, 179, 8, 0.1);
+}
+
+.prompt-index-ref {
+  color: var(--color-warning) !important;
+}
+
+.prompt-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
+}
+
+.prompt-index {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: var(--font-size-base);
+  color: var(--color-accent);
+}
+
+.prompt-title {
+  flex: 1;
+  margin: 0 var(--spacing-sm);
+  font-size: var(--font-size-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-duration {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.prompt-content {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.prompt-refs {
+  display: flex;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.prompt-ref-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--font-size-micro);
+  font-weight: 600;
+}
+
+.ref-char {
+  background: rgba(236, 72, 153, 0.15);
+  color: var(--color-stage-art);
+}
+
+.ref-scene {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}

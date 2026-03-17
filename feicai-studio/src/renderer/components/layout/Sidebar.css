@@ -1,0 +1,256 @@
+.sidebar {
+  width: var(--sidebar-width);
+  height: 100vh;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: var(--spacing-lg) var(--spacing-md);
+  padding-top: 40px; /* macOS traffic lights */
+}
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.logo-icon {
+  font-size: var(--font-size-xl);
+}
+
+.logo-text {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent), #ec4899);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.logo-tag {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.sidebar-nav-item:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.sidebar-nav-item.active {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+/* 导出按钮 — 重置 button 原生样式，与 NavLink 一致 */
+.sidebar-export-btn {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-family);
+}
+
+/* =========================================================
+   Sidebar Project Card  —  个性化项目信息卡片
+   ========================================================= */
+.sidebar-project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.06), rgba(236, 72, 153, 0.04));
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  text-decoration: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 微光纹理 */
+.sidebar-project-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 120% 80% at 20% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 60%),
+    radial-gradient(ellipse 80% 120% at 90% 100%, rgba(236, 72, 153, 0.08) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.sidebar-project-card:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  background:
+    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.1), rgba(236, 72, 153, 0.06));
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);
+  transform: translateY(-1px);
+}
+
+.sidebar-project-card.active {
+  border-color: rgba(99, 102, 241, 0.5);
+  background:
+    linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.12), rgba(236, 72, 153, 0.08));
+  box-shadow:
+    0 0 0 1px rgba(99, 102, 241, 0.3),
+    0 4px 24px rgba(99, 102, 241, 0.2);
+}
+
+/* ---- 卡片头部：图标 + 名称 ---- */
+.spc-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.spc-icon-wrapper {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+}
+
+.spc-icon {
+  font-size: 18px;
+}
+
+.spc-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.spc-name {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-primary);
+}
+
+.spc-style {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 三列数据指标 ---- */
+.spc-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  position: relative;
+  z-index: 1;
+}
+
+.spc-meta-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex: 1;
+}
+
+.spc-meta-value {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  line-height: 1.2;
+}
+
+.spc-meta-label {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.3px;
+}
+
+.spc-meta-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(99, 102, 241, 0.2);
+  flex-shrink: 0;
+}
+
+/* ---- 进度条 ---- */
+.spc-progress {
+  position: relative;
+  z-index: 1;
+}
+
+.spc-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.spc-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--color-accent), #8b5cf6, #ec4899);
+  transition: width var(--transition-slow);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+}
+
+.nav-icon {
+  font-size: var(--font-size-md);
+  width: 22px;
+  text-align: center;
+}
+
+.sidebar-footer {
+  padding: var(--spacing-md);
+  border-top: 1px solid var(--color-border);
+}
+
+.sidebar-version {
+  font-size: var(--font-size-xs);
+  text-align: center;
+}

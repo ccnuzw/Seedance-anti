@@ -1,0 +1,48 @@
+{
+  "name": "feicai-studio",
+  "version": "0.1.0",
+  "description": "FEICAI Studio - AI 驱动的影视短剧制作工作台",
+  "main": "./out/main/index.js",
+  "author": "FEICAI",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "postinstall": "electron-builder install-app-deps",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^4.77.0",
+    "better-sqlite3": "^11.7.0",
+    "gray-matter": "^4.0.3",
+    "uuid": "^11.0.0",
+    "electron-store": "^10.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.0",
+    "@xyflow/react": "^12.0.0",
+    "zustand": "^5.0.0",
+    "recharts": "^2.15.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-vite": "^2.3.0",
+    "electron-builder": "^25.1.0",
+    "@monaco-editor/react": "^4.6.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

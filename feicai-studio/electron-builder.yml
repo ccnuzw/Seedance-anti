@@ -1,0 +1,48 @@
+appId: com.feicai.studio
+productName: FEICAI Studio
+copyright: Copyright © 2024 FEICAI
+
+directories:
+  output: dist
+  buildResources: resources
+
+files:
+  - out/**/*
+  - resources/builtin-skills/**/*
+  - "!**/*.map"
+
+extraResources:
+  - from: resources/builtin-skills
+    to: builtin-skills
+    filter:
+      - "**/*"
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  darkModeSupport: true
+  hardenedRuntime: true
+  
+dmg:
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: true
+
+linux:
+  target:
+    - AppImage
+  category: AudioVideo

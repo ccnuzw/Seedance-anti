@@ -1,0 +1,297 @@
+.batch-page {
+  max-width: var(--page-width-narrow);
+  margin: 0 auto;
+}
+
+.batch-page h2 {
+  font-size: var(--font-size-xl);
+  margin-bottom: var(--spacing-lg);
+}
+
+/* Mode bar */
+.batch-mode-bar {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-xs);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+}
+
+.batch-mode-btn {
+  flex: 1;
+  text-align: center;
+  border-radius: var(--radius-md) !important;
+}
+
+.batch-mode-btn.active {
+  background: var(--color-accent) !important;
+  color: white !important;
+}
+
+/* Selection */
+.batch-selection {
+  margin-bottom: var(--spacing-lg);
+}
+
+.batch-selection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.batch-quick-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.episode-select-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+  gap: var(--spacing-xs);
+}
+
+.episode-select-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.episode-select-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.episode-select-btn.selected {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: white;
+}
+
+.episode-select-btn.completed {
+  opacity: 0.6;
+}
+
+.ep-done {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: var(--font-size-micro);
+  color: var(--color-success);
+}
+
+/* Actions */
+.batch-actions {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--spacing-xl);
+}
+
+.btn-lg {
+  padding: var(--spacing-sm) var(--spacing-2xl) !important;
+  font-size: var(--font-size-md) !important;
+}
+
+/* Progress */
+.batch-progress {
+  margin-top: var(--spacing-lg);
+}
+
+.batch-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.batch-task {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+.task-ep {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  width: 48px;
+}
+
+.task-status-icon { font-size: var(--font-size-md); }
+
+.task-running { border-left: 3px solid var(--color-accent); }
+.task-done { border-left: 3px solid var(--color-success); }
+.task-error { border-left: 3px solid var(--color-error); }
+
+.task-running .task-status-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ====== Batch Log Panel ====== */
+.batch-log-panel {
+  margin-top: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: all var(--transition-normal);
+}
+
+.batch-log-panel.expanded {
+  max-height: 400px;
+}
+
+.batch-log-panel.collapsed {
+  max-height: 44px;
+}
+
+.batch-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+  user-select: none;
+}
+
+.batch-log-header:hover {
+  background: var(--color-bg-hover);
+}
+
+.batch-log-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.batch-log-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+}
+
+.batch-log-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.batch-log-clear-btn {
+  font-size: var(--font-size-xs) !important;
+  padding: 2px 6px !important;
+  opacity: 0.6;
+  transition: opacity var(--transition-fast);
+}
+
+.batch-log-clear-btn:hover {
+  opacity: 1;
+}
+
+.batch-log-toggle {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  width: 16px;
+  text-align: center;
+}
+
+.batch-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacing-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  max-height: 350px;
+}
+
+/* Episode tag in batch logs */
+.log-ep-tag {
+  font-size: var(--font-size-micro);
+  font-weight: 600;
+  background: var(--color-accent);
+  color: white;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+/* Reuse LogPanel styles */
+.batch-log-panel .log-empty {
+  padding: var(--spacing-lg);
+  text-align: center;
+  font-family: var(--font-family);
+}
+
+.batch-log-panel .log-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: 3px var(--spacing-xs);
+  border-radius: var(--radius-sm);
+  line-height: 1.6;
+}
+
+.batch-log-panel .log-entry:hover {
+  background: var(--color-bg-hover);
+}
+
+.batch-log-panel .log-icon {
+  font-size: var(--font-size-xs);
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+
+.batch-log-panel .log-time {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+  font-size: var(--font-size-micro);
+  margin-top: 1px;
+}
+
+.batch-log-panel .log-message {
+  color: var(--color-text-secondary);
+  word-break: break-all;
+}
+
+.batch-log-panel .log-error .log-message { color: var(--color-error); }
+.batch-log-panel .log-warn .log-message { color: var(--color-warning); }
+
+.batch-log-panel .log-stream {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 3px var(--spacing-xs);
+  color: var(--color-accent);
+}
+
+.batch-log-panel .log-stream-text {
+  animation: pulse 1.5s infinite;
+}

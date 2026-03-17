@@ -1,0 +1,119 @@
+.stage-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 90px;
+  background: var(--color-bg-card);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.stage-node:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* States */
+.stage-active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.3);
+}
+
+.stage-reviewing {
+  border-color: var(--color-warning);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.3);
+}
+
+.stage-done {
+  border-color: var(--color-success);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.stage-error {
+  border-color: var(--color-error);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.stage-emoji {
+  font-size: var(--font-size-xl);
+  margin-bottom: 4px;
+}
+
+.stage-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.stage-handle {
+  width: 8px !important;
+  height: 8px !important;
+  background: var(--color-border) !important;
+  border: none !important;
+}
+
+.stage-pulse {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: nodePulse 1.5s infinite;
+}
+
+@keyframes nodePulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.5; }
+}
+
+.stage-check {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-success);
+  color: white;
+  font-size: var(--font-size-micro);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage-reviewing-badge {
+  position: absolute;
+  bottom: -8px;
+  padding: 1px 6px;
+  background: var(--color-warning);
+  color: var(--color-bg-primary);
+  font-size: var(--font-size-micro);
+  font-weight: 700;
+  border-radius: 4px;
+}
+
+.stage-time {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+  letter-spacing: 0.5px;
+}
+
+.stage-active .stage-time {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.stage-done .stage-time {
+  color: var(--color-success);
+}
+
