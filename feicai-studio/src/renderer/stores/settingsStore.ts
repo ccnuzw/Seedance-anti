@@ -66,6 +66,7 @@ interface SettingsStore {
   deleteLLMConfig: (id: string) => Promise<void>
   setDefaultLLM: (id: string) => Promise<void>
   testConnection: (config: LLMConfig) => Promise<{ success: boolean; message: string }>
+  getDefaultConfig: (category: ModelCategory) => LLMConfig | undefined
 
   updateAppSettings: (patch: Partial<AppSettings>) => void
   resetAppSettings: () => void
@@ -83,10 +84,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 
     loadLLMConfigs: async () => {
       set({ loading: true })
-      const raw = await window.feicaiAPI.invoke(IPC.LLM_LIST_CONFIGS) as LLMConfig[]
-      // 兜底：旧数据可能没有 category 字段
-      const configs = raw.map(c => ({ ...c, category: c.category || 'llm' as ModelCategory }))
-      set({ llmConfigs: configs, loading: false })
+      try {
+        const raw = await window.feicaiAPI.invoke(IPC.LLM_LIST_CONFIGS) as LLMConfig[]
+        // 兜底：旧数据可能没有 category 字段
+        const configs = raw.map(c => ({ ...c, category: c.category || 'llm' as ModelCategory }))
+        set({ llmConfigs: configs, loading: false })
+      } catch {
+        set({ loading: false })
+      }
     },
 
     addLLMConfig: async (data) => {
@@ -122,6 +127,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
       saveAppSettings(merged)
       applyAppSettings(merged)
       set({ appSettings: merged })
+    },
+
+    getDefaultConfig: (category) => {
+      const configs = get().llmConfigs.filter(c => (c.category || 'llm') === category)
+      return configs.find(c => c.isDefault) || configs[0]
     },
 
     resetAppSettings: () => {

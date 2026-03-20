@@ -3,33 +3,10 @@
   margin: 0 auto;
 }
 
-.dashboard-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--spacing-xl);
-}
-
-.dashboard-title {
-  font-size: var(--font-size-2xl);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-}
+/* header 使用 global.css 中的 .page-header-top / .page-title-2xl / .page-actions */
 
 .title-emoji {
   font-size: var(--font-size-icon);
-}
-
-.dashboard-subtitle {
-  margin-top: var(--spacing-xs);
-  font-size: var(--font-size-md);
-}
-
-.dashboard-actions {
-  display: flex;
-  gap: var(--spacing-sm);
 }
 
 /* Empty state */
@@ -43,7 +20,7 @@
 }
 
 .empty-icon {
-  font-size: 48px;
+  font-size: var(--icon-box-size);
   margin-bottom: var(--spacing-md);
   opacity: 0.5;
 }
@@ -162,3 +139,164 @@
   font-size: var(--font-size-sm);
 }
 
+/* =========================================================
+   新建项目向导
+   ========================================================= */
+
+.wizard-dialog {
+  margin-bottom: var(--spacing-lg);
+  overflow: hidden;
+}
+
+/* 步骤条 */
+.wizard-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.4;
+  transition: all var(--transition-fast);
+}
+
+.wizard-step.active {
+  opacity: 1;
+}
+
+.wizard-step.done {
+  opacity: 0.7;
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-bg-hover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wizard-step.active .step-num {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.wizard-step.done .step-num {
+  background: var(--color-success);
+  color: #fff;
+}
+
+.step-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.wizard-step-line {
+  width: 40px;
+  height: 2px;
+  background: var(--color-border);
+  margin: 0 var(--spacing-sm);
+}
+
+.wizard-content {
+  padding: 0 var(--spacing-lg) var(--spacing-lg);
+}
+
+.wizard-content h3 {
+  margin-bottom: var(--spacing-md);
+}
+
+.wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-lg);
+}
+
+/* 类型选择卡片 */
+.source-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-md);
+}
+
+.source-type-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-lg);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--color-border);
+  background: var(--color-bg-card);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: center;
+}
+
+.source-type-card:hover {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+}
+
+.source-type-card.selected {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  box-shadow: 0 0 0 1px var(--color-accent), var(--shadow-md);
+}
+
+.stc-icon {
+  font-size: var(--font-size-2xl);
+}
+
+.stc-title {
+  font-size: var(--font-size-md);
+  font-weight: 700;
+}
+
+.stc-desc {
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+/* 项目卡片标签 */
+.project-card-meta {
+  font-size: var(--font-size-sm);
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: center;
+}
+
+.project-source-tag,
+.project-phase-tag {
+  font-size: var(--font-size-micro);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.project-source-tag {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent);
+}
+
+.project-phase-tag {
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-success);
+}
+
+.project-card-info {
+  font-size: var(--font-size-xs);
+  margin-top: var(--spacing-xs);
+}

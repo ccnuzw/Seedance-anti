@@ -14,10 +14,14 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  source_type TEXT DEFAULT 'script',
+  phase TEXT DEFAULT 'production',
   visual_style TEXT,
   target_medium TEXT,
   project_path TEXT NOT NULL,
   total_episodes INTEGER DEFAULT 0,
+  novel_title TEXT,
+  novel_genre TEXT,
   config_json TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -132,6 +136,50 @@ CREATE INDEX IF NOT EXISTS idx_scenes_project ON scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_episode ON reviews(episode_id);
 CREATE INDEX IF NOT EXISTS idx_logs_episode ON execution_logs(episode_id);
 CREATE INDEX IF NOT EXISTS idx_refs_episode ON asset_references(episode_id);
+
+-- 小说信息（编剧管线）
+CREATE TABLE IF NOT EXISTS novels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  genre TEXT,
+  total_chapters INTEGER DEFAULT 0,
+  chapters_dir TEXT,
+  processed_chapters INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 剧情拆解批次（编剧管线）
+CREATE TABLE IF NOT EXISTS adapt_batches (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  batch_number INTEGER NOT NULL,
+  chapter_start INTEGER NOT NULL,
+  chapter_end INTEGER NOT NULL,
+  plot_count INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending',
+  review_score REAL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 剧情点（编剧管线）
+CREATE TABLE IF NOT EXISTS plot_points (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  batch_id TEXT REFERENCES adapt_batches(id),
+  plot_number INTEGER NOT NULL,
+  scene TEXT,
+  description TEXT,
+  hook_type TEXT,
+  episode_number INTEGER,
+  status TEXT DEFAULT 'unused',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_novels_project ON novels(project_id);
+CREATE INDEX IF NOT EXISTS idx_batches_project ON adapt_batches(project_id);
+CREATE INDEX IF NOT EXISTS idx_plots_project ON plot_points(project_id);
+CREATE INDEX IF NOT EXISTS idx_plots_batch ON plot_points(batch_id);
 `
 
 /**
@@ -170,6 +218,19 @@ export function initDatabase(): Database.Database {
   const llmColNames = new Set(llmCols.map(c => c.name))
   if (!llmColNames.has('category')) {
     db.exec("ALTER TABLE llm_configs ADD COLUMN category TEXT DEFAULT 'llm'")
+  }
+
+  // === 迁移：projects 增加 source_type / phase / novel_title / novel_genre 列 ===
+  const projCols = db.prepare("PRAGMA table_info('projects')").all() as { name: string }[]
+  const projColNames = new Set(projCols.map(c => c.name))
+  const projMigrations: [string, string][] = [
+    ['source_type', "ALTER TABLE projects ADD COLUMN source_type TEXT DEFAULT 'script'"],
+    ['phase', "ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT 'production'"],
+    ['novel_title', 'ALTER TABLE projects ADD COLUMN novel_title TEXT'],
+    ['novel_genre', 'ALTER TABLE projects ADD COLUMN novel_genre TEXT'],
+  ]
+  for (const [col, sql] of projMigrations) {
+    if (!projColNames.has(col)) db.exec(sql)
   }
 
   return db

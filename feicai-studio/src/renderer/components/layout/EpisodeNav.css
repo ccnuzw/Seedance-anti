@@ -10,7 +10,7 @@
 .epnav-track {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--spacing-xs);
   padding: var(--spacing-xs) var(--spacing-xs);
 }
 
@@ -41,15 +41,15 @@
   color: var(--color-accent);
   background: var(--color-accent-subtle);
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 15%, transparent);
 }
 
 /* ---- 激活态 ---- */
 .epnav-active {
-  background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-stage-storyboard));
   border-color: transparent;
   color: white;
-  box-shadow: 0 2px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--color-accent) 40%, transparent);
   transform: translateY(-1px);
 }
 
@@ -57,12 +57,12 @@
   background: linear-gradient(135deg, var(--color-accent-hover), #9b6ef6);
   border-color: transparent;
   color: white;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.5);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--color-accent) 50%, transparent);
 }
 
 /* ---- 已完成 ---- */
 .epnav-done {
-  border-color: rgba(34, 197, 94, 0.4);
+  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
   color: var(--color-success);
 }
 
@@ -74,13 +74,13 @@
 
 /* ---- 部分完成 ---- */
 .epnav-partial {
-  border-color: rgba(234, 179, 8, 0.4);
+  border-color: color-mix(in srgb, var(--color-warning) 40%, transparent);
   color: var(--color-warning);
 }
 
 .epnav-partial:hover {
   border-color: var(--color-warning);
-  background: rgba(234, 179, 8, 0.08);
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
   color: var(--color-warning);
 }
 
@@ -115,14 +115,14 @@
 
 /* ---- 运行中 ---- */
 .epnav-running {
-  border-color: rgba(59, 130, 246, 0.6);
+  border-color: color-mix(in srgb, var(--color-info) 60%, transparent);
   color: var(--color-info, #3b82f6);
   animation: epnav-glow 2s ease-in-out infinite;
 }
 
 .epnav-running:hover {
   border-color: var(--color-info, #3b82f6);
-  background: rgba(59, 130, 246, 0.08);
+  background: color-mix(in srgb, var(--color-info) 8%, transparent);
 }
 
 .epnav-active.epnav-running {
@@ -143,18 +143,18 @@
   border-radius: 50%;
   font-size: 7px;
   line-height: 1;
-  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-info) 50%, transparent);
   animation: epnav-pulse-ring 1.5s ease-in-out infinite;
 }
 
 @keyframes epnav-glow {
-  0%, 100% { box-shadow: 0 0 4px rgba(59, 130, 246, 0.2); }
-  50% { box-shadow: 0 0 12px rgba(59, 130, 246, 0.4); }
+  0%, 100% { box-shadow: 0 0 4px color-mix(in srgb, var(--color-info) 20%, transparent); }
+  50% { box-shadow: 0 0 12px color-mix(in srgb, var(--color-info) 40%, transparent); }
 }
 
 @keyframes epnav-glow-active {
-  0%, 100% { box-shadow: 0 2px 12px rgba(99, 102, 241, 0.4); }
-  50% { box-shadow: 0 2px 20px rgba(59, 130, 246, 0.6); }
+  0%, 100% { box-shadow: 0 2px 12px color-mix(in srgb, var(--color-accent) 40%, transparent); }
+  50% { box-shadow: 0 2px 20px color-mix(in srgb, var(--color-info) 60%, transparent); }
 }
 
 @keyframes epnav-pulse-ring {

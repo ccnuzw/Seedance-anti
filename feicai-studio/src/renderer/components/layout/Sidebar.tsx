@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
 import ExportModal from '@renderer/components/ExportModal'
 import './Sidebar.css'
 
 export default function Sidebar() {
-  const { currentProject, episodes } = useProjectStore()
+  const navigate = useNavigate()
+  const { currentProject, episodes, updatePhase } = useProjectStore()
   const { context: pipelineContext } = usePipelineStore()
   const [showExport, setShowExport] = useState(false)
 
@@ -20,20 +21,33 @@ export default function Sidebar() {
     ? `/project/${currentProject.id}/pipeline${pipelineEp ? `?ep=${pipelineEp}` : ''}`
     : ''
 
-  const NAV_ITEMS_BEFORE = [
-    { path: '/', icon: '🏠', label: '仪表盘' },
-  ]
+  const isWritingPhase = currentProject?.phase === 'writing'
+  const isProductionPhase = currentProject?.phase === 'production'
 
-  const NAV_ITEMS_AFTER = currentProject
+  // 编剧管线导航
+  const WRITING_NAV = currentProject
+    ? [
+        { path: `/project/${currentProject.id}/novel`, icon: '📖', label: '小说管理' },
+        { path: `/project/${currentProject.id}/breakdown`, icon: '📊', label: '剧情拆解' },
+        { path: `/project/${currentProject.id}/adapt-script`, icon: '✍️', label: '剧本创作' },
+      ]
+    : []
+
+  // 制作管线导航
+  const PRODUCTION_NAV = currentProject
     ? [
         { path: pipelinePath, icon: '⚡', label: '流水线' },
         { path: `/project/${currentProject.id}/batch`, icon: '🚀', label: '批量执行' },
         { path: `/project/${currentProject.id}/assets`, icon: '🎭', label: '素材库' },
         { path: `/project/${currentProject.id}/prompts`, icon: '📐', label: '提示词' },
-        { path: `/project/${currentProject.id}/script`, icon: '📖', label: '剧本' },
-        { path: `/project/${currentProject.id}/review`, icon: '📊', label: '审核报告' },
+        { path: `/project/${currentProject.id}/script`, icon: '📝', label: '剧本编辑' },
+        { path: `/project/${currentProject.id}/review`, icon: '🔍', label: '审核报告' },
       ]
     : []
+
+  const handleUpgradePhase = async () => {
+    await updatePhase('production')
+  }
 
   return (
     <aside className="sidebar">
@@ -47,19 +61,16 @@ export default function Sidebar() {
 
       <nav className="sidebar-nav">
         {/* 仪表盘 */}
-        {NAV_ITEMS_BEFORE.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            end={item.path === '/'}
-            className={({ isActive }) =>
-              `sidebar-nav-item ${isActive ? 'active' : ''}`
-            }
-          >
-            <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-          </NavLink>
-        ))}
+        <NavLink
+          to="/"
+          end
+          className={({ isActive }) =>
+            `sidebar-nav-item ${isActive ? 'active' : ''}`
+          }
+        >
+          <span className="nav-icon">🏠</span>
+          <span className="nav-label">仪表盘</span>
+        </NavLink>
 
         {/* 项目卡片 */}
         {currentProject && (
@@ -75,7 +86,11 @@ export default function Sidebar() {
               </div>
               <div className="spc-title-group">
                 <span className="spc-name">{currentProject.name}</span>
-                <span className="spc-style">{currentProject.visualStyle || '未设定风格'}</span>
+                <span className="spc-style">
+                  {currentProject.sourceType === 'novel'
+                    ? `📖 ${currentProject.novelTitle || '网文改编'}`
+                    : currentProject.visualStyle || '未设定风格'}
+                </span>
               </div>
             </div>
 
@@ -107,19 +122,74 @@ export default function Sidebar() {
           </NavLink>
         )}
 
-        {/* 其他菜单项 */}
-        {NAV_ITEMS_AFTER.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) =>
-              `sidebar-nav-item ${isActive ? 'active' : ''}`
-            }
+        {/* 编剧管线分组 */}
+        {currentProject && WRITING_NAV.length > 0 && (
+          <>
+            <div className="sidebar-group-title">
+              <span className="group-icon">📖</span>
+              <span>编剧管线</span>
+              {isWritingPhase && <span className="group-phase-badge badge-active">进行中</span>}
+              {isProductionPhase && <span className="group-phase-badge badge-done">已完成</span>}
+            </div>
+            {WRITING_NAV.map((item) => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) =>
+                  `sidebar-nav-item ${isActive ? 'active' : ''}`
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </>
+        )}
+
+        {/* 阶段升级按钮 */}
+        {currentProject && isWritingPhase && (
+          <button
+            className="sidebar-phase-upgrade-btn"
+            onClick={handleUpgradePhase}
+            title="确认剧本已就绪，进入制作阶段"
           >
-            <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-          </NavLink>
-        ))}
+            <span className="nav-icon">🚀</span>
+            <span className="nav-label">进入制作阶段</span>
+          </button>
+        )}
+
+        {/* 分组分隔线 */}
+        {currentProject && <div className="sidebar-group-divider" />}
+
+        {/* 制作管线分组 */}
+        {currentProject && PRODUCTION_NAV.length > 0 && (
+          <>
+            <div className="sidebar-group-title">
+              <span className="group-icon">🎬</span>
+              <span>制作管线</span>
+              {isProductionPhase && <span className="group-phase-badge badge-active">进行中</span>}
+              {isWritingPhase && <span className="group-phase-badge badge-locked">🔒 待解锁</span>}
+            </div>
+            {PRODUCTION_NAV.map((item) => (
+              <NavLink
+                key={item.path}
+                to={isWritingPhase ? '#' : item.path}
+                className={({ isActive }) =>
+                  `sidebar-nav-item ${isActive && !isWritingPhase ? 'active' : ''} ${isWritingPhase ? 'nav-disabled' : ''}`
+                }
+                onClick={(e) => {
+                  if (isWritingPhase) {
+                    e.preventDefault()
+                  }
+                }}
+                title={isWritingPhase ? '完成剧本创作后解锁' : item.label}
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </>
+        )}
 
         {/* 设置 */}
         <NavLink

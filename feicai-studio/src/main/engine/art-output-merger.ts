@@ -14,7 +14,7 @@ export class ArtOutputMerger {
     projectPath: string,
     episodeNum: number
   ): Promise<{ characters: number; scenes: number }> {
-    const epTag = `ep${String(episodeNum).padStart(2, '0')}`
+    const epTag = `ep${String(episodeNum).padStart(3, '0')}`
     const assetsDir = join(projectPath, 'assets')
     await mkdir(assetsDir, { recursive: true })
 

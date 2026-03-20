@@ -7,6 +7,7 @@ import { createProvider } from '../llm/provider-factory'
 import { registerPipelineHandlers } from './pipeline-handlers'
 import { registerAssetHandlers } from './asset-handlers'
 import { registerExportHandlers } from './export-handlers'
+import { registerAdaptHandlers } from './adapt-handlers'
 import type { LLMConfig } from '@shared/types'
 
 export function registerAllHandlers(): void {
@@ -16,6 +17,9 @@ export function registerAllHandlers(): void {
   registerAssetHandlers()
   // 注册导出 handlers
   registerExportHandlers()
+  // 注册编剧管线 handlers
+  const skillsDir = join(__dirname, '..', '..', '..', '.agent', 'skills')
+  registerAdaptHandlers(skillsDir)
 
   // ==================== 项目 ====================
 
@@ -34,6 +38,11 @@ export function registerAllHandlers(): void {
   ipcMain.handle(IPC.PROJECT_DELETE, async (_event, id: string) => {
     queries.deleteProject(id)
     return { success: true }
+  })
+
+  ipcMain.handle(IPC.PROJECT_UPDATE_PHASE, async (_event, id: string, phase: string) => {
+    queries.updateProjectPhase(id, phase as import('@shared/types').ProjectPhase)
+    return queries.getProject(id)
   })
 
   // ==================== LLM 配置 ====================
@@ -69,12 +78,20 @@ export function registerAllHandlers(): void {
   // ==================== 文件操作 ====================
 
   ipcMain.handle(IPC.FILE_READ, async (_event, filePath: string) => {
+    const { existsSync } = require('fs')
+    if (!existsSync(filePath)) return null
     return readFile(filePath, 'utf-8')
   })
 
   ipcMain.handle(IPC.FILE_WRITE, async (_event, filePath: string, content: string) => {
     await writeFile(filePath, content, 'utf-8')
     return { success: true }
+  })
+
+  ipcMain.handle(IPC.FILE_READDIR, async (_event, dirPath: string) => {
+    const { existsSync, readdirSync } = require('fs')
+    if (!existsSync(dirPath)) return []
+    return readdirSync(dirPath) as string[]
   })
 
   ipcMain.handle(IPC.FILE_SELECT_DIR, async () => {

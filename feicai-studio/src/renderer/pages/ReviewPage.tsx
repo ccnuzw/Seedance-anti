@@ -6,6 +6,7 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 import { useToastStore } from '@renderer/stores/toastStore'
 import { useProjectSync } from '@renderer/hooks/useProjectSync'
 import type { ReviewResult, PipelineStage } from '@shared/types'
+import EmptyState from '@renderer/components/layout/EmptyState'
 import '@renderer/components/layout/EpisodeNav.css'
 import './ReviewPage.css'
 
@@ -133,7 +134,7 @@ export default function ReviewPage() {
   return (
     <div className="review-page">
       {/* 集数筛选 */}
-      <div className="epnav" style={{ marginBottom: 'var(--spacing-md)' }}>
+      <div className="epnav mb-md">
         <div className="epnav-track">
           <button
             className={`epnav-item ${selectedEp === 'all' ? 'epnav-active' : ''}`}
@@ -153,9 +154,9 @@ export default function ReviewPage() {
                   done && selectedEp !== ep && 'epnav-done'
                 ].filter(Boolean).join(' ')}
                 onClick={() => setSelectedEp(ep)}
-                title={`EP${String(ep).padStart(2, '0')}`}
+                title={`EP${String(ep).padStart(3, '0')}`}
               >
-                <span className="epnav-num">{String(ep).padStart(2, '0')}</span>
+                <span className="epnav-num">{String(ep).padStart(3, '0')}</span>
                 {done && <span className="epnav-check">✓</span>}
               </button>
             )
@@ -198,12 +199,14 @@ export default function ReviewPage() {
       <div className="review-list">
         <h3 className="section-title">
           审核记录
-          {selectedEp !== 'all' && <span className="text-secondary"> — EP{String(selectedEp).padStart(2, '0')}</span>}
+          {selectedEp !== 'all' && <span className="text-secondary"> — EP{String(selectedEp).padStart(3, '0')}</span>}
         </h3>
         {reviews.length === 0 ? (
-          <div className="review-empty card text-secondary">
-            {loading ? '加载中...' : '暂无审核记录。请先在流水线中执行阶段任务。'}
-          </div>
+          <EmptyState
+            icon="📝"
+            title={loading ? '加载中...' : '暂无审核记录'}
+            description={loading ? undefined : '请先在流水线中执行阶段任务'}
+          />
         ) : (
           reviews.map((review, idx) => {
             const isPass = review.result === 'PASS'

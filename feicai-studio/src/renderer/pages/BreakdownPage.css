@@ -1,0 +1,655 @@
+/* ============================================================
+   BreakdownPage — 剧情拆解页面样式
+   ============================================================ */
+
+.breakdown-page {
+  padding: var(--spacing-lg);
+  max-width: var(--page-width-xl);
+}
+
+/* header 使用 global.css 中的 .page-header / .page-title */
+.breakdown-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: var(--spacing-lg);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.breakdown-tabs .tab-btn {
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+}
+
+.breakdown-tabs .tab-btn:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+.breakdown-tabs .tab-btn.active {
+  color: var(--color-text-primary);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.tab-count {
+  font-size: var(--font-size-micro);
+  background: var(--color-accent);
+  color: white;
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* === 水位仪表盘 === */
+.dashboard-section {
+  margin-bottom: var(--spacing-lg);
+}
+
+.progress-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.progress-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
+}
+
+.progress-card-title {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.progress-card-pct {
+  font-weight: 700;
+  font-size: var(--font-size-md);
+  color: var(--color-accent);
+}
+
+/* 进度条使用 global.css 中的 .progress-bar / .progress-bar-fill */
+
+.progress-card-detail {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+/* === 操作按钮 === */
+.breakdown-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+}
+
+/* === 阶段报告卡片 === */
+.stage-report-card {
+  background: var(--color-bg-card);
+  border: 1px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-lg);
+  overflow: hidden;
+}
+
+.stage-report-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stage-report-title {
+  font-weight: 600;
+}
+
+.stage-report-body {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+
+.report-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.report-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.report-value {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.report-summary {
+  width: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+}
+
+/* === LLM 输出 / 日志 === */
+.stream-output {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  max-height: 300px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  margin-bottom: var(--spacing-lg);
+}
+
+.log-panel {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm);
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  display: flex;
+  gap: var(--spacing-sm);
+  padding: 2px var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+}
+
+.log-time {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.log-warn { color: var(--color-warning); }
+.log-error { color: var(--color-error); }
+
+/* =============================================
+   剧情列表 Tab 样式
+   ============================================= */
+
+.plots-section {
+  margin-top: var(--spacing-sm);
+}
+
+.plots-loading, .plots-empty {
+  text-align: center;
+  padding: var(--spacing-xl) var(--spacing-lg);
+}
+
+/* 统计摘要栏 */
+.plots-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.plots-summary-left, .plots-summary-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.plots-stat {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.plots-stat strong {
+  color: var(--color-text-primary);
+  margin-right: 2px;
+}
+
+.plots-stat-used strong { color: var(--color-success); }
+.plots-stat-unused strong { color: var(--color-warning); }
+
+.plots-filter-select {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+}
+
+/* 批次分组 */
+.batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.batch-group {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.batch-group.expanded {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+}
+
+.batch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition-fast);
+}
+
+.batch-header:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+.batch-header-left, .batch-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.batch-toggle {
+  font-size: var(--font-size-micro);
+  color: var(--color-text-secondary);
+  width: 14px;
+}
+
+.batch-title {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.batch-chapters {
+  font-size: var(--font-size-xs);
+}
+
+.batch-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.batch-used-badge, .batch-unused-badge {
+  font-size: var(--font-size-micro);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.batch-used-badge {
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
+}
+
+.batch-unused-badge {
+  background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  color: var(--color-warning);
+}
+
+/* 批次内的剧情点卡片 */
+.batch-body {
+  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+}
+
+.plot-card {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  transition: border-color var(--transition-fast), transform 0.1s;
+}
+
+.plot-card:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  transform: translateX(2px);
+}
+
+.plot-card.plot-used {
+  border-left: 3px solid var(--color-success);
+  opacity: 0.7;
+}
+
+.plot-card.plot-unused {
+  border-left: 3px solid var(--color-warning);
+}
+
+.plot-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+}
+
+.plot-id {
+  font-weight: 700;
+  color: var(--color-accent);
+  font-size: var(--font-size-sm);
+}
+
+.plot-status-badge {
+  font-size: var(--font-size-micro);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.status-used {
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
+}
+
+.status-unused {
+  background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  color: var(--color-warning);
+}
+
+.plot-episode {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-left: auto;
+}
+
+.plot-card-body {
+  margin-bottom: var(--spacing-xs);
+}
+
+.plot-scene {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-xs);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.plot-scene-label {
+  font-size: var(--font-size-xs);
+}
+
+.plot-desc {
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+}
+
+.plot-card-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.plot-hook {
+  font-size: var(--font-size-micro);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+/* =============================================
+   改编规划 Tab 样式
+   ============================================= */
+
+.plan-section {
+  margin-top: var(--spacing-sm);
+}
+
+.plan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.plan-header h2 {
+  font-size: var(--font-size-md);
+  margin: 0;
+}
+
+/* 卷选择器 */
+.plan-volume-selector {
+  display: flex;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
+  flex-wrap: wrap;
+}
+
+.plan-vol-btn {
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.plan-vol-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.plan-vol-btn.active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+.plan-vol-add {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.plan-vol-add:hover {
+  opacity: 1;
+}
+
+.plan-vol-remove {
+  font-size: var(--font-size-xs);
+  opacity: 0.5;
+  cursor: pointer;
+  margin-left: 2px;
+}
+
+.plan-vol-remove:hover {
+  opacity: 1;
+  color: var(--color-error);
+}
+
+/* 双栏布局 */
+.plan-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+}
+
+@media (max-width: 900px) {
+  .plan-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.plan-form {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+}
+
+.plan-form-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin: 0 0 var(--spacing-md) 0;
+  padding-bottom: var(--spacing-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plan-form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+.plan-form-row-full {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.plan-form-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.plan-input {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  flex: 1;
+  min-width: 0;
+}
+
+.plan-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.plan-input-sm {
+  width: 120px;
+  max-width: 120px;
+  flex: 0 0 120px;
+  text-align: center;
+  font-size: var(--font-size-md);
+  padding: var(--spacing-sm);
+}
+
+.plan-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.plan-range-sep {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.plan-textarea {
+  width: 100%;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.plan-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.plan-form-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border);
+}
+
+/* 右栏：规划编辑 */
+.plan-preview {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+}
+
+.plan-editor {
+  flex: 1;
+  min-height: 300px;
+  padding: var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.plan-editor:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.plan-preview-rendered {
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border);
+}
+
+.plan-preview-rendered h4 {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--spacing-sm) 0;
+}
+

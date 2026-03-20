@@ -4,7 +4,7 @@
 
 import { create } from 'zustand'
 import { IPC } from '@shared/ipc-channels'
-import type { Project, Episode } from '@shared/types'
+import type { Project, Episode, ProjectSourceType, ProjectPhase } from '@shared/types'
 
 interface ProjectStore {
   projects: Project[]
@@ -18,15 +18,20 @@ interface ProjectStore {
   syncEpisodeStatus: () => Promise<void>
   createProject: (data: {
     name: string
+    sourceType?: ProjectSourceType
+    phase?: ProjectPhase
     visualStyle: string
     targetMedium: string
     projectPath: string
     totalEpisodes: number
+    novelTitle?: string
+    novelGenre?: string
     config: Record<string, unknown>
   }) => Promise<Project>
   importProject: () => Promise<string | null>
   deleteProject: (id: string) => Promise<void>
   setCurrentProject: (project: Project | null) => void
+  updatePhase: (phase: ProjectPhase) => Promise<void>
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -37,17 +42,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   loadProjects: async () => {
     set({ loading: true })
-    const projects = await window.feicaiAPI.invoke(IPC.PROJECT_LIST) as Project[]
-    set({ projects, loading: false })
+    try {
+      const projects = await window.feicaiAPI.invoke(IPC.PROJECT_LIST) as Project[]
+      set({ projects, loading: false })
+    } catch {
+      set({ loading: false })
+    }
   },
 
   loadProject: async (id) => {
-    const project = await window.feicaiAPI.invoke(IPC.PROJECT_GET, id) as Project | null
-    set({ currentProject: project })
-    if (project) {
-      // 同步文件系统状态并加载 episodes
-      const episodes = await window.feicaiAPI.invoke(IPC.PROJECT_SYNC_STATUS, project.id, project.projectPath) as Episode[]
-      set({ episodes })
+    try {
+      const project = await window.feicaiAPI.invoke(IPC.PROJECT_GET, id) as Project | null
+      set({ currentProject: project })
+      if (project) {
+        // 同步文件系统状态并加载 episodes
+        const episodes = await window.feicaiAPI.invoke(IPC.PROJECT_SYNC_STATUS, project.id, project.projectPath) as Episode[]
+        set({ episodes })
+      }
+    } catch {
+      set({ currentProject: null, episodes: [] })
     }
   },
 
@@ -85,5 +98,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await get().loadProjects()
   },
 
-  setCurrentProject: (project) => set({ currentProject: project })
+  setCurrentProject: (project) => set({ currentProject: project }),
+
+  updatePhase: async (phase) => {
+    const { currentProject } = get()
+    if (!currentProject) return
+    const updated = await window.feicaiAPI.invoke(
+      IPC.PROJECT_UPDATE_PHASE, currentProject.id, phase
+    ) as Project
+    set({ currentProject: updated })
+    await get().loadProjects()
+  }
 }))

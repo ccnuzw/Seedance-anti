@@ -40,7 +40,7 @@ export function registerExportHandlers(): void {
       const jsonData: Array<{ episode: number; content: string }> = []
 
       for (const ep of episodeRange) {
-        const epStr = String(ep).padStart(2, '0')
+        const epStr = String(ep).padStart(3, '0')
         const promptPath = join(projectPath, 'outputs', `ep${epStr}`, '02-seedance-prompts.md')
         try {
           const content = await readFile(promptPath, 'utf-8')

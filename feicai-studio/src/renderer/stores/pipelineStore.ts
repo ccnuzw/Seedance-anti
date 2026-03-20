@@ -194,19 +194,28 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       logs: [], streamBuffer: '', isRunning: true, state: 'script_loaded',
       pipelineStartedAt: now, stageTimings: [], currentStageName: null
     })
-    const result = await window.feicaiAPI.invoke(IPC.PIPELINE_START, params) as { error?: string }
-    if (result.error) {
+    try {
+      const result = await window.feicaiAPI.invoke(IPC.PIPELINE_START, params) as { error?: string }
+      if (result.error) {
+        set({ isRunning: false, state: 'idle', pipelineStartedAt: null })
+      }
+      return result
+    } catch {
       set({ isRunning: false, state: 'idle', pipelineStartedAt: null })
+      return { error: '启动管线失败' }
     }
-    return result
   },
 
   pausePipeline: async () => {
-    await window.feicaiAPI.invoke(IPC.PIPELINE_PAUSE)
+    try {
+      await window.feicaiAPI.invoke(IPC.PIPELINE_PAUSE)
+    } catch { /* ignore */ }
   },
 
   stopPipeline: async () => {
-    await window.feicaiAPI.invoke(IPC.PIPELINE_ABORT)
+    try {
+      await window.feicaiAPI.invoke(IPC.PIPELINE_ABORT)
+    } catch { /* ignore */ }
     // 立即完整重置 UI 状态，不等后端事件广播，避免闪烁
     set({
       isRunning: false,
@@ -225,11 +234,17 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       currentStageName: null,
       streamBuffer: ''
     })
-    await window.feicaiAPI.invoke(IPC.PIPELINE_RETRY, stage)
+    try {
+      await window.feicaiAPI.invoke(IPC.PIPELINE_RETRY, stage)
+    } catch {
+      set({ isRunning: false, pipelineStartedAt: null })
+    }
   },
 
   skipReviewPipeline: async () => {
-    await window.feicaiAPI.invoke(IPC.PIPELINE_SKIP)
+    try {
+      await window.feicaiAPI.invoke(IPC.PIPELINE_SKIP)
+    } catch { /* ignore */ }
   },
 
   clearLogs: () => set({ logs: [], streamBuffer: '' }),

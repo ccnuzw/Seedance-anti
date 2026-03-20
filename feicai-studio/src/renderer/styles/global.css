@@ -328,3 +328,174 @@ select.input {
   50% { opacity: 0.4; }
 }
 
+/* ---- Shared Water Level Cards ---- */
+
+.water-level-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.water-level-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  text-align: center;
+}
+
+.wl-value {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+}
+
+.wl-primary { color: var(--color-accent); }
+.wl-success { color: var(--color-success); }
+.wl-warning { color: var(--color-warning); }
+
+.wl-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+/* ---- Utility Classes ---- */
+
+/* 间距 - margin bottom */
+.mb-xs  { margin-bottom: var(--spacing-xs); }
+.mb-sm  { margin-bottom: var(--spacing-sm); }
+.mb-md  { margin-bottom: var(--spacing-md); }
+.mb-lg  { margin-bottom: var(--spacing-lg); }
+.mb-xl  { margin-bottom: var(--spacing-xl); }
+
+/* 间距 - margin top */
+.mt-xs  { margin-top: var(--spacing-xs); }
+.mt-sm  { margin-top: var(--spacing-sm); }
+.mt-md  { margin-top: var(--spacing-md); }
+
+/* 间距 - margin left */
+.ml-sm  { margin-left: var(--spacing-sm); }
+
+/* 间距 - padding */
+.p-md   { padding: var(--spacing-md); }
+.p-lg   { padding: var(--spacing-lg); }
+.p-xl   { padding: var(--spacing-xl); }
+
+/* 字号 */
+.text-xs   { font-size: var(--font-size-xs); }
+.text-sm   { font-size: var(--font-size-sm); }
+.text-base { font-size: var(--font-size-base); }
+.text-md   { font-size: var(--font-size-md); }
+.text-lg   { font-size: var(--font-size-lg); }
+
+/* Flex 布局 */
+.flex          { display: flex; }
+.flex-wrap     { flex-wrap: wrap; }
+.flex-col      { flex-direction: column; }
+.items-center  { align-items: center; }
+.items-end     { align-items: flex-end; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.gap-xs   { gap: var(--spacing-xs); }
+.gap-sm   { gap: var(--spacing-sm); }
+.gap-md   { gap: var(--spacing-md); }
+.gap-lg   { gap: var(--spacing-lg); }
+
+/* 文本样式 */
+.text-center { text-align: center; }
+.text-error  { color: var(--color-error); }
+.text-warn   { color: var(--color-warning); }
+.text-muted  { opacity: 0.7; }
+.font-label  { font-size: var(--font-size-sm); display: block; margin-bottom: var(--spacing-xs); }
+
+/* 语义卡片 */
+.card-error {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+}
+
+.card-accent {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+/* 空状态大图标 */
+.empty-icon-xl {
+  font-size: var(--icon-box-size);
+  margin-bottom: var(--spacing-md);
+}
+
+/* ---- Shared Progress Bar ---- */
+
+.progress-bar {
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-stage-storyboard));
+  border-radius: 3px;
+  transition: width var(--transition-slow);
+}
+
+.progress-bar-fill.fill-success {
+  background: linear-gradient(90deg, var(--color-success), #4ade80);
+}
+
+.progress-text {
+  font-size: var(--font-size-sm);
+  margin-top: var(--spacing-xs);
+}
+
+/* ---- Shared Page Layout Skeleton ---- */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-lg);
+  gap: var(--spacing-md);
+}
+
+.page-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--spacing-lg);
+  gap: var(--spacing-md);
+}
+
+.page-title {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  margin: 0;
+}
+
+.page-title-xl {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  margin: 0;
+}
+
+.page-title-2xl {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin: 0;
+}
+
+.page-subtitle {
+  margin-top: var(--spacing-xs);
+  font-size: var(--font-size-md);
+}
+
+.page-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+  flex-shrink: 0;
+}

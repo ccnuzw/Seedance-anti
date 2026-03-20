@@ -179,7 +179,7 @@ export class PipelineStateMachine extends EventEmitter {
     await this.statePersistence.load()
 
     // 加载剧本
-    const epStr = String(params.episodeNum).padStart(2, '0')
+    const epStr = String(params.episodeNum).padStart(3, '0')
     const scriptPath = join(params.projectPath, 'script', `ep${epStr}.md`)
     try {
       this.context.scriptPath = scriptPath
@@ -382,7 +382,7 @@ export class PipelineStateMachine extends EventEmitter {
 
   private async gatherInputs(stage: PipelineStage): Promise<UpstreamInputs> {
     const inputs: UpstreamInputs = {}
-    const epStr = String(this.context.episodeNum).padStart(2, '0')
+    const epStr = String(this.context.episodeNum).padStart(3, '0')
 
     // 剧本（所有阶段都可能需要）
     if (this.context.scriptPath) {
@@ -409,7 +409,7 @@ export class PipelineStateMachine extends EventEmitter {
   // ==================== 文件写入 ====================
 
   private async writeStageOutput(stage: PipelineStage, content: string): Promise<void> {
-    const epStr = String(this.context.episodeNum).padStart(2, '0')
+    const epStr = String(this.context.episodeNum).padStart(3, '0')
 
     if (stage === 'art') {
       // 1. 写入临时文件（便于调试/审核断点清洗）
@@ -546,7 +546,7 @@ export class PipelineStateMachine extends EventEmitter {
   private log(level: LogEntry['level'], eventType: string, message: string): void {
     const entry: LogEntry = {
       id: uuid(),
-      episodeId: `ep${String(this.context.episodeNum).padStart(2, '0')}`,
+      episodeId: `ep${String(this.context.episodeNum).padStart(3, '0')}`,
       stage: this.context.currentStage,
       level,
       eventType,

@@ -46,7 +46,7 @@ export default function Header() {
 
   // 构建集数标签
   const epLabel = context?.episodeNum
-    ? `EP${String(context.episodeNum).padStart(2, '0')}`
+    ? `EP${String(context.episodeNum).padStart(3, '0')}`
     : ''
 
   return (

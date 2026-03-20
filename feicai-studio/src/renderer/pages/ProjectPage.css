@@ -16,17 +16,7 @@
 .project-empty-state .empty-icon { font-size: 48px; opacity: 0.5; }
 .project-empty-state h2 { font-size: var(--font-size-lg); }
 
-.project-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--spacing-lg);
-}
-
-.project-name {
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-}
+/* header 使用 global.css 中的 .page-header-top / .page-title-xl / .page-actions */
 
 .project-meta {
   display: flex;
@@ -43,24 +33,7 @@
   margin-bottom: var(--spacing-xl);
 }
 
-.progress-bar-bg {
-  height: 6px;
-  background: var(--color-bg-tertiary);
-  border-radius: 3px;
-  overflow: hidden;
-  margin-bottom: var(--spacing-sm);
-}
-
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--color-accent), #8b5cf6);
-  border-radius: 3px;
-  transition: width var(--transition-slow);
-}
-
-.progress-text {
-  font-size: var(--font-size-sm);
-}
+/* 进度条使用 global.css 中的 .progress-bar / .progress-bar-fill */
 
 /* Episode Table */
 .episode-table-wrapper {
@@ -242,7 +215,7 @@
 .episode-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
+  gap: var(--spacing-lg);
 }
 
 /* ---- 卡片容器 ---- */
@@ -258,29 +231,29 @@
 }
 
 .ep-card:hover {
-  border-color: rgba(99, 102, 241, 0.45);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
   box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.25),
-    0 0 0 1px rgba(99, 102, 241, 0.15);
+    var(--shadow-lg),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 15%, transparent);
   transform: translateY(-2px) scale(1.008);
 }
 
 .ep-card--done {
-  border-color: rgba(34, 197, 94, 0.2);
+  border-color: color-mix(in srgb, var(--color-success) 20%, transparent);
 }
 .ep-card--done:hover {
-  border-color: rgba(34, 197, 94, 0.45);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
   box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.25),
-    0 0 0 1px rgba(34, 197, 94, 0.15);
+    var(--shadow-lg),
+    0 0 0 1px color-mix(in srgb, var(--color-success) 15%, transparent);
 }
 
 /* ---- 左侧色条 ---- */
 .ep-card-stripe {
   width: 4px;
   flex-shrink: 0;
-  background: linear-gradient(180deg, #6366f1 0%, #a78bfa 100%);
-  transition: width 0.2s ease;
+  background: linear-gradient(180deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  transition: width var(--transition-fast);
 }
 
 .ep-card:hover .ep-card-stripe {
@@ -288,7 +261,7 @@
 }
 
 .stripe--done {
-  background: linear-gradient(180deg, #22c55e 0%, #4ade80 100%);
+  background: linear-gradient(180deg, var(--color-success) 0%, #4ade80 100%);
 }
 
 /* ---- 内容区 ---- */
@@ -296,8 +269,8 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px 14px;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-lg) var(--spacing-md);
   min-width: 0;
 }
 
@@ -305,7 +278,7 @@
 .ep-card-hero {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
+  gap: var(--spacing-md);
 }
 
 .ep-num {
@@ -314,7 +287,7 @@
   font-weight: 800;
   line-height: 0.85;
   letter-spacing: -3px;
-  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-hover));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -323,7 +296,7 @@
 }
 
 .ep-card--done .ep-num {
-  background: linear-gradient(135deg, #22c55e, #86efac);
+  background: linear-gradient(135deg, var(--color-success), #86efac);
   -webkit-background-clip: text;
   background-clip: text;
 }
@@ -333,12 +306,12 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--spacing-xs);
   padding-top: 2px;
 }
 
 .ep-title {
-  font-size: 16px;
+  font-size: var(--font-size-md);
   font-weight: 700;
   color: var(--color-text-primary);
   margin: 0;
@@ -353,7 +326,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-micro);
   font-weight: 500;
   letter-spacing: 0.2px;
   width: fit-content;
@@ -368,7 +341,7 @@
 .ep-artifacts-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--spacing-xs);
 }
 
 .ep-artifact {
@@ -377,7 +350,7 @@
   gap: 2px;
   padding: 3px 8px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: var(--font-size-micro);
   font-weight: 500;
   background: var(--color-bg-tertiary);
   color: var(--color-text-tertiary);
@@ -408,7 +381,7 @@
 }
 
 .ep-meta {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-family: var(--font-mono);
   font-weight: 400;
@@ -421,7 +394,7 @@
 }
 
 .ep-launch {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--color-accent);
   letter-spacing: 0.5px;
@@ -437,8 +410,191 @@
   color: var(--color-success);
 }
 .ep-card--done:hover .ep-launch {
-  color: #4ade80;
+  color: var(--color-success);
 }
 
+/* =========================================================
+   全流程进度条
+   ========================================================= */
+.flow-progress-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
 
+.flow-step-wrapper {
+  display: flex;
+  align-items: center;
+}
 
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  opacity: 0.4;
+  transition: all var(--transition-fast);
+}
+
+.flow-step.flow-current {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.flow-step.flow-done {
+  opacity: 0.8;
+}
+
+.flow-icon {
+  font-size: var(--font-size-md);
+}
+
+.flow-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.flow-connector {
+  width: 40px;
+  height: 2px;
+  background: var(--color-border);
+  margin: 0 4px;
+}
+
+.flow-connector-done {
+  background: var(--color-accent);
+}
+
+/* =========================================================
+   项目徽章
+   ========================================================= */
+.project-source-badge,
+.project-phase-badge {
+  font-size: var(--font-size-micro);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.project-source-badge {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent);
+}
+
+.project-phase-badge.phase-writing {
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  color: var(--color-warning);
+}
+
+.project-phase-badge.phase-production {
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  color: var(--color-success);
+}
+
+/* =========================================================
+   编剧阶段卡片
+   ========================================================= */
+.writing-stage-card {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-lg);
+}
+
+.stage-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.stage-card-header h3 {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: 700;
+}
+
+.stage-badge {
+  font-size: var(--font-size-micro);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.stage-badge.stage-active {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+
+.stage-badge.stage-done {
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  color: var(--color-success);
+}
+
+.writing-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.writing-stat {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.ws-icon {
+  font-size: var(--font-size-lg);
+}
+
+.ws-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ws-value {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-label {
+  font-size: var(--font-size-micro);
+}
+
+.writing-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+/* =========================================================
+   制作锁定卡片
+   ========================================================= */
+.production-locked-card {
+  text-align: center;
+  padding: var(--spacing-2xl);
+  margin-bottom: var(--spacing-lg);
+}
+
+.production-locked-icon {
+  font-size: var(--font-size-2xl);
+  margin-bottom: var(--spacing-md);
+  opacity: 0.5;
+}
+
+.production-locked-card h3 {
+  margin-bottom: var(--spacing-sm);
+  font-size: var(--font-size-md);
+}

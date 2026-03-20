@@ -89,10 +89,17 @@
   --page-width-narrow: 800px;
   --page-width-normal: 1000px;
   --page-width-wide: 1100px;
+  --page-width-xl: 1200px;
 
   /* 图标 / Emoji */
   --font-size-icon: 28px;
   --icon-box-size: 48px;
+
+  /* 兼容别名 — 后加入页面的旧写法安全网 */
+  --card-bg: var(--color-bg-card);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --color-surface: var(--color-bg-tertiary);
 }
 
 /* ---- 亮色主题 ---- */

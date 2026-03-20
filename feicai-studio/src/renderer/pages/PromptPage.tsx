@@ -4,6 +4,8 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 import { useProjectSync } from '@renderer/hooks/useProjectSync'
 import { useToastStore } from '@renderer/stores/toastStore'
 import EpisodeNav from '@renderer/components/layout/EpisodeNav'
+import SimpleMarkdown from '@renderer/components/SimpleMarkdown'
+import EmptyState from '@renderer/components/layout/EmptyState'
 import './PromptPage.css'
 
 interface ParsedPrompt {
@@ -44,7 +46,7 @@ export default function PromptPage() {
 
   const getFilePath = (ep: number, type: 'prompts' | 'director' | 'art' = 'prompts') => {
     if (!currentProject) return ''
-    const epStr = String(ep).padStart(2, '0')
+    const epStr = String(ep).padStart(3, '0')
     const fileMap = {
       prompts: '02-seedance-prompts.md',
       director: '01-director-analysis.md',
@@ -59,7 +61,8 @@ export default function PromptPage() {
     setSelectedIndex(null)
     setIsEditing(false)
     try {
-      const raw = await window.feicaiAPI.invoke(IPC.FILE_READ, getFilePath(ep, 'prompts')) as string
+      const raw = await window.feicaiAPI.invoke(IPC.FILE_READ, getFilePath(ep, 'prompts')) as string | null
+      if (!raw) throw new Error('文件不存在')
       setRawMd(raw)
       setPrompts(parsePromptsFromMarkdown(raw))
     } catch {
@@ -73,8 +76,8 @@ export default function PromptPage() {
     if (!currentProject) return
     setTabLoading(true)
     try {
-      const raw = await window.feicaiAPI.invoke(IPC.FILE_READ, getFilePath(ep, tab)) as string
-      setTabContent(raw)
+      const raw = await window.feicaiAPI.invoke(IPC.FILE_READ, getFilePath(ep, tab)) as string | null
+      setTabContent(raw || '')
     } catch {
       setTabContent('')
     }
@@ -152,9 +155,9 @@ export default function PromptPage() {
       {viewTab === 'prompts' ? (
         <>
       {/* 统计头部 */}
-      <div className="prompt-header">
+      <div className="page-header">
         <div className="prompt-header-info">
-          <h2>📐 EP{String(currentEp).padStart(2, '0')} 提示词</h2>
+          <h2>📐 EP{String(currentEp).padStart(3, '0')} 提示词</h2>
           <div className="prompt-stats text-secondary">
             {actualPrompts.length} 条提示词
           </div>
@@ -213,9 +216,7 @@ export default function PromptPage() {
         {loading ? (
           <div className="prompt-empty text-secondary">加载中...</div>
         ) : prompts.length === 0 ? (
-          <div className="prompt-empty text-secondary">
-            该集暂无提示词。请先在流水线中执行分镜阶段。
-          </div>
+          <EmptyState icon="📜" title="暂无提示词" description="请先在流水线中执行分镜阶段" />
         ) : (
           prompts.map((prompt) => {
             const isRefTable = prompt.index === 0
@@ -262,16 +263,20 @@ export default function PromptPage() {
         /* 导演分析 / 服化道 Markdown 查看 */
         <div className="product-viewer">
           <div className="product-viewer-header">
-            <h2>{viewTab === 'director' ? '🎬' : '🎨'} EP{String(currentEp).padStart(2, '0')} {viewTab === 'director' ? '导演分析' : '服化道设计'}</h2>
+            <h2>{viewTab === 'director' ? '🎬' : '🎨'} EP{String(currentEp).padStart(3, '0')} {viewTab === 'director' ? '导演分析' : '服化道设计'}</h2>
           </div>
           {tabLoading ? (
             <div className="prompt-empty text-secondary">加载中...</div>
           ) : tabContent ? (
-            <pre className="product-content">{tabContent}</pre>
-          ) : (
-            <div className="prompt-empty text-secondary">
-              该集暂无{viewTab === 'director' ? '导演分析' : '服化道设计'}产物。请先在流水线中执行对应阶段。
+            <div className="product-content-md">
+              <SimpleMarkdown content={tabContent} />
             </div>
+          ) : (
+            <EmptyState
+              icon={viewTab === 'director' ? '🎬' : '🎨'}
+              title={`暂无${viewTab === 'director' ? '导演分析' : '服化道设计'}产物`}
+              description="请先在流水线中执行对应阶段"
+            />
           )}
         </div>
       )}

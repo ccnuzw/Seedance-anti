@@ -1,0 +1,106 @@
+/* ============================================================
+   AdaptScriptPage — 剧本创作页面样式
+   ============================================================ */
+
+.adapt-script-page {
+  padding: var(--spacing-lg);
+  max-width: var(--page-width-xl);
+}
+
+/* header 使用 global.css 中的 .page-header / .page-title */
+.script-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--spacing-md);
+}
+
+.script-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.script-card:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.script-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-xs);
+}
+
+.script-card-num {
+  font-weight: 700;
+  color: var(--color-accent);
+  font-size: var(--font-size-md);
+}
+
+.script-card-title {
+  font-weight: 600;
+  font-size: var(--font-size-base);
+  margin-bottom: var(--spacing-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 元数据标签 */
+.script-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-xs);
+}
+
+.meta-tag {
+  font-size: var(--font-size-micro);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.meta-tag-scene {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent-hover);
+}
+
+.meta-tag-dialog {
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  color: var(--color-success);
+}
+
+.meta-tag-chars {
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  color: var(--color-warning);
+}
+
+.script-card-meta {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 增强版剧本预览 */
+.script-preview-enhanced {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+  max-height: 600px;
+  overflow-y: auto;
+  margin-bottom: var(--spacing-lg);
+}
+
+/* 水位卡片 — 复用 global.css 中的 .water-level-* 共享样式 */

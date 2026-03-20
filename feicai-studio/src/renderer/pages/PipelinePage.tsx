@@ -125,10 +125,10 @@ export default function PipelinePage() {
   useEffect(() => {
     if (!isEngineMatch) return
     if (state === 'episode_complete' && episodeNum) {
-      addToast('success', `EP${String(episodeNum).padStart(2, '0')} 全流程完成！`, { title: '🎉 流水线完成' })
+      addToast('success', `EP${String(episodeNum).padStart(3, '0')} 全流程完成！`, { title: '🎉 流水线完成' })
       try {
         new Notification('FEICAI Studio', {
-          body: `EP${String(episodeNum).padStart(2, '0')} 全流程完成 ✅`,
+          body: `EP${String(episodeNum).padStart(3, '0')} 全流程完成 ✅`,
           silent: false
         })
       } catch { /* 通知权限未授予 */ }
@@ -165,7 +165,7 @@ export default function PipelinePage() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isRunning, currentProject])
+  }, [isRunning, currentProject, episodeNum])
 
   useEffect(() => {
     const cleanup = setupEventListeners()
@@ -314,7 +314,7 @@ export default function PipelinePage() {
       if (result.error) {
         addToast('error', result.error)
       } else {
-        addToast('info', `EP${String(episodeNum).padStart(2, '0')} ${stageLabel}已启动`)
+        addToast('info', `EP${String(episodeNum).padStart(3, '0')} ${stageLabel}已启动`)
       }
     },
     [currentProject, episodeNum]
@@ -335,10 +335,10 @@ export default function PipelinePage() {
       {/* 完成横幅 */}
       {displayState === 'episode_complete' && (
         <div className="pipeline-complete-banner">
-          <span>✅ EP{String(episodeNum).padStart(2, '0')} 全流程完成！{isEngineMatch && `总耗时 ${fmtTime(totalElapsed)}`}</span>
+          <span>✅ EP{String(episodeNum).padStart(3, '0')} 全流程完成！{isEngineMatch && `总耗时 ${fmtTime(totalElapsed)}`}</span>
           {episodeNum < (currentProject?.totalEpisodes || 30) && (
             <button className="btn btn-primary" onClick={handleNextEpisode}>
-              ▶ 开始下一集 (EP{String(episodeNum + 1).padStart(2, '0')})
+              ▶ 开始下一集 (EP{String(episodeNum + 1).padStart(3, '0')})
             </button>
           )}
         </div>
@@ -348,7 +348,7 @@ export default function PipelinePage() {
       <div className="pipeline-controls">
         <div className="controls-left">
           <span className="controls-episode">
-            EP{String(episodeNum).padStart(2, '0')}
+            EP{String(episodeNum).padStart(3, '0')}
           </span>
           <span className="controls-state badge badge-info">{displayState}</span>
           {/* 总流程计时器 */}
@@ -390,8 +390,8 @@ export default function PipelinePage() {
                 📐 分镜
               </button>
               {isRunning && !isEngineMatch && (
-                <span className="text-secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                  引擎正在执行 EP{String(context?.episodeNum).padStart(2, '0')}，请先停止后操作。
+                <span className="text-secondary text-xs ml-sm">
+                  引擎正在执行 EP{String(context?.episodeNum ?? 0).padStart(3, '0')}，请先停止后操作。
                 </span>
               )}
             </>

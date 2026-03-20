@@ -36,13 +36,14 @@ export default function ScriptEditorPage() {
     if (!currentProject) return
     setLoading(true)
     try {
-      const epStr = String(ep).padStart(2, '0')
+      const epStr = String(ep).padStart(3, '0')
       const filePath = `${currentProject.projectPath}/script/ep${epStr}.md`
-      const text = await window.feicaiAPI.invoke(IPC.FILE_READ, filePath) as string
+      const text = await window.feicaiAPI.invoke(IPC.FILE_READ, filePath) as string | null
+      if (!text) throw new Error('文件不存在')
       setContent(text)
     } catch {
       setContent('<!-- 剧本文件不存在，请先导入剧本到 script/ 目录 -->\n')
-      addToast('warning', `EP${String(ep).padStart(2, '0')} 剧本文件不存在`)
+      addToast('warning', `EP${String(ep).padStart(3, '0')} 剧本文件不存在`)
     }
     setLoading(false)
     setSaved(true)
@@ -51,7 +52,7 @@ export default function ScriptEditorPage() {
   const handleSave = async () => {
     if (!currentProject) return
     try {
-      const epStr = String(currentEp).padStart(2, '0')
+      const epStr = String(currentEp).padStart(3, '0')
       const filePath = `${currentProject.projectPath}/script/ep${epStr}.md`
       await window.feicaiAPI.invoke(IPC.FILE_WRITE, filePath, content)
       setSaved(true)
@@ -70,7 +71,7 @@ export default function ScriptEditorPage() {
 
   const handleEpSwitch = (ep: number) => {
     if (!saved) {
-      if (!confirm(`EP${String(currentEp).padStart(2, '0')} 有未保存的修改，确定切换？`)) return
+      if (!confirm(`EP${String(currentEp).padStart(3, '0')} 有未保存的修改，确定切换？`)) return
     }
     setCurrentEp(ep)
   }
@@ -88,7 +89,7 @@ export default function ScriptEditorPage() {
       {/* 工具栏 */}
       <div className="editor-toolbar">
         <div className="editor-info">
-          <span className="editor-episode">📖 EP{String(currentEp).padStart(2, '0')}</span>
+          <span className="editor-episode">📖 EP{String(currentEp).padStart(3, '0')}</span>
           <span className="text-secondary">{content.split('\n').length} 行</span>
           {!saved && <span className="editor-unsaved badge badge-warning">未保存</span>}
         </div>

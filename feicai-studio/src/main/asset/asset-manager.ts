@@ -111,7 +111,7 @@ export class AssetManager {
   // ==================== 提示词 ====================
 
   async loadPrompts(episodeNum: number): Promise<ParsedPrompt[]> {
-    const epStr = String(episodeNum).padStart(2, '0')
+    const epStr = String(episodeNum).padStart(3, '0')
     const filePath = join(this.projectPath, 'outputs', `ep${epStr}`, '02-seedance-prompts.md')
     try {
       const content = await readFile(filePath, 'utf-8')
@@ -157,13 +157,13 @@ export class AssetManager {
   // ==================== 剧本 ====================
 
   async loadScript(episodeNum: number): Promise<string> {
-    const epStr = String(episodeNum).padStart(2, '0')
+    const epStr = String(episodeNum).padStart(3, '0')
     const filePath = join(this.projectPath, 'script', `ep${epStr}.md`)
     return readFile(filePath, 'utf-8')
   }
 
   async saveScript(episodeNum: number, content: string): Promise<void> {
-    const epStr = String(episodeNum).padStart(2, '0')
+    const epStr = String(episodeNum).padStart(3, '0')
     const dir = join(this.projectPath, 'script')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, `ep${epStr}.md`), content, 'utf-8')

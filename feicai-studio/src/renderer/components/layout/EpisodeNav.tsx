@@ -41,9 +41,9 @@ export default function EpisodeNav({ episodes, currentEp, onSelect, runningEp, i
                 isRunningEp && 'epnav-running'
               ].filter(Boolean).join(' ')}
               onClick={() => onSelect(num)}
-              title={`EP${String(num).padStart(2, '0')}${isRunningEp ? ' (运行中)' : ''}`}
+              title={`EP${String(num).padStart(3, '0')}${isRunningEp ? ' (运行中)' : ''}`}
             >
-              <span className="epnav-num">{String(num).padStart(2, '0')}</span>
+              <span className="epnav-num">{String(num).padStart(3, '0')}</span>
               {isRunningEp && <span className="epnav-pulse">▶</span>}
               {done && !isRunningEp && <span className="epnav-check">✓</span>}
             </button>

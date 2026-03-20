@@ -26,10 +26,14 @@ export default function AssetPage() {
 
   const loadAssets = async () => {
     if (!currentProject) return
-    const chars = await window.feicaiAPI.invoke(IPC.ASSET_LIST_CHARACTERS, currentProject.projectPath) as Character[]
-    const scns = await window.feicaiAPI.invoke(IPC.ASSET_LIST_SCENES, currentProject.projectPath) as Scene[]
-    setCharacters(chars)
-    setScenes(scns)
+    try {
+      const chars = await window.feicaiAPI.invoke(IPC.ASSET_LIST_CHARACTERS, currentProject.projectPath) as Character[]
+      const scns = await window.feicaiAPI.invoke(IPC.ASSET_LIST_SCENES, currentProject.projectPath) as Scene[]
+      setCharacters(chars)
+      setScenes(scns)
+    } catch {
+      // 素材文件不存在时静默失败
+    }
   }
 
   const filteredCharacters = characters.filter(c =>
@@ -63,7 +67,7 @@ export default function AssetPage() {
   const handleSave = useCallback(async (assetType: 'character' | 'scene', assetName: string) => {
     if (!currentProject) return
     try {
-      const result = await window.feicaiAPI.invoke('asset:update-prompt', {
+      const result = await window.feicaiAPI.invoke(IPC.ASSET_UPDATE_PROMPT, {
         projectPath: currentProject.projectPath,
         assetType,
         assetName,

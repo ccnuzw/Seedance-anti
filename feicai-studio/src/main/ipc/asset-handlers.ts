@@ -54,7 +54,7 @@ export function registerAssetHandlers(): void {
     return mgr.listReferenceImages(assetType as 'character' | 'scene')
   })
 
-  ipcMain.handle('asset:update-prompt', async (_event, params: {
+  ipcMain.handle(IPC.ASSET_UPDATE_PROMPT, async (_event, params: {
     projectPath: string
     assetType: 'character' | 'scene'
     assetName: string

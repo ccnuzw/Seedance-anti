@@ -67,19 +67,15 @@
   overflow-y: auto;
 }
 
+.product-content-md {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-top: var(--spacing-sm);
+}
+
 
 /* ---- Header ---- */
-.prompt-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--spacing-lg);
-  gap: var(--spacing-xl);
-}
-
-.prompt-header h2 {
-  font-size: var(--font-size-lg);
-}
+/* prompt-header 使用 global.css 中的 .page-header */
 
 .prompt-stats {
   font-size: var(--font-size-sm);
@@ -114,11 +110,11 @@
 }
 
 .duration-fill.ok {
-  background: linear-gradient(90deg, var(--color-success), #4ade80);
+  background: linear-gradient(90deg, var(--color-success), #4ade80); /* 渐变色保留对比 */
 }
 
 .duration-fill.warn {
-  background: linear-gradient(90deg, var(--color-warning), #fbbf24);
+  background: linear-gradient(90deg, var(--color-warning), #fbbf24); /* 渐变色保留对比 */
 }
 
 .duration-marker {
@@ -156,16 +152,16 @@
 /* P00 素材对应表卡片 */
 .prompt-card-ref-table {
   border-left-color: var(--color-warning) !important;
-  background: rgba(234, 179, 8, 0.04);
+  background: color-mix(in srgb, var(--color-warning) 4%, transparent);
 }
 
 .prompt-card-ref-table:hover {
-  background: rgba(234, 179, 8, 0.08);
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
 }
 
 .prompt-card-ref-table.selected {
   border-left-color: var(--color-warning) !important;
-  background: rgba(234, 179, 8, 0.1);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
 }
 
 .prompt-index-ref {
@@ -226,7 +222,7 @@
 }
 
 .ref-char {
-  background: rgba(236, 72, 153, 0.15);
+  background: color-mix(in srgb, var(--color-stage-art) 15%, transparent);
   color: var(--color-stage-art);
 }
 

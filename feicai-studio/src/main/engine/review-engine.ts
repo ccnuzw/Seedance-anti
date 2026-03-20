@@ -60,7 +60,7 @@ export class ReviewEngine {
     // 读取导演分析（art 和 storyboard 审核时作为对照）
     let directorAnalysis: string | undefined
     if (stage === 'art' || stage === 'storyboard') {
-      const epStr = String(ctx.episodeNum).padStart(2, '0')
+      const epStr = String(ctx.episodeNum).padStart(3, '0')
       const analysisPath = join(ctx.projectPath, 'outputs', `ep${epStr}`, '01-director-analysis.md')
       try { directorAnalysis = await readFile(analysisPath, 'utf-8') } catch { /* */ }
     }
@@ -142,7 +142,7 @@ export class ReviewEngine {
    * 从文件系统重新读取产出（断点清洗）
    */
   private async readFreshOutput(stage: PipelineStage, ctx: ReviewContext): Promise<string> {
-    const epStr = String(ctx.episodeNum).padStart(2, '0')
+    const epStr = String(ctx.episodeNum).padStart(3, '0')
     const outputDir = join(ctx.projectPath, 'outputs', `ep${epStr}`)
 
     if (stage === 'art') {

@@ -257,7 +257,7 @@ export default function BatchPage() {
               className={`episode-select-btn ${selectedEps.has(ep.episodeNumber) ? 'selected' : ''} ${ep.status === 'complete' ? 'completed' : ''}`}
               onClick={() => toggleEpisode(ep.episodeNumber)}
             >
-              <span className="ep-num">{String(ep.episodeNumber).padStart(2, '0')}</span>
+              <span className="ep-num">{String(ep.episodeNumber).padStart(3, '0')}</span>
               {ep.status === 'complete' && <span className="ep-done">✓</span>}
             </button>
           ))}
@@ -291,7 +291,7 @@ export default function BatchPage() {
           <div className="batch-task-list">
             {tasks.map((task) => (
               <div key={task.episodeNum} className={`batch-task task-${task.status}`}>
-                <span className="task-ep">EP{String(task.episodeNum).padStart(2, '0')}</span>
+                <span className="task-ep">EP{String(task.episodeNum).padStart(3, '0')}</span>
                 <span className="task-status-icon">
                   {task.status === 'pending' && '⏳'}
                   {task.status === 'running' && '🔄'}

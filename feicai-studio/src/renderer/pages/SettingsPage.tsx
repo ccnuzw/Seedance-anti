@@ -112,12 +112,18 @@ export default function SettingsPage() {
   const handleTestConnection = async () => {
     setTesting(true)
     setTestResult(null)
-    const result = await window.feicaiAPI.invoke(IPC.LLM_TEST_CONNECTION, form) as {
-      success: boolean; message: string
+    try {
+      const result = await window.feicaiAPI.invoke(IPC.LLM_TEST_CONNECTION, form) as {
+        success: boolean; message: string
+      }
+      setTestResult(result)
+      addToast(result.success ? 'success' : 'error', result.message)
+    } catch {
+      const failResult = { success: false, message: '测试失败：无法连接' }
+      setTestResult(failResult)
+      addToast('error', failResult.message)
     }
-    setTestResult(result)
     setTesting(false)
-    addToast(result.success ? 'success' : 'error', result.message)
   }
 
   const handleSave = async () => {

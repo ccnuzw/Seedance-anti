@@ -4,6 +4,8 @@ import { join } from 'path'
 import { getDatabase } from './database'
 import type {
   Project,
+  ProjectSourceType,
+  ProjectPhase,
   Episode,
   EpisodeStatus,
   Character,
@@ -17,10 +19,14 @@ import type {
 
 export function createProject(data: {
   name: string
+  sourceType?: ProjectSourceType
+  phase?: ProjectPhase
   visualStyle: string
   targetMedium: string
   projectPath: string
   totalEpisodes: number
+  novelTitle?: string
+  novelGenre?: string
   config: Record<string, unknown>
 }): Project {
   const db = getDatabase()
@@ -60,9 +66,23 @@ export function createProject(data: {
   mkdirSync(scriptDir, { recursive: true })
 
   db.prepare(`
-    INSERT INTO projects (id, name, visual_style, target_medium, project_path, total_episodes, config_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, data.name, data.visualStyle, data.targetMedium, data.projectPath, data.totalEpisodes, JSON.stringify(data.config), now, now)
+    INSERT INTO projects (id, name, source_type, phase, visual_style, target_medium, project_path, total_episodes, novel_title, novel_genre, config_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    data.name,
+    data.sourceType || 'script',
+    data.phase || 'production',
+    data.visualStyle,
+    data.targetMedium,
+    data.projectPath,
+    data.totalEpisodes,
+    data.novelTitle || null,
+    data.novelGenre || null,
+    JSON.stringify(data.config),
+    now,
+    now
+  )
 
   // 自动扫描文件系统，创建 episode 记录
   syncEpisodesFromFilesystem(id, data.projectPath, data.totalEpisodes)
@@ -105,14 +125,27 @@ function mapProject(row: Record<string, unknown>): Project {
   return {
     id: row.id as string,
     name: row.name as string,
+    sourceType: (row.source_type as ProjectSourceType) || 'script',
+    phase: (row.phase as ProjectPhase) || 'production',
     visualStyle: row.visual_style as string,
     targetMedium: row.target_medium as string,
     projectPath: row.project_path as string,
     totalEpisodes: row.total_episodes as number,
+    novelTitle: row.novel_title as string | undefined,
+    novelGenre: row.novel_genre as string | undefined,
     config: row.config_json ? JSON.parse(row.config_json as string) : {},
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string
   }
+}
+
+/**
+ * 更新项目阶段（编剧 → 制作）
+ */
+export function updateProjectPhase(id: string, phase: ProjectPhase): void {
+  const db = getDatabase()
+  db.prepare('UPDATE projects SET phase = ?, updated_at = ? WHERE id = ?')
+    .run(phase, new Date().toISOString(), id)
 }
 
 // ==================== Episodes ====================
@@ -220,7 +253,7 @@ export function syncEpisodesFromFilesystem(projectId: string, projectPath: strin
   `)
 
   for (const num of sortedNums) {
-    const epStr = String(num).padStart(2, '0')
+    const epStr = String(num).padStart(3, '0')
     const scriptPath = join(scriptDir, `ep${epStr}.md`)
     const directorPath = join(outputsDir, `ep${epStr}`, '01-director-analysis.md')
     const artPath = join(outputsDir, `ep${epStr}`, '01.5-art-design-output.md')
@@ -306,7 +339,7 @@ export function syncEpisodeStatus(projectId: string, projectPath: string): Episo
 
   for (const row of episodes) {
     const num = row.episode_number as number
-    const epStr = String(num).padStart(2, '0')
+    const epStr = String(num).padStart(3, '0')
 
     const scriptPath = join(scriptDir, `ep${epStr}.md`)
     const directorPath = join(outputsDir, `ep${epStr}`, '01-director-analysis.md')

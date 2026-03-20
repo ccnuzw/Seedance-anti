@@ -1,0 +1,426 @@
+// ============================================================
+// Adapt Prompt Assembler — 编剧管线 Prompt 组装器
+// ============================================================
+//
+// 区别于现有 PromptAssembler（面向导演/服化道/分镜），
+// 此组装器专为编剧管线（breakdown/script）设计。
+//
+// 组装顺序遵循 "高优先级内容靠近生成" 原则：
+//
+// System:
+//   1. 角色声明
+//   2. adapt-method.md（改编方法论）
+//   3. output-style.md（写作风格）
+//   4. 示例
+//   5. 输出模板
+//
+// User:
+//   6. 项目/小说信息
+//   7. 已有 plot-breakdown（拆解上下文）
+//   8. 小说原文（6章）         ← 离 LLM 生成最近
+//   9. 执行指令
+//  10. 审核反馈（重试时注入）
+
+import type { Skill, AssembledPrompt, AdaptStage, VolumePlan } from '@shared/types'
+
+export interface AdaptUpstreamInputs {
+  /** 小说原文（多章） */
+  novelChapters?: Array<{ chapter: number; content: string }>
+  /** 已有剧情拆解内容 */
+  plotBreakdown?: string
+  /** 上一集剧本（确保连贯） */
+  previousScript?: string
+  /** 当前批次对应的剧情点描述 */
+  plotPointsForBatch?: string
+}
+
+export interface AdaptProjectContext {
+  novelTitle: string
+  novelGenre: string
+  totalChapters: number
+  processedChapters: number
+  currentBatch: number
+}
+
+export class AdaptPromptAssembler {
+  /**
+   * 组装拆解 (breakdown) 的 Prompt
+   */
+  assembleBreakdown(
+    skill: Skill,
+    roleDeclaration: string,
+    inputs: AdaptUpstreamInputs,
+    projectContext: AdaptProjectContext,
+    reviewFeedback?: string,
+    volumePlan?: VolumePlan | null
+  ): AssembledPrompt {
+    const systemParts: string[] = []
+    const userParts: string[] = []
+
+    // ============ System ============
+
+    // 1. 角色声明
+    systemParts.push(roleDeclaration)
+
+    // 2. 改编方法论（adapt-method.md）
+    if (skill.methodology) {
+      systemParts.push(`\n---\n\n# 改编方法论\n\n${skill.methodology}`)
+    }
+
+    // 3. 核心规范（SKILL.md body）
+    systemParts.push(`\n---\n\n# 技能规范\n\n${skill.systemPrompt}`)
+
+    // 4. 写作风格（output-style.md）
+    if (skill.guides?.['output-style']) {
+      systemParts.push(`\n---\n\n# 写作风格\n\n${skill.guides['output-style']}`)
+    }
+
+    // 5. 拆解示例
+    if (skill.examples?.['plot-breakdown-example']) {
+      systemParts.push(`\n---\n\n# 拆解示例\n\n${skill.examples['plot-breakdown-example']}`)
+    }
+
+    // 6. 拆解模板
+    if (skill.templates?.['plot-breakdown-template']) {
+      systemParts.push(`\n---\n\n# 输出格式模板\n\n请严格按照以下模板格式输出：\n\n${skill.templates['plot-breakdown-template']}`)
+    }
+
+    // ============ User ============
+
+    // 7. 项目/小说信息
+    userParts.push([
+      `# 小说信息`,
+      ``,
+      `- 小说名称：《${projectContext.novelTitle}》`,
+      `- 小说类型：${projectContext.novelGenre}`,
+      `- 总章节：${projectContext.totalChapters} 章`,
+      `- 已拆解：${projectContext.processedChapters} 章`,
+      `- 当前批次：第 ${projectContext.currentBatch} 批`
+    ].join('\n'))
+
+    // 8. 已有拆解内容（上下文参考）
+    if (inputs.plotBreakdown) {
+      userParts.push(`\n---\n\n# 已有剧情拆解（上下文参考，确保编号连续、集数不冲突）\n\n${inputs.plotBreakdown}`)
+    }
+
+    // 9. 小说原文（核心输入）
+    if (inputs.novelChapters && inputs.novelChapters.length > 0) {
+      const chapterTexts = inputs.novelChapters
+        .map(ch => `## 第${ch.chapter}章\n\n${ch.content}`)
+        .join('\n\n---\n\n')
+      userParts.push(`\n---\n\n# 本批次小说原文（请逐章阅读后拆解）\n\n${chapterTexts}`)
+    }
+
+    // 10. 执行指令（从 volumePlan 动态读取参数）
+    const wordRange = volumePlan ? `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}` : '1500-2000'
+    const plotRange = volumePlan ? `${volumePlan.plotsPerEpisode[0]}-${volumePlan.plotsPerEpisode[1]}` : '3-4'
+    userParts.push(
+      `\n---\n\n❗执行指令：请阅读以上 ${inputs.novelChapters?.length || 6} 章小说原文，按照改编方法论和拆解模板格式，提取核心冲突和情绪钩子（≥7分才提取），生成剧情点列表并标注分集。\n\n` +
+      `要求：\n` +
+      `- 编号必须紧接已有剧情点（如已有到【剧情30】则从【剧情31】开始）\n` +
+      `- 集数必须紧接已有集数\n` +
+      `- 每集 ${plotRange} 个剧情点，${wordRange} 字\n` +
+      `- 状态默认为"未用"\n` +
+      `- 输出格式：### 第X批（第X-X章）然后【剧情n】...`
+    )
+
+    // 11. 审核反馈
+    if (reviewFeedback) {
+      userParts.push(
+        `\n---\n\n# ⚠️ 上次拆解质检未通过，请根据以下反馈修改\n\n${reviewFeedback}\n\n请着重改进上述问题，重新生成完整的拆解输出。`
+      )
+    }
+
+    return {
+      system: systemParts.join('\n\n'),
+      user: userParts.join('\n\n')
+    }
+  }
+
+  /**
+   * 组装剧本创作 (script) 的 Prompt
+   */
+  assembleScript(
+    skill: Skill,
+    roleDeclaration: string,
+    inputs: AdaptUpstreamInputs,
+    projectContext: AdaptProjectContext,
+    targetEpisodes: number[],
+    reviewFeedback?: string,
+    volumePlan?: VolumePlan | null
+  ): AssembledPrompt {
+    const systemParts: string[] = []
+    const userParts: string[] = []
+
+    // ============ System ============
+
+    // 1. 角色声明
+    systemParts.push(roleDeclaration)
+
+    // 2. 改编方法论
+    if (skill.methodology) {
+      systemParts.push(`\n---\n\n# 改编方法论\n\n${skill.methodology}`)
+    }
+
+    // 3. 核心规范
+    systemParts.push(`\n---\n\n# 技能规范\n\n${skill.systemPrompt}`)
+
+    // 4. 写作风格
+    if (skill.guides?.['output-style']) {
+      systemParts.push(`\n---\n\n# 视觉化快节奏写作风格\n\n${skill.guides['output-style']}`)
+    }
+
+    // 5. 剧本示例
+    if (skill.examples?.['script-example']) {
+      systemParts.push(`\n---\n\n# 剧本格式示例\n\n${skill.examples['script-example']}`)
+    }
+
+    // 6. 剧本模板
+    if (skill.templates?.['script-template']) {
+      systemParts.push(`\n---\n\n# 输出格式模板\n\n请严格按照以下模板格式输出：\n\n${skill.templates['script-template']}`)
+    }
+
+    // ============ User ============
+
+    // 7. 项目信息
+    userParts.push([
+      `# 小说信息`,
+      ``,
+      `- 小说名称：《${projectContext.novelTitle}》`,
+      `- 小说类型：${projectContext.novelGenre}`,
+      `- 本次创作集数：第 ${targetEpisodes.join('、')} 集`
+    ].join('\n'))
+
+    // 8. 剧情点
+    if (inputs.plotPointsForBatch) {
+      userParts.push(`\n---\n\n# 本批次剧情点（基于这些剧情点创作剧本）\n\n${inputs.plotPointsForBatch}`)
+    }
+
+    // 9. 上一集剧本（确保连贯）
+    if (inputs.previousScript) {
+      userParts.push(`\n---\n\n# 上一集剧本（参考以确保连贯）\n\n${inputs.previousScript}`)
+    }
+
+    // 10. 小说原文
+    if (inputs.novelChapters && inputs.novelChapters.length > 0) {
+      const chapterTexts = inputs.novelChapters
+        .map(ch => `## 第${ch.chapter}章\n\n${ch.content}`)
+        .join('\n\n---\n\n')
+      userParts.push(`\n---\n\n# 对应章节小说原文（创作参考）\n\n${chapterTexts}`)
+    }
+
+    // 11. 执行指令（从 volumePlan 动态读取参数）
+    const wordRange = volumePlan ? `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}` : '1500-2000'
+    const sceneRange = volumePlan ? `${volumePlan.scenesPerEpisode[0]}-${volumePlan.scenesPerEpisode[1]}` : '3-4'
+    const seedanceRange = volumePlan ? `${volumePlan.seedancePerEpisode[0]}-${volumePlan.seedancePerEpisode[1]}` : '9-12'
+    const epList = targetEpisodes.map(e => `第${e}集`).join('、')
+    userParts.push(
+      `\n---\n\n❗执行指令：请基于以上剧情点和小说原文，创作 ${epList} 的完整剧本。\n\n` +
+      `要求：\n` +
+      `- 每集 ${wordRange} 字，${sceneRange} 个场景，${seedanceRange} 个 Seedance 段\n` +
+      `- 使用视觉描述符号：※场景、△动作、【特效】【音效】【系统面板】【独白】【闪回】\n` +
+      `- 对话不超过 20 字/句\n` +
+      `- 每集必须以【卡黑】结尾\n` +
+      `- 节奏公式：起承转钩\n` +
+      `- 每集输出为独立的 markdown 文件内容，以 # 第N集：标题 开头`
+    )
+
+    // 12. 审核反馈
+    if (reviewFeedback) {
+      userParts.push(
+        `\n---\n\n# ⚠️ 上次剧本质检未通过，请根据以下反馈修改\n\n${reviewFeedback}\n\n请着重改进上述问题，重新生成完整剧本。`
+      )
+    }
+
+    return {
+      system: systemParts.join('\n\n'),
+      user: userParts.join('\n\n')
+    }
+  }
+
+  /**
+   * 组装拆解质检 (breakdown review) 的 Prompt
+   * [DA-1] 完整 8 维度子项 + 基准引用
+   */
+  assembleBreakdownReview(
+    antibiasPrompt: string,
+    breakdownOutput: string,
+    novelChaptersText: string,
+    adaptMethodContent: string
+  ): AssembledPrompt {
+    const BREAKDOWN_REVIEW_CHECKLIST = `
+# 拆解质检清单（8维度 · breakdown-aligner）
+
+> ⚠️ 你必须逐条对比小说原文和拆解内容，不可凭记忆判断。
+
+**【维度1】冲突强度评估**
+- ⭐⭐⭐核心冲突是否真的改变主角命运/大幅改变格局
+- 是否把⭐⭐次级冲突或⭐过渡冲突误标为核心冲突
+- 冲突类型标注是否准确（人物对立/力量对比/身份矛盾/情感纠葛/生存危机/真相悬念）
+- 基准：adapt-method.md → 三、冲突点识别与提取
+
+**【维度2】情绪钩子识别准确性**
+- 钩子类型是否准确（打脸/碾压/金手指/虐心/真相揭露等）
+- 强度评分是否合理（10分=卧槽，8-9分=爽/虐/急，7分=保留门槛，＜7分不提取）
+- 是否遗漏了原文中的高强度钩子
+- 是否把低强度误标为高强度
+- 基准：adapt-method.md → 四、情绪钩子提取与标注
+
+**【维度3】冲突密度达标性**
+- 核心冲突（⭐⭐⭐）数量：高密度≥5个✓ / 中密度2-4个✓ / 低密度0-1个✗
+- 高强度钩子（10-8分）数量：高密度6-8个✓ / 中密度3-5个✓ / 低密度1-2个✗
+- 密度不足时需判断是原文确实没有，还是拆解遗漏
+- 基准：adapt-method.md → 三+四
+
+**【维度4】分集标注合理性**
+- 每集3-4个剧情点（灵活掌握），集数由内容密度动态决定
+- 巅峰钩子（10-9分）2-3个/集；核心钩子（8-7分）3-4个/集
+- 每集字数估算1500-2000字范围
+- 基准：adapt-method.md → 五、剧情拆解与分集标注
+
+**【维度5】压缩策略正确性**
+- 必删内容：环境描写、心理独白、过渡情节、无关支线、重复内容
+- 必留内容：冲突对话、动作场景、情绪爆点、悬念设置、关系展示
+- 5种压缩策略正确运用：冲突合并法/时间跳跃法/信息前置法/删繁就简法/支线取舍法
+- 基准：adapt-method.md → 五 → 压缩策略（通用）
+
+**【维度6】剧情点描述规范性**
+- 格式：【剧情n】[场景]，[事件描述]，[情绪钩子类型]，第X集，状态：未用
+- 场景明确、角色明确、事件具体、钩子类型标注、集数标注、状态标记
+- 编号连续，字段完整
+
+**【维度7】原文还原准确性** ⭐关键维度
+- **必须对比小说原文**，验证拆解是否准确反映原文
+- 是否遗漏关键冲突和爆点
+- 是否曲解原文（把A理解成B）
+- 角色关系、事件因果是否与原文一致
+- 是否过度脑补原文中没有的内容
+- 关键台词、数值等细节是否与原文一致
+
+**【维度8】类型特性符合度**
+- 根据小说类型检查类型专属要求
+- 是否删除了该类型的必删内容，强化了必强化内容
+- 基准：adapt-method.md → 九、类型化适配策略
+
+**判定**：8维全过 → ✅ PASS；任一不过 → ❌ FAIL → 列出问题清单
+**输出格式**：每个维度给出 ✓/✗ + 具体评价，最终给出总评分（1-10）和结论：PASS 或 FAIL
+`
+
+    return {
+      system: [
+        antibiasPrompt,
+        `\n---\n\n# 质检方法论参考\n\n${adaptMethodContent}`
+      ].join('\n\n'),
+      user: [
+        `# 待审核的剧情拆解\n\n${breakdownOutput}`,
+        `\n---\n\n# 对应章节小说原文（必须逐条对比）\n\n${novelChaptersText}`,
+        `\n---\n\n${BREAKDOWN_REVIEW_CHECKLIST}`
+      ].join('\n\n')
+    }
+  }
+
+  /**
+   * 组装剧本质检 (script review) 的 Prompt
+   * [DA-1] 完整 11 维度子项
+   * [DA-2] system 注入 adapt-method
+   * [DA-3] 新增 previousScript 参数
+   * [DA-5] 第20集特殊检查
+   */
+  assembleScriptReview(
+    antibiasPrompt: string,
+    scriptOutput: string,
+    plotBreakdown: string,
+    novelChaptersText: string,
+    adaptMethodContent?: string,
+    previousScript?: string,
+    targetEpisodes?: number[]
+  ): AssembledPrompt {
+    const SCRIPT_REVIEW_CHECKLIST = `
+# 剧本质检清单（11维度 · webtoon-aligner）
+
+**【维度1】剧情点还原一致性**
+- 是否按 plot-breakdown 分配的剧情点创作
+- 剧情点核心事件是否完整呈现
+
+**【维度2】剧情点使用一致性**
+- 编号正确、无用错/重复使用
+- 使用的剧情点编号与 plot-breakdown 对应
+
+**【维度3】跨集连贯性**（非首集）
+- 接续上集悬念、人物状态连续
+- 时间/空间/情节逻辑衔接
+
+**【维度4】节奏控制一致性**
+- 每集1500-2000字
+- 3-4个场景
+- 9-12个Seedance段
+- 25-40条△动作描写
+- 15-25句台词
+- 起承转钩结构
+
+**【维度5】视觉化风格一致性**
+- ※△【】符号正确使用
+- 对话≤20字/句
+- 无过多心理描写（应转化为动作/表情）
+
+**【维度6】人物行为一致性**
+- 性格/能力/对话风格前后统一
+- 不出现"性格突变"
+
+**【维度7】时间线逻辑一致性**
+- 事件顺序合理
+- 时间跨度/位置移动合理
+
+**【维度8】格式规范一致性**
+- 符合 script-template.md 格式
+- 场景标记、特效标记等完整
+
+**【维度9】悬念设置一致性**
+- 每集结尾必须有【卡黑】
+- 悬念强度足够
+
+**【维度10】类型特性一致性**
+- 符合小说类型专属要求
+
+**【维度11】改编禁忌检查**
+- 无节奏禁忌（拖沓/跳跃过大）
+- 无内容禁忌（过度暴力等）
+- 无结构禁忌（场景过多/过少）
+- 无改编禁忌（脱离原作）
+- 无视觉禁忌（无法可视化的描写）
+
+**判定**：11维全过 → ✅ PASS；任一不过 → ❌ FAIL → 列出问题清单
+**输出格式**：每个维度给出 ✓/✗ + 具体评价，最终给出总评分（1-10）和结论：PASS 或 FAIL
+`
+
+    // [DA-5] 第20集特殊检查
+    const ep20Check = targetEpisodes?.includes(20)
+      ? `\n\n> ⚠️ **特殊集数重点检查**：第20集为付费节点——结尾悬念必须达到顶级强度，【卡黑】必须让读者产生强烈的"必须付费看下去"冲动。`
+      : ''
+
+    // [DA-2] system 注入 adapt-method
+    const systemParts = [antibiasPrompt]
+    if (adaptMethodContent) {
+      systemParts.push(`\n---\n\n# 质检方法论参考\n\n${adaptMethodContent}`)
+    }
+
+    const userParts = [
+      `# 待审核的剧本\n\n${scriptOutput}`,
+      `\n---\n\n# 剧情拆解（对照用）\n\n${plotBreakdown}`,
+      `\n---\n\n# 对应章节小说原文（对照用）\n\n${novelChaptersText}`
+    ]
+
+    // [DA-3] 上一集剧本（跨集连贯性）
+    if (previousScript) {
+      userParts.push(`\n---\n\n# 上一集剧本（跨集连贯性对照）\n\n${previousScript}`)
+    }
+
+    userParts.push(`\n---\n\n${SCRIPT_REVIEW_CHECKLIST}${ep20Check}`)
+
+    return {
+      system: systemParts.join('\n\n'),
+      user: userParts.join('\n\n')
+    }
+  }
+}
+

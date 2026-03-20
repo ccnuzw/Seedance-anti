@@ -41,6 +41,13 @@ export class SkillLoader {
       guides['gemini-image-prompt-guide'] = guideContent
     }
 
+    // 加载编剧特有资源（webtoon-skill 专用）
+    const adaptMethod = await this.loadOptionalFile(skillDir, 'adapt-method.md')
+    const outputStyle = await this.loadOptionalFile(skillDir, 'output-style.md')
+    if (outputStyle) {
+      guides['output-style'] = outputStyle
+    }
+
     // 扫描所有文件
     const fileManifest = await this.listAllFiles(skillDir)
 
@@ -48,7 +55,7 @@ export class SkillLoader {
       name: (frontmatter.name as string) || skillName,
       description: (frontmatter.description as string) || '',
       systemPrompt: body.trim(),
-      methodology: methodology || undefined,
+      methodology: methodology || adaptMethod || undefined,
       templates,
       examples,
       guides: Object.keys(guides).length > 0 ? guides : undefined,

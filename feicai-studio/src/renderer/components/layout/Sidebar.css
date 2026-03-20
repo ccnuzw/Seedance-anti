@@ -85,13 +85,13 @@
 .sidebar-project-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 6px 0;
-  padding: 12px;
+  gap: var(--spacing-sm);
+  margin: var(--spacing-xs) 0;
+  padding: var(--spacing-md);
   border-radius: var(--radius-lg);
   background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.06), rgba(236, 72, 153, 0.04));
-  border: 1px solid rgba(99, 102, 241, 0.2);
+    linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 8%, transparent), color-mix(in srgb, var(--color-stage-storyboard) 6%, transparent), color-mix(in srgb, var(--color-stage-art) 4%, transparent));
+  border: 1px solid color-mix(in srgb, var(--color-accent) 20%, transparent);
   text-decoration: none;
   color: var(--color-text-primary);
   cursor: pointer;
@@ -107,33 +107,33 @@
   inset: 0;
   border-radius: inherit;
   background:
-    radial-gradient(ellipse 120% 80% at 20% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 60%),
-    radial-gradient(ellipse 80% 120% at 90% 100%, rgba(236, 72, 153, 0.08) 0%, transparent 60%);
+    radial-gradient(ellipse 120% 80% at 20% 0%, color-mix(in srgb, var(--color-accent) 12%, transparent) 0%, transparent 60%),
+    radial-gradient(ellipse 80% 120% at 90% 100%, color-mix(in srgb, var(--color-stage-art) 8%, transparent) 0%, transparent 60%);
   pointer-events: none;
 }
 
 .sidebar-project-card:hover {
-  border-color: rgba(99, 102, 241, 0.4);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
   background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.1), rgba(236, 72, 153, 0.06));
-  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);
+    linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 12%, transparent), color-mix(in srgb, var(--color-stage-storyboard) 10%, transparent), color-mix(in srgb, var(--color-stage-art) 6%, transparent));
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--color-accent) 15%, transparent);
   transform: translateY(-1px);
 }
 
 .sidebar-project-card.active {
-  border-color: rgba(99, 102, 241, 0.5);
+  border-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
   background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.12), rgba(236, 72, 153, 0.08));
+    linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 16%, transparent), color-mix(in srgb, var(--color-stage-storyboard) 12%, transparent), color-mix(in srgb, var(--color-stage-art) 8%, transparent));
   box-shadow:
-    0 0 0 1px rgba(99, 102, 241, 0.3),
-    0 4px 24px rgba(99, 102, 241, 0.2);
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, transparent),
+    0 4px 24px color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 
 /* ---- 卡片头部：图标 + 名称 ---- */
 .spc-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacing-sm);
   position: relative;
   z-index: 1;
 }
@@ -142,16 +142,16 @@
   width: 36px;
   height: 36px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.2));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 25%, transparent), color-mix(in srgb, var(--color-stage-storyboard) 20%, transparent));
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 15%, transparent);
 }
 
 .spc-icon {
-  font-size: 18px;
+  font-size: var(--font-size-md);
 }
 
 .spc-title-group {
@@ -214,7 +214,7 @@
 .spc-meta-divider {
   width: 1px;
   height: 20px;
-  background: rgba(99, 102, 241, 0.2);
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
   flex-shrink: 0;
 }
 
@@ -234,9 +234,9 @@
 .spc-progress-fill {
   height: 100%;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--color-accent), #8b5cf6, #ec4899);
+  background: linear-gradient(90deg, var(--color-accent), var(--color-stage-storyboard), var(--color-stage-art));
   transition: width var(--transition-slow);
-  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 
 .nav-icon {
@@ -253,4 +253,95 @@
 .sidebar-version {
   font-size: var(--font-size-xs);
   text-align: center;
+}
+
+/* =========================================================
+   分组导航
+   ========================================================= */
+
+.sidebar-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-xs);
+  font-size: var(--font-size-micro);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: var(--spacing-xs);
+}
+
+.group-icon {
+  font-size: var(--font-size-xs);
+}
+
+.group-phase-badge {
+  font-size: var(--font-size-micro);
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  margin-left: auto;
+}
+
+.group-phase-badge.badge-active {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+}
+
+.group-phase-badge.badge-done {
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
+}
+
+.group-phase-badge.badge-locked {
+  background: color-mix(in srgb, var(--color-text-tertiary) 10%, transparent);
+  color: var(--color-text-tertiary);
+}
+
+.sidebar-group-divider {
+  height: 1px;
+  margin: var(--spacing-xs) var(--spacing-md);
+  background: var(--color-border);
+  opacity: 0.5;
+}
+
+/* 灰化导航项 */
+.sidebar-nav-item.nav-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+.sidebar-nav-item.nav-disabled:hover {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+/* 阶段升级按钮 */
+.sidebar-phase-upgrade-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 6px var(--spacing-md);
+  margin: 4px 0;
+  border-radius: var(--radius-md);
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  color: var(--color-accent);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: 100%;
+  text-align: left;
+}
+
+.sidebar-phase-upgrade-btn:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border-color: var(--color-accent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
