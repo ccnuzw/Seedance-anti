@@ -88,6 +88,9 @@ export const IPC = {
   ADAPT_SAVE_PLAN: 'adapt:savePlan',
   ADAPT_LOAD_PLAN: 'adapt:loadPlan',
   ADAPT_GENERATE_PLAN: 'adapt:generatePlan',
+  ADAPT_SAVE_NOTES: 'adapt:saveNotes',
+  ADAPT_LOAD_NOTES: 'adapt:loadNotes',
+  ADAPT_SUBMIT_GUIDANCE: 'adapt:submitGuidance',
 
   // 编剧管线事件 (main → renderer 推送)
   ADAPT_STATE_CHANGED: 'adapt:stateChanged',
@@ -95,6 +98,7 @@ export const IPC = {
   ADAPT_STREAM: 'adapt:stream',
   ADAPT_STAGE_COMPLETE: 'adapt:stageComplete',
   ADAPT_REVIEW_RESULT: 'adapt:reviewResult',
+  ADAPT_REVIEW_FAILED: 'adapt:reviewFailed',
   ADAPT_ERROR: 'adapt:error',
 
   // 小说管理

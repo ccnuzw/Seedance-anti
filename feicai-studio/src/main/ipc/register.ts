@@ -1,5 +1,6 @@
-import { ipcMain, dialog } from 'electron'
+import { ipcMain, dialog, app } from 'electron'
 import { IPC } from '@shared/ipc-channels'
+import { existsSync, readdirSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
 import * as queries from '../db/queries'
@@ -17,8 +18,11 @@ export function registerAllHandlers(): void {
   registerAssetHandlers()
   // 注册导出 handlers
   registerExportHandlers()
-  // 注册编剧管线 handlers
-  const skillsDir = join(__dirname, '..', '..', '..', '.agent', 'skills')
+  // 注册编剧管线 handlers（使用与管线二一致的 builtin-skills 路径）
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+  const skillsDir = isDev
+    ? join(process.cwd(), 'resources', 'builtin-skills')
+    : join(process.resourcesPath, 'builtin-skills')
   registerAdaptHandlers(skillsDir)
 
   // ==================== 项目 ====================
@@ -78,7 +82,6 @@ export function registerAllHandlers(): void {
   // ==================== 文件操作 ====================
 
   ipcMain.handle(IPC.FILE_READ, async (_event, filePath: string) => {
-    const { existsSync } = require('fs')
     if (!existsSync(filePath)) return null
     return readFile(filePath, 'utf-8')
   })
@@ -89,7 +92,6 @@ export function registerAllHandlers(): void {
   })
 
   ipcMain.handle(IPC.FILE_READDIR, async (_event, dirPath: string) => {
-    const { existsSync, readdirSync } = require('fs')
     if (!existsSync(dirPath)) return []
     return readdirSync(dirPath) as string[]
   })
@@ -162,7 +164,6 @@ export function registerAllHandlers(): void {
   // ==================== 应用 ====================
 
   ipcMain.handle(IPC.APP_GET_VERSION, async () => {
-    const { app } = require('electron')
     return app.getVersion()
   })
 }

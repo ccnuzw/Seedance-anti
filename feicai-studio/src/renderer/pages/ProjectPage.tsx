@@ -348,7 +348,7 @@ export default function ProjectPage() {
       )}
 
       {/* 制作阶段 */}
-      {isWriting && !hasScripts ? (
+      {isNovel && isWriting && !hasScripts ? (
         <div className="card production-locked-card">
           <div className="production-locked-icon">🔒</div>
           <h3>制作阶段</h3>

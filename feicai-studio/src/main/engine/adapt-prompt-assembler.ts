@@ -52,7 +52,8 @@ export class AdaptPromptAssembler {
     inputs: AdaptUpstreamInputs,
     projectContext: AdaptProjectContext,
     reviewFeedback?: string,
-    volumePlan?: VolumePlan | null
+    volumePlan?: VolumePlan | null,
+    userNotes?: string
   ): AssembledPrompt {
     const systemParts: string[] = []
     const userParts: string[] = []
@@ -103,6 +104,13 @@ export class AdaptPromptAssembler {
       userParts.push(`\n---\n\n# 已有剧情拆解（上下文参考，确保编号连续、集数不冲突）\n\n${inputs.plotBreakdown}`)
     }
 
+    // 8.5. 用户指导笔记（最高优先级）
+    if (userNotes) {
+      userParts.push(
+        `\n---\n\n# 📝 用户指导笔记（必须严格遵守，优先级最高）\n\n${userNotes}`
+      )
+    }
+
     // 9. 小说原文（核心输入）
     if (inputs.novelChapters && inputs.novelChapters.length > 0) {
       const chapterTexts = inputs.novelChapters
@@ -147,7 +155,8 @@ export class AdaptPromptAssembler {
     projectContext: AdaptProjectContext,
     targetEpisodes: number[],
     reviewFeedback?: string,
-    volumePlan?: VolumePlan | null
+    volumePlan?: VolumePlan | null,
+    userNotes?: string
   ): AssembledPrompt {
     const systemParts: string[] = []
     const userParts: string[] = []
@@ -199,6 +208,13 @@ export class AdaptPromptAssembler {
     // 9. 上一集剧本（确保连贯）
     if (inputs.previousScript) {
       userParts.push(`\n---\n\n# 上一集剧本（参考以确保连贯）\n\n${inputs.previousScript}`)
+    }
+
+    // 9.5. 用户指导笔记（最高优先级）
+    if (userNotes) {
+      userParts.push(
+        `\n---\n\n# 📝 用户指导笔记（必须严格遵守，优先级最高）\n\n${userNotes}`
+      )
     }
 
     // 10. 小说原文

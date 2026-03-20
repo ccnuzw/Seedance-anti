@@ -51,19 +51,39 @@ export function createProject(data: {
   } else {
     // 不存在则创建
     mkdirSync(data.projectPath, { recursive: true })
-    const config = {
+    const config: Record<string, unknown> = {
       projectName: data.name,
       totalEpisodes: data.totalEpisodes,
       visualStyle: data.visualStyle,
       targetMedium: data.targetMedium,
+      sourceType: data.sourceType || 'script',
+      phase: data.phase || 'production',
       createdAt: now
+    }
+    // 网文项目写入小说信息
+    if (data.sourceType === 'novel') {
+      if (data.novelTitle) config.novelTitle = data.novelTitle
+      if (data.novelGenre) config.novelGenre = data.novelGenre
     }
     writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
     data.config = config
   }
 
-  // 确保 script/ 目录存在
+  // 确保 script/ 和 outputs/ 目录存在
   mkdirSync(scriptDir, { recursive: true })
+  mkdirSync(join(data.projectPath, 'outputs'), { recursive: true })
+
+  // === 网文项目额外初始化（创建即初始化） ===
+  if (data.sourceType === 'novel') {
+    // 创建 novel/ 目录
+    mkdirSync(join(data.projectPath, 'novel'), { recursive: true })
+    // 创建 plot-breakdown.md（如果不存在）
+    const pbPath = join(data.projectPath, 'plot-breakdown.md')
+    if (!existsSync(pbPath) && data.novelTitle) {
+      const header = `# 剧情拆解\n\n**小说名称**：《${data.novelTitle}》\n**小说类型**：${data.novelGenre || '未知'}\n\n---\n`
+      writeFileSync(pbPath, header, 'utf-8')
+    }
+  }
 
   db.prepare(`
     INSERT INTO projects (id, name, source_type, phase, visual_style, target_medium, project_path, total_episodes, novel_title, novel_genre, config_json, created_at, updated_at)

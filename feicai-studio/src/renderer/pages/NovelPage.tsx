@@ -37,6 +37,9 @@ export default function NovelPage() {
     if (currentProject) {
       fetchStatus(currentProject.projectPath)
       scanChapters()
+      // 从 DB 已有数据自动回填（向导中已填过的信息）
+      if (currentProject.novelTitle) setNovelTitle(currentProject.novelTitle)
+      if (currentProject.novelGenre) setNovelGenre(currentProject.novelGenre)
     }
   }, [currentProject])
 
@@ -142,7 +145,7 @@ export default function NovelPage() {
 
   const processedChapters = waterLevel?.processedChapters || 0
   const totalChapters = scanResult?.totalChapters || novelInfo?.totalChapters || 0
-  const needsInit = !novelInfo?.title
+  const needsInit = !novelInfo?.title && !currentProject.novelTitle
 
   return (
     <div className="novel-page">
@@ -194,22 +197,22 @@ export default function NovelPage() {
       )}
 
       {/* 统计卡片 */}
-      <div className="novel-info-card">
-        <div className="novel-stat">
-          <div className="stat-value">{novelInfo?.title || '—'}</div>
-          <div className="stat-label">书名</div>
+      <div className="water-level-grid">
+        <div className="water-level-card">
+          <div className="wl-value wl-primary">{novelInfo?.title || '—'}</div>
+          <div className="wl-label">书名</div>
         </div>
-        <div className="novel-stat">
-          <div className="stat-value">{novelInfo?.genre || '—'}</div>
-          <div className="stat-label">类型</div>
+        <div className="water-level-card">
+          <div className="wl-value wl-primary">{novelInfo?.genre || '—'}</div>
+          <div className="wl-label">类型</div>
         </div>
-        <div className="novel-stat">
-          <div className="stat-value">{totalChapters}</div>
-          <div className="stat-label">总章节数</div>
+        <div className="water-level-card">
+          <div className="wl-value wl-primary">{totalChapters}</div>
+          <div className="wl-label">总章节数</div>
         </div>
-        <div className="novel-stat">
-          <div className="stat-value">{processedChapters}</div>
-          <div className="stat-label">已拆解章节</div>
+        <div className="water-level-card">
+          <div className={`wl-value ${processedChapters > 0 ? 'wl-success' : 'wl-warning'}`}>{processedChapters}</div>
+          <div className="wl-label">已拆解章节</div>
         </div>
       </div>
 

@@ -42,6 +42,16 @@ interface AdaptStore {
   lastStageReport: StageReport | null
   lastReviewResult: unknown | null
 
+  // 用户笔记 & 质检干预
+  userNotes: string
+  awaitingUser: boolean
+  reviewFailedData: {
+    stage: string
+    result: unknown
+    batchNum?: number
+    retryCount: number
+  } | null
+
   // 操作
   initAdapt: (projectId: string, projectPath: string, llmConfig: LLMConfig) => Promise<void>
   startBreakdown: (batchCount?: number) => Promise<void>
@@ -72,6 +82,12 @@ interface AdaptStore {
   loadPlan: (projectPath: string) => Promise<void>
   savePlan: (projectPath: string, plan: AdaptPlan) => Promise<void>
   generatePlan: (projectPath: string, volumePlan: VolumePlan, llmConfig: LLMConfig) => Promise<string>
+
+  // 用户笔记 & 质检干预 actions
+  loadNotes: (projectPath: string) => Promise<void>
+  saveNotes: (projectPath: string, notes: string) => Promise<void>
+  submitGuidance: (guidance: string) => Promise<void>
+  clearReviewFailed: () => void
 }
 
 // ---- 引用计数事件监听（与 pipelineStore 同架构）----
@@ -85,10 +101,12 @@ function _registerAdaptListeners(set: Function, get: Function): () => void {
   unsubscribers.push(
     window.feicaiAPI.on(IPC.ADAPT_STATE_CHANGED, ((...args: unknown[]) => {
       const data = args[0] as { newState: AdaptState; context: AdaptContext }
+      const isAwaiting = data.newState === 'adapt_awaiting_user'
       set({
         adaptState: data.newState,
         waterLevel: data.context.waterLevel,
-        isRunning: !['adapt_idle', 'adapt_error', 'adapt_paused', 'breakdown_done', 'script_done'].includes(data.newState)
+        awaitingUser: isAwaiting,
+        isRunning: !['adapt_idle', 'adapt_error', 'adapt_paused', 'adapt_awaiting_user', 'breakdown_done', 'script_done'].includes(data.newState)
       })
     }) as (...args: unknown[]) => void)
   )
@@ -138,6 +156,22 @@ function _registerAdaptListeners(set: Function, get: Function): () => void {
     }) as (...args: unknown[]) => void)
   )
 
+  unsubscribers.push(
+    window.feicaiAPI.on(IPC.ADAPT_REVIEW_FAILED, ((...args: unknown[]) => {
+      const data = args[0] as {
+        stage: string
+        result: unknown
+        batchNum?: number
+        retryCount: number
+      }
+      set({
+        reviewFailedData: data,
+        awaitingUser: true,
+        isRunning: false
+      })
+    }) as (...args: unknown[]) => void)
+  )
+
   return () => {
     for (const unsub of unsubscribers) unsub()
   }
@@ -154,6 +188,9 @@ export const useAdaptStore = create<AdaptStore>((set, get) => ({
   lastStageReport: null,
   lastReviewResult: null,
   adaptPlan: null,
+  userNotes: '',
+  awaitingUser: false,
+  reviewFailedData: null,
 
   setupEventListeners: () => {
     _adaptListenerRefCount++
@@ -342,5 +379,33 @@ export const useAdaptStore = create<AdaptStore>((set, get) => ({
       projectPath, volumePlan, llmConfig
     }) as { llmPlan: string }
     return result.llmPlan
-  }
+  },
+
+  // 用户笔记 & 质检干预
+  loadNotes: async (projectPath) => {
+    try {
+      const notes = await window.feicaiAPI.invoke(IPC.ADAPT_LOAD_NOTES, projectPath) as string | undefined
+      set({ userNotes: notes || '' })
+    } catch { /* ignore */ }
+  },
+
+  saveNotes: async (projectPath, notes) => {
+    try {
+      await window.feicaiAPI.invoke(IPC.ADAPT_SAVE_NOTES, { projectPath, notes })
+      set({ userNotes: notes })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) })
+    }
+  },
+
+  submitGuidance: async (guidance) => {
+    set({ error: null, streamOutput: '', isRunning: true, awaitingUser: false, reviewFailedData: null })
+    try {
+      await window.feicaiAPI.invoke(IPC.ADAPT_SUBMIT_GUIDANCE, { guidance })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e), isRunning: false })
+    }
+  },
+
+  clearReviewFailed: () => set({ reviewFailedData: null, awaitingUser: false })
 }))

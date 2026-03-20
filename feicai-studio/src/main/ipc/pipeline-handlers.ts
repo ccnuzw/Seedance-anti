@@ -2,7 +2,7 @@
 // Pipeline IPC Handlers — 流水线控制的 IPC 处理器
 // ============================================================
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, app } from 'electron'
 import { join } from 'path'
 import { readFileSync } from 'fs'
 import { IPC } from '@shared/ipc-channels'
@@ -26,7 +26,7 @@ let pipeline: PipelineStateMachine | null = null
 
 function getSkillsDir(): string {
   // 开发环境使用 resources 目录，生产环境使用打包后的资源
-  const isDev = process.env.NODE_ENV === 'development' || !require('electron').app.isPackaged
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
   if (isDev) {
     return join(process.cwd(), 'resources', 'builtin-skills')
   }

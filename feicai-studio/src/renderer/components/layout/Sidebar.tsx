@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useAdaptStore } from '@renderer/stores/adaptStore'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
 import ExportModal from '@renderer/components/ExportModal'
 import './Sidebar.css'
@@ -8,6 +9,7 @@ import './Sidebar.css'
 export default function Sidebar() {
   const navigate = useNavigate()
   const { currentProject, episodes, updatePhase } = useProjectStore()
+  const { waterLevel, novelInfo } = useAdaptStore()
   const { context: pipelineContext } = usePipelineStore()
   const [showExport, setShowExport] = useState(false)
 
@@ -24,12 +26,17 @@ export default function Sidebar() {
   const isWritingPhase = currentProject?.phase === 'writing'
   const isProductionPhase = currentProject?.phase === 'production'
 
-  // 编剧管线导航
+  // 编剧管线导航 + 进度指示
+  const totalCh = waterLevel?.totalChapters || novelInfo?.totalChapters || 0
+  const processedCh = waterLevel?.processedChapters || 0
+  const breakdownPct = totalCh > 0 ? Math.round((processedCh / totalCh) * 100) : 0
+  const scriptCount = waterLevel?.completedEpisodes || 0
+
   const WRITING_NAV = currentProject
     ? [
-        { path: `/project/${currentProject.id}/novel`, icon: '📖', label: '小说管理' },
-        { path: `/project/${currentProject.id}/breakdown`, icon: '📊', label: '剧情拆解' },
-        { path: `/project/${currentProject.id}/adapt-script`, icon: '✍️', label: '剧本创作' },
+        { path: `/project/${currentProject.id}/novel`, icon: '📖', label: '小说管理', hint: totalCh > 0 ? `${totalCh}章` : '' },
+        { path: `/project/${currentProject.id}/breakdown`, icon: '📊', label: '剧情拆解', hint: breakdownPct > 0 ? `${breakdownPct}%` : '' },
+        { path: `/project/${currentProject.id}/adapt-script`, icon: '✍️', label: '剧本创作', hint: scriptCount > 0 ? `${scriptCount}集` : '' },
       ]
     : []
 
@@ -123,7 +130,7 @@ export default function Sidebar() {
         )}
 
         {/* 编剧管线分组 */}
-        {currentProject && WRITING_NAV.length > 0 && (
+        {currentProject && currentProject.sourceType === 'novel' && WRITING_NAV.length > 0 && (
           <>
             <div className="sidebar-group-title">
               <span className="group-icon">📖</span>
@@ -141,13 +148,14 @@ export default function Sidebar() {
               >
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-label">{item.label}</span>
+                {item.hint && <span className="nav-hint">{item.hint}</span>}
               </NavLink>
             ))}
           </>
         )}
 
         {/* 阶段升级按钮 */}
-        {currentProject && isWritingPhase && (
+        {currentProject && currentProject.sourceType === 'novel' && isWritingPhase && (
           <button
             className="sidebar-phase-upgrade-btn"
             onClick={handleUpgradePhase}
@@ -168,21 +176,21 @@ export default function Sidebar() {
               <span className="group-icon">🎬</span>
               <span>制作管线</span>
               {isProductionPhase && <span className="group-phase-badge badge-active">进行中</span>}
-              {isWritingPhase && <span className="group-phase-badge badge-locked">🔒 待解锁</span>}
+              {currentProject.sourceType === 'novel' && isWritingPhase && <span className="group-phase-badge badge-locked">🔒 待解锁</span>}
             </div>
             {PRODUCTION_NAV.map((item) => (
               <NavLink
                 key={item.path}
-                to={isWritingPhase ? '#' : item.path}
+                to={currentProject.sourceType === 'novel' && isWritingPhase ? '#' : item.path}
                 className={({ isActive }) =>
-                  `sidebar-nav-item ${isActive && !isWritingPhase ? 'active' : ''} ${isWritingPhase ? 'nav-disabled' : ''}`
+                  `sidebar-nav-item ${isActive && !(currentProject.sourceType === 'novel' && isWritingPhase) ? 'active' : ''} ${currentProject.sourceType === 'novel' && isWritingPhase ? 'nav-disabled' : ''}`
                 }
                 onClick={(e) => {
-                  if (isWritingPhase) {
+                  if (currentProject.sourceType === 'novel' && isWritingPhase) {
                     e.preventDefault()
                   }
                 }}
-                title={isWritingPhase ? '完成剧本创作后解锁' : item.label}
+                title={currentProject.sourceType === 'novel' && isWritingPhase ? '完成剧本创作后解锁' : item.label}
               >
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-label">{item.label}</span>

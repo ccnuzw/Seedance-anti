@@ -262,6 +262,7 @@ export type AdaptState =
   | 'script_reviewing'
   | 'script_done'
   | 'adapt_paused'
+  | 'adapt_awaiting_user'
   | 'adapt_error'
 
 export interface WaterLevel {
@@ -300,6 +301,9 @@ export interface AdaptContext {
 
   // 改编规划
   adaptPlan?: AdaptPlan
+
+  // 用户笔记（注入到 prompt 中）
+  userNotes?: string
 }
 
 export interface NovelInfo {

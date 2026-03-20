@@ -45,6 +45,9 @@ function getOrCreateMachine(skillsDir: string): AdaptStateMachine {
     adaptMachine.on('error', (data) => {
       getMainWindow()?.webContents.send(IPC.ADAPT_ERROR, data)
     })
+    adaptMachine.on('reviewFailed', (data) => {
+      getMainWindow()?.webContents.send(IPC.ADAPT_REVIEW_FAILED, data)
+    })
 
     // 阶段自动升级：剧本创作完成后将项目升级到制作阶段
     adaptMachine.on('phaseUpgrade', (data: { projectId: string; projectPath: string }) => {
@@ -297,5 +300,32 @@ export function registerAdaptHandlers(skillsDir: string): void {
     machine.setProvider(params.llmConfig)
     const result = await machine.generateVolumePlan(params.projectPath, params.volumePlan)
     return { llmPlan: result }
+  })
+
+  // ==================== 用户笔记 & 质检干预 ====================
+
+  // 保存用户指导笔记
+  ipcMain.handle(IPC.ADAPT_SAVE_NOTES, async (_e, params: {
+    projectPath: string
+    notes: string
+  }) => {
+    const machine = getOrCreateMachine(skillsDir)
+    await machine.saveUserNotes(params.projectPath, params.notes)
+    return { success: true }
+  })
+
+  // 加载用户指导笔记
+  ipcMain.handle(IPC.ADAPT_LOAD_NOTES, async (_e, projectPath: string) => {
+    const machine = getOrCreateMachine(skillsDir)
+    return machine.loadUserNotes(projectPath)
+  })
+
+  // 用户提交质检修正指导
+  ipcMain.handle(IPC.ADAPT_SUBMIT_GUIDANCE, async (_e, params: {
+    guidance: string
+  }) => {
+    if (!adaptMachine) throw new Error('编剧管线未初始化')
+    await adaptMachine.submitUserGuidance(params.guidance)
+    return adaptMachine.getContext()
   })
 }

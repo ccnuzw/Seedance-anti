@@ -1,17 +1,180 @@
 /* ============================================================
-   AdaptScriptPage — 剧本创作页面样式
+   AdaptScriptPage — 剧本创作页面样式（重设计版）
+   双栏布局：左栏剧本列表 / 右栏 LLM 输出
    ============================================================ */
 
 .adapt-script-page {
   padding: var(--spacing-lg);
   max-width: var(--page-width-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
 }
 
-/* header 使用 global.css 中的 .page-header / .page-title */
-.script-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+/* ---- 页头 ---- */
+.as-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: var(--spacing-md);
+}
+
+.as-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.as-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+/* ---- 双栏 Grid ---- */
+.as-grid {
+  display: grid;
+  grid-template-columns: 58fr 42fr;
+  gap: var(--spacing-lg);
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .as-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 左栏 ---- */
+.as-left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.as-metrics {
+  grid-template-columns: repeat(3, 1fr) !important;
+}
+
+.as-section-title {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  margin: 0;
+}
+
+/* 修订对话框 */
+.as-revise-card {
+  background: var(--color-bg-card);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, var(--color-border));
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+}
+
+.as-revise-textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.as-revise-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.as-revise-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
+/* 剧本预览面板 */
+.as-preview-panel {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.as-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* ---- 右栏 ---- */
+.as-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  position: sticky;
+  top: 0;
+}
+
+/* 错误卡片 */
+.as-error-card {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-error) 25%, var(--color-border));
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+/* LLM 输出面板 */
+.as-output-panel {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.as-output-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-text-primary) 2%, var(--color-bg-card));
+}
+
+.as-output-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.as-output-body {
+  padding: var(--spacing-md);
+  min-height: 300px;
+  max-height: 500px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+}
+
+/* ---- 剧本卡片 ---- */
+.script-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
 }
 
 .script-card {
@@ -24,9 +187,9 @@
 }
 
 .script-card:hover {
-  border-color: var(--color-accent);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
 .script-card-header {
@@ -38,25 +201,22 @@
 
 .script-card-num {
   font-weight: 700;
+  font-size: var(--font-size-sm);
   color: var(--color-accent);
-  font-size: var(--font-size-md);
+  font-family: var(--font-mono);
 }
 
 .script-card-title {
   font-weight: 600;
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
   margin-bottom: var(--spacing-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* 元数据标签 */
 .script-meta-tags {
   display: flex;
-  flex-wrap: wrap;
   gap: var(--spacing-xs);
   margin-bottom: var(--spacing-xs);
+  flex-wrap: wrap;
 }
 
 .meta-tag {
@@ -67,40 +227,31 @@
 }
 
 .meta-tag-scene {
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-  color: var(--color-accent-hover);
+  background: color-mix(in srgb, var(--color-stage-director) 12%, transparent);
+  color: var(--color-stage-director);
 }
 
 .meta-tag-dialog {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+
+.meta-tag-chars {
   background: color-mix(in srgb, var(--color-success) 12%, transparent);
   color: var(--color-success);
 }
 
-.meta-tag-chars {
-  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-  color: var(--color-warning);
-}
-
 .script-card-meta {
-  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
-/* 增强版剧本预览 */
+/* 剧本 Markdown 预览区 */
 .script-preview-enhanced {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-lg);
-  max-height: 600px;
+  padding: var(--spacing-md);
+  max-height: 500px;
   overflow-y: auto;
-  margin-bottom: var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  line-height: 1.7;
 }
-
-/* 水位卡片 — 复用 global.css 中的 .water-level-* 共享样式 */

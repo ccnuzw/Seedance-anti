@@ -132,6 +132,7 @@ export class AdaptStateMachine extends EventEmitter {
   private shouldStop(): boolean {
     return this._aborted ||
       this.context.state === 'adapt_paused' ||
+      this.context.state === 'adapt_awaiting_user' ||
       this.context.state === 'adapt_error' ||
       this.context.state === 'adapt_idle'
   }
@@ -174,6 +175,12 @@ export class AdaptStateMachine extends EventEmitter {
 
     // 读取已拆解进度
     this.context.processedChapters = await this.novelManager.getProcessedChapterCount(params.projectPath)
+
+    // 加载用户笔记
+    this.context.userNotes = await this.loadUserNotes(params.projectPath)
+    if (this.context.userNotes) {
+      this.log('info', 'notes_loaded', `📝 已加载用户指导笔记 (${this.context.userNotes.length} 字)`)
+    }
 
     // 更新水位
     await this.refreshWaterLevel()
@@ -285,7 +292,16 @@ export class AdaptStateMachine extends EventEmitter {
         this.context.retryCount++
         this.context.lastReviewFeedback = reviewResult?.feedback || undefined
         if (this.context.retryCount > this.settings.breakdownMaxRetries) {
-          this.handleError(`拆解质检失败超过最大重试次数`, null)
+          // 质检干预：进入等待用户状态而非直接 error
+          this.log('warn', 'review_fail',
+            `❌ 拆解质检未通过 (${reviewResult?.score || 0}分)，已达最大重试次数，等待用户指导`)
+          this.setState('adapt_awaiting_user')
+          this.emit('reviewFailed', {
+            stage: 'breakdown',
+            result: reviewResult,
+            batchNum: this.context.currentBatch,
+            retryCount: this.context.retryCount
+          })
           return
         }
         this.log('warn', 'review_fail',
@@ -336,7 +352,8 @@ export class AdaptStateMachine extends EventEmitter {
           currentBatch: this.context.currentBatch
         },
         this.context.lastReviewFeedback,
-        this.getActiveVolume()
+        this.getActiveVolume(),
+        this.context.userNotes
       )
 
       // 调用 LLM
@@ -462,7 +479,15 @@ export class AdaptStateMachine extends EventEmitter {
         this.context.retryCount++
         this.context.lastReviewFeedback = reviewResult?.feedback || undefined
         if (this.context.retryCount > this.settings.scriptMaxRetries) {
-          this.handleError('剧本质检失败超过最大重试次数', null)
+          // 质检干预：进入等待用户状态
+          this.log('warn', 'review_fail',
+            `❌ 剧本质检未通过 (${reviewResult?.score || 0}分)，已达最大重试次数，等待用户指导`)
+          this.setState('adapt_awaiting_user')
+          this.emit('reviewFailed', {
+            stage: 'script',
+            result: reviewResult,
+            retryCount: this.context.retryCount
+          })
           return
         }
       }
@@ -543,7 +568,8 @@ export class AdaptStateMachine extends EventEmitter {
         },
         targetEpisodes,
         this.context.lastReviewFeedback,
-        this.getActiveVolume()
+        this.getActiveVolume(),
+        this.context.userNotes
       )
 
       return await this.callLLM('script', prompt)
@@ -873,7 +899,9 @@ export class AdaptStateMachine extends EventEmitter {
       ].filter(Boolean).join('\n')
     }
 
-    const output = await this.callLLM('breakdown', prompt)
+    // 直接使用非流式 generate()，不经过 callLLM（避免 shouldStop/abort 干扰）
+    // generateVolumePlan 是独立 IPC 调用，不属于状态机运行流程
+    const output = await this.llmProvider.generate(prompt)
     return output || ''
   }
 
@@ -958,7 +986,7 @@ export class AdaptStateMachine extends EventEmitter {
         }
       })
 
-      // [BUG-3 修复] 用 Promise.race 实现超时主动终止
+      // 消费 stream（只调用一次）
       const consumeStream = async () => {
         for await (const _chunk of stream) {
           if (this.shouldStop()) return 'stopped'
@@ -966,6 +994,10 @@ export class AdaptStateMachine extends EventEmitter {
         return 'done'
       }
 
+      // 先启动 stream 消费
+      const streamDone = consumeStream()
+
+      // 超时检测（不消费 stream，只做定时检查）
       const timeoutPromise = new Promise<string>((_, reject) => {
         const checker = setInterval(() => {
           if (Date.now() - lastChunkTime > TIMEOUT_MS) {
@@ -973,12 +1005,13 @@ export class AdaptStateMachine extends EventEmitter {
             reject(new Error(`LLM 超时 (${TIMEOUT_MS / 1000}s 无响应)`))
           }
         }, 5000)
-        // 如果 stream 正常结束，也清理 checker
-        consumeStream().then(() => clearInterval(checker)).catch(() => clearInterval(checker))
+
+        // consumeStream 结束时（无论成功失败）清理 checker
+        streamDone.finally(() => clearInterval(checker))
       })
 
       const result = await Promise.race([
-        consumeStream(),
+        streamDone,
         timeoutPromise
       ])
 
@@ -1410,6 +1443,59 @@ export class AdaptStateMachine extends EventEmitter {
     // 有少量未用剧情
     await this.executeSingleScript()
     return { action: 'script', description: `剩余${wl.unusedPlots}个未用剧情，已自动执行 /script` }
+  }
+
+  // ==================== 用户笔记 & 质检干预 ====================
+
+  /** 读取用户指导笔记 */
+  async loadUserNotes(projectPath: string): Promise<string | undefined> {
+    try {
+      const notesPath = join(projectPath, 'context-notes.md')
+      const content = await readFile(notesPath, 'utf-8')
+      return content.trim() || undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 保存用户指导笔记 */
+  async saveUserNotes(projectPath: string, notes: string): Promise<void> {
+    const notesPath = join(projectPath, 'context-notes.md')
+    await writeFile(notesPath, notes, 'utf-8')
+    this.context.userNotes = notes.trim() || undefined
+    this.log('info', 'notes_saved', `📝 用户指导笔记已保存 (${notes.length} 字)`)
+  }
+
+  /** 用户提交修正指导后恢复执行 */
+  async submitUserGuidance(guidance: string): Promise<void> {
+    if (this.context.state !== 'adapt_awaiting_user') {
+      this.log('warn', 'guidance_ignored', '当前非等待用户状态，忽略指导提交')
+      return
+    }
+
+    this.log('info', 'guidance_received', `📝 已收到用户修正指导: ${guidance.substring(0, 80)}...`)
+
+    // 合并用户指导到 review feedback
+    const existingFeedback = this.context.lastReviewFeedback || ''
+    this.context.lastReviewFeedback = [
+      existingFeedback,
+      `\n\n---\n\n# ⚠️ 用户手动修正指导（必须严格遵守）\n\n${guidance}`
+    ].join('')
+
+    // 重置重试计数，恢复执行
+    this.context.retryCount = 0
+    this._aborted = false
+
+    // ⚠️ 关键：先将状态切换回可执行状态，否则 shouldStop() 会拦截执行
+    this.setState('novel_loaded')
+    this.log('info', 'guidance_resuming', '🔄 根据用户指导重新执行...')
+
+    // 根据当前阶段重新执行
+    if (this.context.currentStage === 'breakdown') {
+      await this.executeSingleBreakdown()
+    } else {
+      await this.executeSingleScript()
+    }
   }
 
   // ==================== 控制 ====================

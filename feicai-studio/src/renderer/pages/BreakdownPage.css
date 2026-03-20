@@ -1,51 +1,350 @@
 /* ============================================================
-   BreakdownPage — 剧情拆解页面样式
+   BreakdownPage — 剧情拆解页面样式（重设计版）
+   双栏仪表盘 + 底部可折叠抽屉
    ============================================================ */
 
 .breakdown-page {
   padding: var(--spacing-lg);
   max-width: var(--page-width-xl);
-}
-
-/* header 使用 global.css 中的 .page-header / .page-title */
-.breakdown-tabs {
   display: flex;
-  gap: 2px;
-  margin-bottom: var(--spacing-lg);
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-md);
-  padding: 3px;
+  flex-direction: column;
+  gap: var(--spacing-lg);
 }
 
-.breakdown-tabs .tab-btn {
-  flex: 1;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  transition: all var(--transition-fast);
+/* ---- 页头 ---- */
+.bd-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.bd-header-left {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--spacing-md);
+}
+
+.bd-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+/* ---- 双栏 Grid ---- */
+.bd-grid {
+  display: grid;
+  grid-template-columns: 58fr 42fr;
+  gap: var(--spacing-lg);
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .bd-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 左栏 ---- */
+.bd-left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+/* == 进度仪表盘 == */
+.bd-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.bd-progress-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+}
+
+.bd-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
+}
+
+.bd-progress-title {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.bd-progress-pct {
+  font-weight: 700;
+  font-size: var(--font-size-md);
+  color: var(--color-accent);
+}
+
+.bd-progress-detail {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+/* 指标卡片网格 */
+.bd-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-sm);
+}
+
+@media (max-width: 700px) {
+  .bd-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.bd-metric-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  text-align: center;
+  transition: border-color var(--transition-fast);
+}
+
+.bd-metric-card:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+}
+
+.bd-metric-icon {
+  font-size: 18px;
+  margin-bottom: 2px;
+}
+
+.bd-metric-value {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.bd-v-accent { color: var(--color-accent); }
+.bd-v-ok { color: var(--color-success); }
+.bd-v-warn { color: var(--color-warning); }
+
+.bd-metric-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* 智能建议横幅 */
+.bd-suggestion {
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-card));
+  border: 1px solid color-mix(in srgb, var(--color-accent) 20%, var(--color-border));
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+/* == 操作中心 == */
+.bd-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.bd-action-group {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  transition: border-color var(--transition-fast);
+}
+
+.bd-action-group:hover {
+  border-color: color-mix(in srgb, var(--color-text-primary) 15%, var(--color-border));
+}
+
+.bd-action-group-highlight {
+  border-color: color-mix(in srgb, var(--color-accent) 25%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 3%, var(--color-bg-card));
+}
+
+.bd-action-group-title {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.bd-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-xs);
 }
 
-.breakdown-tabs .tab-btn:hover {
-  color: var(--color-text-primary);
-  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
-}
-
-.breakdown-tabs .tab-btn.active {
-  color: var(--color-text-primary);
+/* == 阶段报告卡片 == */
+.bd-report-card {
   background: var(--color-bg-card);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
-.tab-count {
+.bd-report-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.bd-report-title {
+  font-weight: 600;
+}
+
+.bd-report-body {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+
+.bd-report-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bd-report-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.bd-report-value {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.bd-report-summary {
+  width: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+}
+
+/* == 信息卡片 == */
+.bd-info-card {
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-sm);
+}
+
+.bd-info-accent {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 20%, var(--color-border));
+}
+
+.bd-info-error {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-error) 25%, var(--color-border));
+  color: var(--color-error);
+}
+
+/* ---- 右栏 ---- */
+.bd-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  position: sticky;
+  top: 0;
+}
+
+/* == LLM 输出面板 == */
+.bd-output-panel {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.bd-output-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-text-primary) 2%, var(--color-bg-card));
+}
+
+.bd-output-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.bd-running-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse 1.5s ease infinite;
+}
+
+.bd-output-body {
+  padding: var(--spacing-md);
+  min-height: 200px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+}
+
+/* == 执行日志 == */
+.bd-log-panel {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.bd-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition-fast);
+}
+
+.bd-log-header:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+.bd-log-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.bd-log-count {
   font-size: var(--font-size-micro);
   background: var(--color-accent);
   color: white;
@@ -56,130 +355,26 @@
   text-align: center;
 }
 
-/* === 水位仪表盘 === */
-.dashboard-section {
-  margin-bottom: var(--spacing-lg);
-}
-
-.progress-card {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-
-.progress-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--spacing-sm);
-}
-
-.progress-card-title {
-  font-weight: 600;
-  font-size: var(--font-size-sm);
-}
-
-.progress-card-pct {
-  font-weight: 700;
-  font-size: var(--font-size-md);
-  color: var(--color-accent);
-}
-
-/* 进度条使用 global.css 中的 .progress-bar / .progress-bar-fill */
-
-.progress-card-detail {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  margin-top: var(--spacing-xs);
-}
-
-/* === 操作按钮 === */
-.breakdown-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-lg);
-}
-
-/* === 阶段报告卡片 === */
-.stage-report-card {
-  background: var(--color-bg-card);
-  border: 1px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border));
-  border-radius: var(--radius-md);
-  margin-bottom: var(--spacing-lg);
-  overflow: hidden;
-}
-
-.stage-report-header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
-  background: color-mix(in srgb, var(--color-success) 8%, transparent);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.stage-report-title {
-  font-weight: 600;
-}
-
-.stage-report-body {
-  padding: var(--spacing-md);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-md);
-}
-
-.report-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.report-label {
-  font-size: var(--font-size-xs);
+.bd-log-toggle {
+  font-size: var(--font-size-micro);
   color: var(--color-text-secondary);
 }
 
-.report-value {
-  font-weight: 600;
-  font-size: var(--font-size-sm);
-}
-
-.report-summary {
-  width: 100%;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  padding-top: var(--spacing-sm);
-  border-top: 1px solid var(--color-border);
-}
-
-/* === LLM 输出 / 日志 === */
-.stream-output {
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-md);
-  max-height: 300px;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-  white-space: pre-wrap;
-  margin-bottom: var(--spacing-lg);
-}
-
-.log-panel {
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-sm);
-  max-height: 250px;
+.bd-log-body {
+  max-height: 200px;
   overflow-y: auto;
+  border-top: 1px solid var(--color-border);
+  padding: var(--spacing-xs);
 }
 
-.log-entry {
+.bd-log-empty {
+  padding: var(--spacing-md);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.bd-log-entry {
   display: flex;
   gap: var(--spacing-sm);
   padding: 2px var(--spacing-sm);
@@ -187,35 +382,257 @@
   border-bottom: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
 }
 
-.log-time {
+.bd-log-time {
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
-.log-warn { color: var(--color-warning); }
-.log-error { color: var(--color-error); }
-
 /* =============================================
-   剧情列表 Tab 样式
+   底部可折叠抽屉
    ============================================= */
 
-.plots-section {
-  margin-top: var(--spacing-sm);
+.bd-drawer {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  overflow: hidden;
+  transition: all var(--transition-normal);
 }
+
+.bd-drawer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: color-mix(in srgb, var(--color-text-primary) 2%, var(--color-bg-card));
+  border-bottom: 1px solid var(--color-border);
+}
+
+.bd-drawer-tab {
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.bd-drawer-tab:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+.bd-drawer-tab.active {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+
+.bd-drawer-tab-count {
+  font-size: var(--font-size-micro);
+  background: var(--color-accent);
+  color: white;
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+
+.bd-drawer-spacer {
+  flex: 1;
+}
+
+.bd-drawer-toggle {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  transition: color var(--transition-fast);
+}
+
+.bd-drawer-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.bd-drawer-body {
+  padding: var(--spacing-md);
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+/* =============================================
+   质检干预面板
+   ============================================= */
+
+.bd-intervention-card {
+  background: color-mix(in srgb, var(--color-warning) 6%, var(--color-bg-card));
+  border: 2px solid color-mix(in srgb, var(--color-warning) 50%, var(--color-border));
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  animation: pulse-border 2s infinite;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: color-mix(in srgb, var(--color-warning) 50%, var(--color-border)); }
+  50% { border-color: var(--color-warning); }
+}
+
+.bd-intervention-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-warning) 20%, var(--color-border));
+}
+
+.bd-intervention-icon {
+  font-size: var(--font-size-lg);
+}
+
+.bd-intervention-title {
+  font-weight: 700;
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+
+.bd-intervention-body {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.bd-intervention-desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.bd-intervention-textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 30%, var(--color-border));
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.bd-intervention-textarea:focus {
+  outline: none;
+  border-color: var(--color-warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 20%, transparent);
+}
+
+.bd-intervention-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+/* =============================================
+   用户笔记面板
+   ============================================= */
+
+.bd-notes-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.bd-notes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.bd-notes-header:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+}
+
+.bd-notes-toggle {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.bd-notes-body {
+  padding: 0 var(--spacing-md) var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.bd-notes-textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.bd-notes-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.bd-notes-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.bd-notes-dirty {
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
+/* =============================================
+   剧情列表样式（保留）
+   ============================================= */
+
+/* plots-section: no additional styles needed, content-only wrapper */
 
 .plots-loading, .plots-empty {
   text-align: center;
   padding: var(--spacing-xl) var(--spacing-lg);
 }
 
-/* 统计摘要栏 */
 .plots-summary {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: var(--spacing-md);
   padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--color-bg-card);
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   flex-wrap: wrap;
@@ -258,7 +675,7 @@
 }
 
 .batch-group {
-  background: var(--color-bg-card);
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -325,7 +742,6 @@
   color: var(--color-warning);
 }
 
-/* 批次内的剧情点卡片 */
 .batch-body {
   padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
   display: flex;
@@ -335,7 +751,7 @@
 }
 
 .plot-card {
-  background: var(--color-bg-tertiary);
+  background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: var(--spacing-sm) var(--spacing-md);
@@ -430,12 +846,10 @@
 }
 
 /* =============================================
-   改编规划 Tab 样式
+   改编规划样式（保留）
    ============================================= */
 
-.plan-section {
-  margin-top: var(--spacing-sm);
-}
+/* plan-section: no additional styles needed, content-only wrapper */
 
 .plan-header {
   display: flex;
@@ -449,7 +863,6 @@
   margin: 0;
 }
 
-/* 卷选择器 */
 .plan-volume-selector {
   display: flex;
   gap: var(--spacing-xs);
@@ -460,7 +873,7 @@
 .plan-vol-btn {
   padding: var(--spacing-xs) var(--spacing-md);
   border: 1px solid var(--color-border);
-  background: var(--color-bg-card);
+  background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
   cursor: pointer;
   border-radius: var(--radius-md);
@@ -503,7 +916,6 @@
   color: var(--color-error);
 }
 
-/* 双栏布局 */
 .plan-form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -517,7 +929,7 @@
 }
 
 .plan-form {
-  background: var(--color-bg-card);
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--spacing-md);
@@ -554,7 +966,7 @@
   padding: var(--spacing-xs) var(--spacing-sm);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
+  background: var(--color-bg-card);
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   flex: 1;
@@ -591,7 +1003,7 @@
   padding: var(--spacing-sm);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
+  background: var(--color-bg-card);
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-family: inherit;
@@ -612,9 +1024,8 @@
   border-top: 1px solid var(--color-border);
 }
 
-/* 右栏：规划编辑 */
 .plan-preview {
-  background: var(--color-bg-card);
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--spacing-md);
@@ -628,7 +1039,7 @@
   padding: var(--spacing-md);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
+  background: var(--color-bg-card);
   color: var(--color-text-primary);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
@@ -652,4 +1063,3 @@
   color: var(--color-text-secondary);
   margin: 0 0 var(--spacing-sm) 0;
 }
-

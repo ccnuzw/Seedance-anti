@@ -79,6 +79,19 @@
   font-family: var(--font-family);
 }
 
+/* 导航项微型进度指示 */
+.nav-hint {
+  margin-left: auto;
+  font-size: var(--font-size-micro);
+  font-weight: 600;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.3px;
+}
+
 /* =========================================================
    Sidebar Project Card  —  个性化项目信息卡片
    ========================================================= */

@@ -178,21 +178,16 @@
   },
   "inviteOnboardingPromptTemplates": {},
   "inviteSkillSelections": {
-    "assistant": [
-      "/Users/mac/Library/Application Support/com.golutra/skills/project-development-quality-maintainability"
-    ],
-    "member": [
-      "/Users/mac/Library/Application Support/com.golutra/skills/project-development-quality-maintainability"
-    ],
+    "assistant": [],
+    "member": [],
     "supervisor": []
   },
   "memberSequence": {},
   "members": [
     {
-      "autoStartTerminal": false,
-      "avatar": "css:anime-10014",
+      "avatar": "css:orbit",
       "id": "01J00000000000000000000000",
-      "name": "群主",
+      "name": "Owner",
       "role": "",
       "roleKey": "members.roles.owner",
       "roleType": "owner",
@@ -200,17 +195,74 @@
     },
     {
       "autoStartTerminal": true,
-      "avatar": "css:realistic-1",
+      "avatar": "css:realistic-6",
       "collaborationMode": true,
-      "id": "01KM5F53WP5WN870Y51MHRKSNT",
-      "name": "朔舟",
+      "id": "01KM62E8RQ13KMK469N8Q65ZFX",
+      "name": "山辰川",
       "role": "",
       "roleKey": "members.roles.member",
       "roleType": "member",
       "sandboxed": false,
-      "skillPaths": [
-        "/Users/mac/Library/Application Support/com.golutra/skills/project-development-quality-maintainability"
-      ],
+      "status": "online",
+      "terminalCommand": "codex",
+      "terminalType": "codex",
+      "unlimitedAccess": true
+    },
+    {
+      "autoStartTerminal": true,
+      "avatar": "css:realistic-8",
+      "collaborationMode": true,
+      "id": "01KM62E8RQV1G2J07CS6J9F20T",
+      "name": "白晴",
+      "role": "",
+      "roleKey": "members.roles.member",
+      "roleType": "member",
+      "sandboxed": false,
+      "status": "online",
+      "terminalCommand": "codex",
+      "terminalType": "codex",
+      "unlimitedAccess": true
+    },
+    {
+      "autoStartTerminal": true,
+      "avatar": "css:realistic-5",
+      "collaborationMode": true,
+      "id": "01KM62E8RQXR8G539NMN214RZP",
+      "name": "风松",
+      "role": "",
+      "roleKey": "members.roles.member",
+      "roleType": "member",
+      "sandboxed": false,
+      "status": "online",
+      "terminalCommand": "codex",
+      "terminalType": "codex",
+      "unlimitedAccess": true
+    },
+    {
+      "autoStartTerminal": true,
+      "avatar": "css:realistic-7",
+      "collaborationMode": true,
+      "id": "01KM62ESAT1C3P2WGM57KFPZ8Q",
+      "name": "岑桥",
+      "role": "",
+      "roleKey": "members.roles.aiAssistant",
+      "roleType": "assistant",
+      "sandboxed": false,
+      "status": "online",
+      "terminalCommand": "codex",
+      "terminalType": "codex",
+      "unlimitedAccess": true
+    },
+    {
+      "autoStartTerminal": true,
+      "avatar": "/avatar-presets/supervisor/supervisor-default.gif",
+      "collaborationMode": true,
+      "id": "01KM62EY1SBB1SNY2WTPH32KFY",
+      "name": "夜河汐",
+      "role": "",
+      "roleKey": "members.roles.supervisor",
+      "roleType": "supervisor",
+      "sandboxed": false,
       "status": "online",
       "terminalCommand": "codex",
       "terminalType": "codex",
@@ -219,7 +271,16 @@
   ],
   "projectId": "acf93bbb528507e8f1fd10f0076054523c4d462d6d0a7fb88fdb1b0af0cd5692",
   "terminal": {
-    "recentClosedTabs": []
+    "recentClosedTabs": [
+      {
+        "closedAt": 1774025501284,
+        "memberId": "01KM62E8RQV1G2J07CS6J9F20T"
+      },
+      {
+        "closedAt": 1774025501283,
+        "memberId": "01KM62E8RQXR8G539NMN214RZP"
+      }
+    ]
   },
   "version": 1
 }
