@@ -53,4 +53,20 @@ export abstract class BaseLLMProvider implements ILLMProvider {
   protected getTemperature(options?: GenerateOptions): number {
     return options?.temperature ?? this.config.temperature ?? 0.7
   }
+
+  protected emitTelemetry(
+    options: GenerateOptions | undefined,
+    usage?: {
+      inputTokens?: number
+      outputTokens?: number
+      totalTokens?: number
+      tokenSource?: 'actual' | 'estimated'
+    }
+  ): void {
+    options?.onTelemetry?.({
+      provider: this.providerType,
+      model: this.config.model,
+      usage
+    })
+  }
 }

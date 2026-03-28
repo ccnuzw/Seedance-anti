@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
 import './LogPanel.css'
 
@@ -6,13 +6,32 @@ interface LogPanelProps {
   isEngineMatch?: boolean
 }
 
-export default function LogPanel({ isEngineMatch = true }: LogPanelProps) {
-  const { logs, streamBuffer, state, isRunning } = usePipelineStore()
+const MAX_VISIBLE_LOGS = 200
+
+function LogPanel({ isEngineMatch = true }: LogPanelProps) {
+  const logs = usePipelineStore((state) => state.logs)
+  const streamBuffer = usePipelineStore((state) => state.streamBuffer)
+  const state = usePipelineStore((state) => state.state)
+  const isRunning = usePipelineStore((state) => state.isRunning)
+  const logBodyRef = useRef<HTMLDivElement>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
+  const shouldFollowLogRef = useRef(true)
+  const visibleLogs = useMemo(() => logs.slice(-MAX_VISIBLE_LOGS), [logs])
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [logs.length, streamBuffer])
+    if (!shouldFollowLogRef.current) return
+    logBodyRef.current?.scrollTo({
+      top: logBodyRef.current.scrollHeight,
+      behavior: 'auto'
+    })
+  }, [visibleLogs.length, streamBuffer])
+
+  const handleScroll = useCallback(() => {
+    const element = logBodyRef.current
+    if (!element) return
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+    shouldFollowLogRef.current = distanceToBottom <= 48
+  }, [])
 
   const getLogIcon = (level: string, eventType: string): string => {
     if (eventType === 'state_changed') return '🔄'
@@ -39,17 +58,17 @@ export default function LogPanel({ isEngineMatch = true }: LogPanelProps) {
         </span>
         <span className="log-state badge badge-info">{isEngineMatch ? state : 'idle'}</span>
       </div>
-      <div className="log-panel-body">
+      <div className="log-panel-body" ref={logBodyRef} onScroll={handleScroll}>
         {!isEngineMatch ? (
           <div className="log-empty text-secondary">
             当前查阅的集数与后台运行引擎不匹配，暂无法查阅此集的历史运行日志。
           </div>
-        ) : logs.length === 0 ? (
+        ) : visibleLogs.length === 0 ? (
           <div className="log-empty text-secondary">
             等待流水线启动...
           </div>
         ) : (
-          logs.map((log) => (
+          visibleLogs.map((log) => (
             <div key={log.id} className={`log-entry log-${log.level}`}>
               <span className="log-icon">{getLogIcon(log.level, log.eventType)}</span>
               <span className="log-time">
@@ -72,3 +91,5 @@ export default function LogPanel({ isEngineMatch = true }: LogPanelProps) {
     </div>
   )
 }
+
+export default memo(LogPanel)

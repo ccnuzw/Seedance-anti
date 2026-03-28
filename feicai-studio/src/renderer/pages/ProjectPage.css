@@ -3,6 +3,10 @@
   margin: 0 auto;
 }
 
+.project-page > .operation-status-banner {
+  margin-bottom: var(--spacing-lg);
+}
+
 .project-empty-state {
   display: flex;
   flex-direction: column;
@@ -128,6 +132,11 @@
   margin-bottom: var(--spacing-lg);
 }
 
+.pipeline-settings-grid-wide {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  margin-bottom: 0;
+}
+
 .ps-item {
   display: flex;
   flex-direction: column;
@@ -154,6 +163,92 @@
   gap: var(--spacing-sm);
 }
 
+.pipeline-empty-block {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.pipeline-dynamic-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.pipeline-dynamic-card {
+  padding: var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.builtin-template-card {
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-bg-secondary));
+}
+
+.template-preset-desc {
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+.builtin-template-meta {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  margin-top: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+}
+
+.pipeline-dynamic-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.project-preset-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.project-task-closure {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+}
+
+.pipeline-validation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
+}
+
+.pipeline-validation-item {
+  display: flex;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+
+.pipeline-validation-item.is-error {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+.pipeline-validation-item.is-warning {
+  border-color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+
 /* Active settings button */
 .btn-active {
   background: var(--color-accent-subtle);
@@ -164,6 +259,14 @@
 .project-actions {
   display: flex;
   gap: var(--spacing-sm);
+}
+
+.task-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 /* View Toggle */

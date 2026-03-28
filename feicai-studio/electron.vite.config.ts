@@ -26,6 +26,15 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    publicDir: resolve('public'),
+    server: {
+      port: 5777,
+      strictPort: true
+    },
+    preview: {
+      port: 5777,
+      strictPort: true
+    },
     resolve: {
       alias: {
         '@shared': resolve('src/shared'),

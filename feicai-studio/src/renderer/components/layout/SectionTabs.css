@@ -1,0 +1,43 @@
+.section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.section-tab {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 120px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.section-tab:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+
+.section-tab.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 72%, white);
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-card));
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-glow);
+}
+
+.section-tab-label {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+}
+
+.section-tab-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

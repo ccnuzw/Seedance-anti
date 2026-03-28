@@ -5,6 +5,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { BaseLLMProvider } from './types'
 import type { AssembledPrompt, GenerateOptions, LLMConfig } from '@shared/types'
+import { buildEstimatedUsage } from './telemetry'
 
 export class GeminiProvider extends BaseLLMProvider {
   private client: GoogleGenerativeAI
@@ -26,10 +27,24 @@ export class GeminiProvider extends BaseLLMProvider {
         maxOutputTokens: this.getMaxTokens(options),
         temperature: this.getTemperature(options)
       }
+    }, {
+      signal: options?.signal
     })
 
     const text = result.response.text()
+    const usage = (result.response as { usageMetadata?: {
+      promptTokenCount?: number
+      candidatesTokenCount?: number
+      totalTokenCount?: number
+    } }).usageMetadata
+    const estimated = buildEstimatedUsage(prompt.system, prompt.user, text)
     options?.onChunk?.(text)
+    this.emitTelemetry(options, {
+      inputTokens: usage?.promptTokenCount ?? estimated.inputTokens,
+      outputTokens: usage?.candidatesTokenCount ?? estimated.outputTokens,
+      totalTokens: usage?.totalTokenCount ?? estimated.totalTokens,
+      tokenSource: usage ? 'actual' : 'estimated'
+    })
     return text
   }
 
@@ -48,15 +63,43 @@ export class GeminiProvider extends BaseLLMProvider {
         maxOutputTokens: this.getMaxTokens(options),
         temperature: this.getTemperature(options)
       }
+    }, {
+      signal: options?.signal
     })
 
+    let output = ''
+    let finalUsage:
+      | {
+          promptTokenCount?: number
+          candidatesTokenCount?: number
+          totalTokenCount?: number
+        }
+      | undefined
+
     for await (const chunk of result.stream) {
+      const usage = (chunk as { usageMetadata?: {
+        promptTokenCount?: number
+        candidatesTokenCount?: number
+        totalTokenCount?: number
+      } }).usageMetadata
+      if (usage) {
+        finalUsage = usage
+      }
       const text = chunk.text()
       if (text) {
+        output += text
         options?.onChunk?.(text)
         yield text
       }
     }
+
+    const estimated = buildEstimatedUsage(prompt.system, prompt.user, output)
+    this.emitTelemetry(options, {
+      inputTokens: finalUsage?.promptTokenCount ?? estimated.inputTokens,
+      outputTokens: finalUsage?.candidatesTokenCount ?? estimated.outputTokens,
+      totalTokens: finalUsage?.totalTokenCount ?? estimated.totalTokens,
+      tokenSource: finalUsage ? 'actual' : 'estimated'
+    })
   }
 
   async testConnection(): Promise<{ success: boolean; message: string; model?: string }> {

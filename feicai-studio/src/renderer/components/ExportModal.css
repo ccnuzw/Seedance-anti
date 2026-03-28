@@ -56,6 +56,43 @@
   gap: var(--spacing-sm);
 }
 
+.export-profile-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.export-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  color: inherit;
+  cursor: pointer;
+}
+
+.export-profile-card.is-active {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-secondary));
+}
+
+.export-profile-card span {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.export-profile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+}
+
 .export-section h3 {
   margin: 0;
   font-size: var(--font-size-md);
@@ -93,4 +130,10 @@
 .export-desc {
   font-size: var(--font-size-sm);
   margin: 0;
+}
+
+@media (max-width: 720px) {
+  .export-profile-list {
+    grid-template-columns: 1fr;
+  }
 }

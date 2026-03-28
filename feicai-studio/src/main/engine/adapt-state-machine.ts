@@ -29,9 +29,12 @@ import type {
   LLMConfig,
   AssembledPrompt,
   AdaptPlan,
-  VolumePlan
+  VolumePlan,
+  ReviewPolicyConfig,
+  FlowConfig,
+  QAMode
 } from '@shared/types'
-import { DEFAULT_ADAPT_SETTINGS, createDefaultVolumePlan } from '@shared/types'
+import { DEFAULT_ADAPT_SETTINGS, DEFAULT_FLOW_CONFIG, createDefaultVolumePlan } from '@shared/types'
 import { ADAPT_SKILL_MAP, ADAPT_ROLE_DECLARATIONS, ADAPT_BREAKDOWN_ANTIBIAS, ADAPT_SCRIPT_ANTIBIAS } from '@shared/constants'
 import { SkillLoader } from './skill-loader'
 import { AdaptPromptAssembler, type AdaptUpstreamInputs, type AdaptProjectContext } from './adapt-prompt-assembler'
@@ -40,6 +43,17 @@ import { NovelManager } from './novel-manager'
 import { createProvider } from '../llm/provider-factory'
 import type { ILLMProvider } from '../llm/types'
 import { OutputParser } from './output-parser'
+import { FeicaiAdaptOrchestrator } from './feicai-adapt-orchestrator'
+import { writeArtifactJson, writeArtifactText } from '../project/artifact-service'
+import {
+  normalizeAdaptPlanContent,
+  ensureProjectDataFile
+} from '../project/project-data-compat'
+import {
+  getWritableScriptEpisodePath,
+  resolvePreferredScriptDir,
+  resolveScriptEpisodePath
+} from '../project/script-file-utils'
 
 const ADAPT_STAGE_STATES: Record<AdaptStage, {
   executing: AdaptState
@@ -66,8 +80,12 @@ export class AdaptStateMachine extends EventEmitter {
   private novelManager: NovelManager
   private llmProvider: ILLMProvider | null = null
   private settings: AdaptSettings = { ...DEFAULT_ADAPT_SETTINGS }
+  private reviewPolicy: ReviewPolicyConfig | null = null
+  private flowConfig: FlowConfig | null = null
   private _aborted = false
+  private _runEpoch = 0 // 用于防御并发调用的死灰复燃
   private _reviewSkipped = false
+  private orchestrator: FeicaiAdaptOrchestrator
 
   constructor(skillsDir: string) {
     super()
@@ -75,6 +93,13 @@ export class AdaptStateMachine extends EventEmitter {
     this.promptAssembler = new AdaptPromptAssembler()
     this.breakdownParser = new PlotBreakdownParser()
     this.novelManager = new NovelManager()
+
+    this.orchestrator = new FeicaiAdaptOrchestrator({
+      promptAssembler: this.promptAssembler,
+      skillLoader: this.skillLoader,
+      callLLM: this.callLLM.bind(this),
+      parseReviewResult: this.parseReviewResult.bind(this)
+    })
 
     this.context = this.createEmptyContext()
   }
@@ -97,7 +122,12 @@ export class AdaptStateMachine extends EventEmitter {
         completedEpisodes: 0,
         totalPlots: 0,
         totalChapters: 0,
-        processedChapters: 0
+        processedChapters: 0,
+        assignedEpisodes: 0,
+        scriptEpisodes: 0,
+        pendingScriptEpisodes: 0,
+        fullyUsedEpisodes: 0,
+        partialUsedEpisodes: 0
       },
       reviews: [],
       logs: []
@@ -118,6 +148,14 @@ export class AdaptStateMachine extends EventEmitter {
 
   setSettings(settings: Partial<AdaptSettings>): void {
     this.settings = { ...DEFAULT_ADAPT_SETTINGS, ...settings }
+  }
+
+  setReviewPolicy(policy: ReviewPolicyConfig | null): void {
+    this.reviewPolicy = policy
+  }
+
+  setFlowConfig(config: FlowConfig | null): void {
+    this.flowConfig = config
   }
 
   // ==================== 状态管理 ====================
@@ -147,6 +185,8 @@ export class AdaptStateMachine extends EventEmitter {
       throw new Error('请先配置 LLM Provider')
     }
 
+    // 每次全新的 start 开启一个新纪元，让之前的僵尸线程（如果还在 await 未退出）发现纪元过期自动死掉
+    this._runEpoch++
     this._aborted = false
     this._reviewSkipped = false
 
@@ -198,12 +238,20 @@ export class AdaptStateMachine extends EventEmitter {
   async executeBreakdown(batchCount: number = 1): Promise<void> {
     if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
 
+    // flowConfig 开关：可在项目级关闭拆解阶段
+    if (this.flowConfig && !this.flowConfig.enableAdaptBreakdown) {
+      this.log('info', 'adapt_breakdown_disabled', '配置禁止执行小说→剧情拆解阶段（enableAdaptBreakdown=false），跳过')
+      return
+    }
+
     // 获取当前卷的章节范围限制
     const activeVol = this.getActiveVolume()
     const maxChapter = activeVol ? activeVol.chapterRange[1] : this.context.totalChapters
 
+    const currentEpoch = this._runEpoch
+
     for (let i = 0; i < batchCount; i++) {
-      if (this.shouldStop()) break
+      if (this.shouldStop() || this._runEpoch !== currentEpoch) break
       if (this.context.processedChapters >= maxChapter) {
         this.log('info', 'all_chapters_done',
           activeVol
@@ -215,6 +263,110 @@ export class AdaptStateMachine extends EventEmitter {
     }
   }
 
+  async rebuildBreakdown(params: {
+    chapterStart?: number
+    chapterEnd?: number
+    episodeStart?: number
+    episodeEnd?: number
+  }): Promise<void> {
+    if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
+
+    this.context.currentStage = 'breakdown'
+    this.context.retryCount = 0
+    this._reviewSkipped = false
+
+    const breakdownPath = join(this.context.projectPath, 'plot-breakdown.md')
+    let breakdownContent = ''
+    try {
+      breakdownContent = await readFile(breakdownPath, 'utf-8')
+    } catch {
+      throw new Error('plot-breakdown.md 不存在，无法重拆指定范围')
+    }
+
+    let chapterStart = params.chapterStart
+    let chapterEnd = params.chapterEnd
+
+    if (params.episodeStart && params.episodeEnd) {
+      const mappedRange = this.breakdownParser.getChapterRangeForEpisodeRange(
+        breakdownContent,
+        params.episodeStart,
+        params.episodeEnd
+      )
+      if (!mappedRange) {
+        const activeVol = this.getActiveVolume()
+        const chapterAllocation = activeVol?.chapterAllocation || ''
+        const volumeChapterSpan = activeVol
+          ? activeVol.chapterRange[1] - activeVol.chapterRange[0] + 1
+          : 0
+        const canUseOneChapterPerEpisodeFallback =
+          Boolean(activeVol)
+          && (
+            /每章\s*1集|1章\s*1集|每章1集|一章一集/.test(chapterAllocation)
+            || (activeVol?.targetEpisodes || 0) === volumeChapterSpan
+          )
+
+        if (!canUseOneChapterPerEpisodeFallback) {
+          throw new Error(`当前拆解中找不到第${params.episodeStart}-${params.episodeEnd}集对应的章节范围`)
+        }
+
+        chapterStart = (activeVol?.chapterRange[0] || 1) + Math.min(params.episodeStart, params.episodeEnd) - 1
+        chapterEnd = (activeVol?.chapterRange[0] || 1) + Math.max(params.episodeStart, params.episodeEnd) - 1
+        this.log(
+          'info',
+          'breakdown_episode_range_fallback',
+          `🧭 当前拆解缺少第${params.episodeStart}-${params.episodeEnd}集映射，已按“一章一集”规则回退到第${chapterStart}-${chapterEnd}章`
+        )
+      } else {
+        chapterStart = mappedRange.chapterStart
+        chapterEnd = mappedRange.chapterEnd
+        this.log(
+          'info',
+          'breakdown_episode_range_mapped',
+          `🎯 已将第${params.episodeStart}-${params.episodeEnd}集映射到第${chapterStart}-${chapterEnd}章，准备重拆`
+        )
+      }
+    }
+
+    if (!chapterStart || !chapterEnd) {
+      throw new Error('请提供有效的章节范围或集数范围')
+    }
+
+    const normalizedStart = Math.min(chapterStart, chapterEnd)
+    const normalizedEnd = Math.max(chapterStart, chapterEnd)
+    if (normalizedStart < 1 || normalizedEnd > this.context.totalChapters) {
+      throw new Error(`重拆范围超出小说章节范围（1-${this.context.totalChapters}章）`)
+    }
+
+    const cleaned = this.breakdownParser.removeBatchesInChapterRange(
+      breakdownContent,
+      normalizedStart,
+      normalizedEnd
+    )
+    await this.persistPlotBreakdown(cleaned, {
+      action: 'rebuild_breakdown_range',
+      chapterStart: normalizedStart,
+      chapterEnd: normalizedEnd
+    })
+
+    this.log('info', 'breakdown_rebuild_prepare', `🧹 已清理第${normalizedStart}-${normalizedEnd}章关联的旧拆解，开始重建`)
+
+    for (let start = normalizedStart; start <= normalizedEnd; start += this.context.chaptersPerBatch) {
+      if (this.shouldStop()) break
+      const batchNum = Math.ceil(start / this.context.chaptersPerBatch)
+      const chapterCount = Math.min(this.context.chaptersPerBatch, normalizedEnd - start + 1)
+      this.context.currentBatch = batchNum
+      await this.runBreakdownBatch({
+        startChapter: start,
+        chapterCount,
+        batchNum,
+        reason: 'rebuild'
+      })
+    }
+
+    this.context.processedChapters = await this.novelManager.getProcessedChapterCount(this.context.projectPath)
+    await this.refreshWaterLevel()
+  }
+
   private async executeSingleBreakdown(): Promise<void> {
     this.context.currentStage = 'breakdown'
     this.context.retryCount = 0
@@ -224,145 +376,192 @@ export class AdaptStateMachine extends EventEmitter {
     const batchNum = Math.ceil(startChapter / this.context.chaptersPerBatch)
     this.context.currentBatch = batchNum
 
+    await this.runBreakdownBatch({
+      startChapter,
+      chapterCount: this.context.chaptersPerBatch,
+      batchNum,
+      reason: 'normal'
+    })
+  }
+
+  private async runBreakdownBatch(params: {
+    startChapter: number
+    chapterCount: number
+    batchNum: number
+    reason: 'normal' | 'rebuild'
+  }): Promise<void> {
+    const { startChapter, chapterCount, batchNum, reason } = params
+
     // [R3-2] 首批拆解前自动生成改编规划
     if (batchNum === 1) {
       await this.ensureAdaptPlan()
     }
 
-    let passed = false
-    while (!passed && this.context.retryCount <= this.settings.breakdownMaxRetries) {
-      if (this.shouldStop()) return
+    if (this.shouldStop()) return
 
-      // 1. 执行拆解
-      const output = await this.executeBreakdownGeneration(startChapter)
-      if (this.shouldStop() || !output) return
+    // 执行中状态（兼容旧状态图）
+    this.setState('breakdown_executing')
+    this.log(
+      'info',
+      reason === 'rebuild' ? 'breakdown_rebuild_start' : 'breakdown_start',
+      reason === 'rebuild'
+        ? `🩹 开始重拆第${startChapter}-${startChapter + chapterCount - 1}章`
+        : `📊 开始拆解第${startChapter}-${startChapter + chapterCount - 1}章`
+    )
 
-      // 2. 质检
-      const reviewResult = await this.executeBreakdownReview(output, startChapter)
-      if (this.shouldStop()) return
+    // --- Phase 2: 使用 Orchestrator ---
 
-      if (this._reviewSkipped) {
-        this._reviewSkipped = false
-        passed = true
-        break
-      }
+    const novelDir = join(this.context.projectPath, 'novel')
+    const novelChapters = await this.novelManager.readChapters(
+      novelDir,
+      startChapter,
+      chapterCount
+    )
 
-      if (reviewResult && reviewResult.passed) {
-        passed = true
-        this.context.lastReviewFeedback = undefined
+    let existingPlotBreakdown: string | undefined
+    try {
+      existingPlotBreakdown = await readFile(
+        join(this.context.projectPath, 'plot-breakdown.md'),
+        'utf-8'
+      )
+    } catch {
+      // 不存在时视为 undefined
+    }
 
-        // 追加到 plot-breakdown.md
-        await this.appendBreakdownOutput(output)
+    const novelInfo = await this.novelManager.getNovelInfo(this.context.projectPath)
 
-        // 更新已拆解章节数
-        this.context.processedChapters = Math.min(
-          startChapter + this.context.chaptersPerBatch - 1,
-          this.context.totalChapters
-        )
+    const ctx = {
+      stage: 'breakdown' as const,
+      projectId: this.context.projectId,
+      projectPath: this.context.projectPath,
+      novelTitle: novelInfo?.title || '',
+      novelGenre: novelInfo?.genre || '',
+      totalChapters: this.context.totalChapters,
+      startChapter,
+      chaptersPerBatch: chapterCount,
+      currentBatch: batchNum,
+      activeVolume: this.getActiveVolume(),
+      novelChapters,
+      existingPlotBreakdown,
+      lastReviewFeedback: this.context.lastReviewFeedback,
+      userNotes: this.context.userNotes,
+      autoRepairRounds: this.reviewPolicy?.breakdownAutoRepairRounds ?? 0,
+    }
 
-        await this.refreshWaterLevel()
-        this.setState('breakdown_done')
+    const result = await this.orchestrator.runBreakdownBatch(ctx)
+    const output = result.finalText
 
-        // [BUG-1 修复] 从文件读取最新批次的统计（不用 LLM 原始输出）
-        const updatedContent = await readFile(
-          join(this.context.projectPath, 'plot-breakdown.md'), 'utf-8'
-        )
-        const fullParsed = this.breakdownParser.parse(updatedContent)
-        const lastBatch = fullParsed.batches.find(b => b.batchNumber === batchNum)
-        const extractedPlots = lastBatch ? lastBatch.plots.length : 0
-        const episodeNums = lastBatch
-          ? [...new Set(lastBatch.plots.map(p => p.episode))].sort((a, b) => a - b)
-          : []
-        const episodeRange = episodeNums.length > 0
-          ? `第${episodeNums[0]}-${episodeNums[episodeNums.length - 1]}集`
-          : ''
+    // [BUG 修正] 将质检结论写入历史 (不论是通过、警告、还是彻底跪了)
+    const reviewPayload = result.review?.parsed || {
+      passed: false,
+      score: 0,
+      feedback: result.note || '未返回有效输出',
+      reviewType: 'business' as const,
+      result: 'FAIL',
+      stage: 'breakdown' as const,
+      issues: [],
+      createdAt: new Date().toISOString()
+    }
+    if (!result.review?.parsed) {
+      this.context.reviews.push(reviewPayload as any)
+    }
 
-        this.log('info', 'breakdown_complete',
-          `✅ 第${batchNum}批拆解完成 (第${startChapter}-${this.context.processedChapters}章) | 提取${extractedPlots}个剧情点 → ${episodeRange}`)
-        this.emit('stageComplete', {
+    // [BUG 修正] 强结构性溃败，拦截磁盘写入与跳章
+    if (result.status === 'failed') {
+      this.context.retryCount += 1
+      this.log('warn', 'breakdown_failed', `🚨 拆解彻底溃败，由于结构或网络损毁，已强行阻断写入与跨章。\n反馈：${reviewPayload.feedback}`)
+      this.setState('adapt_awaiting_user')
+      this.emit('reviewFailed', {
+        stage: 'breakdown',
+        result: reviewPayload,
+        batchNum: batchNum,
+        retryCount: this.context.retryCount
+      })
+      return
+    }
+
+    if (!output) {
+      // 保守处理：不写入，标记为 adapt_error
+      this.handleError('拆解失败：Orchestrator 未返回有效输出', new Error('empty_output'))
+      return
+    }
+
+    // 3. 写入拆解结果
+    await this.appendBreakdownOutput(output)
+
+    // 更新已拆解章节数
+    this.context.processedChapters = await this.novelManager.getProcessedChapterCount(this.context.projectPath)
+
+    await this.refreshWaterLevel()
+    this.setState('breakdown_done')
+
+    // [BUG-1 修复] 从文件读取最新批次的统计（不用 LLM 原始输出）
+    const updatedContent = await readFile(
+      join(this.context.projectPath, 'plot-breakdown.md'), 'utf-8'
+    )
+    const fullParsed = this.breakdownParser.parse(updatedContent)
+    const lastBatch = fullParsed.batches.find(b => b.batchNumber === batchNum)
+    const extractedPlots = lastBatch ? lastBatch.plots.length : 0
+    const episodeNums = lastBatch
+      ? [...new Set(lastBatch.plots.map(p => p.episode))].sort((a, b) => a - b)
+      : []
+    const episodeRange = episodeNums.length > 0
+      ? `第${episodeNums[0]}-${episodeNums[episodeNums.length - 1]}集`
+      : ''
+    const endChapter = Math.min(startChapter + chapterCount - 1, this.context.totalChapters)
+
+    const reviewResult = result.review?.parsed || null
+    const reviewTag = reviewResult
+      ? ` | 质检：${reviewResult.passed ? 'PASS' : 'FAIL'} (${reviewResult.score}分)`
+      : ''
+
+    this.log(
+      'info',
+      reason === 'rebuild' ? 'breakdown_rebuild_complete' : 'breakdown_complete',
+      `${reason === 'rebuild' ? '🩹' : '✅'} 第${batchNum}批${reason === 'rebuild' ? '重拆' : '拆解'}完成 (第${startChapter}-${endChapter}章) | 提取${extractedPlots}个剧情点 → ${episodeRange}${reviewTag}`
+    )
+    this.emit('stageComplete', {
+      stage: 'breakdown',
+      result: reviewResult,
+      batchNum,
+      chapterRange: [startChapter, endChapter],
+      extractedPlots,
+      episodeRange,
+      waterLevel: { ...this.context.waterLevel },
+      orchestratorStatus: result.status,
+      orchestratorNote: result.note
+    })
+
+    // 根据项目配置决定是否在首个 FAIL 时中止流程并等待人工干预
+    if (reviewResult && !reviewResult.passed) {
+      const qaMode: QAMode = this.reviewPolicy?.qaMode || 'strict'
+      const flow = this.flowConfig ?? DEFAULT_FLOW_CONFIG
+      const stopOnFirstFail = flow.stopOnFirstFail
+
+      if (stopOnFirstFail && qaMode === 'strict') {
+        this.context.retryCount += 1
+        this.log('warn', 'breakdown_review_failed',
+          `拆解质检未通过，已触发 stopOnFirstFail（第${batchNum}批，得分 ${reviewResult.score.toFixed(1)}）`)
+        this.setState('adapt_awaiting_user')
+        this.emit('reviewFailed', {
           stage: 'breakdown',
           result: reviewResult,
           batchNum,
-          chapterRange: [startChapter, this.context.processedChapters],
-          extractedPlots,
-          episodeRange,
-          waterLevel: { ...this.context.waterLevel }
+          retryCount: this.context.retryCount
         })
-      } else {
-        this.context.retryCount++
-        this.context.lastReviewFeedback = reviewResult?.feedback || undefined
-        if (this.context.retryCount > this.settings.breakdownMaxRetries) {
-          // 质检干预：进入等待用户状态而非直接 error
-          this.log('warn', 'review_fail',
-            `❌ 拆解质检未通过 (${reviewResult?.score || 0}分)，已达最大重试次数，等待用户指导`)
-          this.setState('adapt_awaiting_user')
-          this.emit('reviewFailed', {
-            stage: 'breakdown',
-            result: reviewResult,
-            batchNum: this.context.currentBatch,
-            retryCount: this.context.retryCount
-          })
-          return
-        }
-        this.log('warn', 'review_fail',
-          `❌ 拆解质检未通过 (${reviewResult?.score || 0}分), 重试 ${this.context.retryCount}/${this.settings.breakdownMaxRetries}`)
+        return
+      }
+
+      if (qaMode === 'lenient') {
+        this.log('warn', 'breakdown_review_lenient',
+          `拆解质检未通过（第${batchNum}批，得分 ${reviewResult.score.toFixed(1)}），qaMode=lenient：仅记录结果，不中断流程`)
+      } else if (qaMode === 'report_only') {
+        this.log('info', 'breakdown_review_report_only',
+          `拆解质检未通过（第${batchNum}批，得分 ${reviewResult.score.toFixed(1)}），qaMode=report_only：仅作为报告记录，不中断流程`)
       }
     }
   }
 
-  private async executeBreakdownGeneration(startChapter: number): Promise<string | null> {
-    this.setState('breakdown_executing')
-    this.log('info', 'breakdown_start', `📊 开始拆解第${startChapter}-${startChapter + this.context.chaptersPerBatch - 1}章`)
-
-    try {
-      // 加载技能
-      const skillName = ADAPT_SKILL_MAP.breakdown
-      const skill = await this.skillLoader.load(skillName)
-
-      // 读取章节
-      const novelDir = join(this.context.projectPath, 'novel')
-      const chapters = await this.novelManager.readChapters(
-        novelDir, startChapter, this.context.chaptersPerBatch
-      )
-
-      // 读取已有拆解
-      let plotBreakdown: string | undefined
-      try {
-        plotBreakdown = await readFile(
-          join(this.context.projectPath, 'plot-breakdown.md'), 'utf-8'
-        )
-      } catch { /* 不存在 */ }
-
-      // 获取小说信息
-      const novelInfo = await this.novelManager.getNovelInfo(this.context.projectPath)
-
-      // 组装 Prompt
-      const prompt = this.promptAssembler.assembleBreakdown(
-        skill,
-        ADAPT_ROLE_DECLARATIONS.breakdown,
-        {
-          novelChapters: chapters,
-          plotBreakdown
-        },
-        {
-          novelTitle: novelInfo?.title || '',
-          novelGenre: novelInfo?.genre || '',
-          totalChapters: this.context.totalChapters,
-          processedChapters: this.context.processedChapters,
-          currentBatch: this.context.currentBatch
-        },
-        this.context.lastReviewFeedback,
-        this.getActiveVolume(),
-        this.context.userNotes
-      )
-
-      // 调用 LLM
-      return await this.callLLM('breakdown', prompt)
-    } catch (error) {
-      this.handleError('拆解执行失败', error)
-      return null
-    }
-  }
 
   private async executeBreakdownReview(output: string, startChapter: number): Promise<ReviewResult | null> {
     this.setState('breakdown_reviewing')
@@ -408,8 +607,16 @@ export class AdaptStateMachine extends EventEmitter {
   async executeScript(batchCount: number = 1): Promise<void> {
     if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
 
+    // flowConfig 开关：可在项目级关闭剧本阶段
+    if (this.flowConfig && !this.flowConfig.enableAdaptScript) {
+      this.log('info', 'adapt_script_disabled', '配置禁止执行小说→剧本创作阶段（enableAdaptScript=false），跳过')
+      return
+    }
+
+    const currentEpoch = this._runEpoch
+
     for (let i = 0; i < batchCount; i++) {
-      if (this.shouldStop()) break
+      if (this.shouldStop() || this._runEpoch !== currentEpoch) break
 
       // 检查是否有未用剧情
       await this.refreshWaterLevel()
@@ -428,156 +635,189 @@ export class AdaptStateMachine extends EventEmitter {
     this._reviewSkipped = false
     // [BUG-5 修复] 不在此处递增，等成功后再增
 
-    let passed = false
-    while (!passed && this.context.retryCount <= this.settings.scriptMaxRetries) {
-      if (this.shouldStop()) return
+    if (this.shouldStop()) return
 
-      // 1. 生成
-      const output = await this.executeScriptGeneration()
-      if (this.shouldStop() || !output) return
+    // 执行中状态（兼容旧状态图）
+    this.setState('script_executing')
+    this.log('info', 'script_start', '✍️ 开始剧本创作')
 
-      // 2. 质检
-      const reviewResult = await this.executeScriptReview(output)
-      if (this.shouldStop()) return
+    // --- Phase 2: 使用 Orchestrator ---
 
-      if (this._reviewSkipped) {
-        this._reviewSkipped = false
-        passed = true
-        break
+    // 读取拆解文件，获取未用剧情点
+    const breakdownContent = await readFile(
+      join(this.context.projectPath, 'plot-breakdown.md'),
+      'utf-8'
+    )
+    const plotsByEp = this.breakdownParser.getUnusedPlotsByEpisode(breakdownContent)
+    const targetEpisodes = Object.keys(plotsByEp)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .slice(0, this.settings.maxEpisodesPerBatch)
+
+    if (targetEpisodes.length === 0) {
+      this.log('info', 'no_more_plots', '无更多未用剧情点')
+      return
+    }
+
+    const targetPlots = targetEpisodes.flatMap(ep => plotsByEp[ep] || [])
+    this._lastTargetEpisodes = targetEpisodes
+    this._lastTargetPlotIds = targetPlots.map(p => p.id)
+
+    // 读取上一集剧本
+    let previousScript: string | undefined
+    if (targetEpisodes[0] > 1) {
+      const prevEp = String(targetEpisodes[0] - 1).padStart(3, '0')
+      const previousScriptPath = this.getReadableScriptPath(parseInt(prevEp, 10))
+      try {
+        if (previousScriptPath) {
+          previousScript = await readFile(previousScriptPath, 'utf-8')
+        }
+      } catch {
+        // 不存在则忽略
       }
+    }
 
-      if (reviewResult && reviewResult.passed) {
-        passed = true
-        this.context.lastReviewFeedback = undefined
+    // 读取对应章节原文（根据目标剧情点所属批次反查章节范围）
+    const novelDir = join(this.context.projectPath, 'novel')
+    const novelInfo = await this.novelManager.getNovelInfo(this.context.projectPath)
+    const batchNums = [...new Set(targetPlots.map(p => p.batch))]
+    let novelChapters: Array<{ chapter: number; content: string }> = []
+    for (const batchNum of batchNums) {
+      const startCh = (batchNum - 1) * this.context.chaptersPerBatch + 1
+      const chs = await this.novelManager.readChapters(
+        novelDir,
+        startCh,
+        this.context.chaptersPerBatch
+      )
+      novelChapters = novelChapters.concat(chs)
+    }
 
-        // 写入剧本文件 + 更新状态
-        await this.writeScriptOutput(output)
-        await this.refreshWaterLevel()
-        this.setState('script_done')
-        this.context.currentScriptBatch++ // [BUG-5] 成功后才递增
+    const ctx = {
+      stage: 'script' as const,
+      projectId: this.context.projectId,
+      projectPath: this.context.projectPath,
+      novelTitle: novelInfo?.title || '',
+      novelGenre: novelInfo?.genre || '',
+      totalChapters: this.context.totalChapters,
+      chaptersPerBatch: this.context.chaptersPerBatch,
+      currentScriptBatch: this.context.currentScriptBatch,
+      targetEpisodes,
+      targetPlots,
+      breakdownContent,
+      previousScript,
+      novelChapters,
+      activeVolume: this.getActiveVolume(),
+      lastReviewFeedback: this.context.lastReviewFeedback,
+      userNotes: this.context.userNotes,
+      autoRepairRounds: this.reviewPolicy?.scriptAutoRepairRounds ?? 0,
+    }
 
-        // [R3-3] 结构化通知
-        const epRange = this._lastTargetEpisodes.length > 0
-          ? `第${Math.min(...this._lastTargetEpisodes)}-${Math.max(...this._lastTargetEpisodes)}集`
-          : ''
-        this.log('info', 'script_complete',
-          `✅ ${epRange}创作完成 | ${this._lastTargetEpisodes.length}集 | 水位：未用${this.context.waterLevel.unusedPlots}个`)
-        this.emit('stageComplete', {
+    const result = await this.orchestrator.runScriptBatch(ctx)
+    const output = result.finalText
+
+    // [BUG 修正] 将质检结论写入历史 (不论是通过、警告、还是彻底跪了)
+    const reviewPayload = result.review?.parsed || {
+      passed: false,
+      score: 0,
+      feedback: result.note || '未返回有效输出',
+      reviewType: 'business' as const,
+      result: 'FAIL',
+      stage: 'script' as const,
+      issues: [],
+      createdAt: new Date().toISOString()
+    }
+    if (!result.review?.parsed) {
+      this.context.reviews.push(reviewPayload as any)
+    }
+
+    // [BUG 修正] 强结构性溃败，拦截磁盘写入与跳集
+    if (result.status === 'failed') {
+      this.context.retryCount += 1
+      this.log('warn', 'script_failed', `🚨 剧本创作彻底溃败，由于结构损毁，已强行阻断写入。\n反馈：${reviewPayload.feedback}`)
+      this.setState('adapt_awaiting_user')
+      this.emit('reviewFailed', {
+        stage: 'script',
+        result: reviewPayload,
+        retryCount: this.context.retryCount
+      })
+      return
+    }
+
+    if (!output) {
+      this.handleError('剧本创作失败：Orchestrator 未返回有效输出', new Error('empty_output'))
+      return
+    }
+
+    // 写入剧本文件 + 更新状态
+    await this.writeScriptOutput(output)
+    await this.refreshWaterLevel()
+    this.setState('script_done')
+    this.context.currentScriptBatch++ // [BUG-5] 成功后才递增
+
+    // [R3-3] 结构化通知
+    const epRange = this._lastTargetEpisodes.length > 0
+      ? `第${Math.min(...this._lastTargetEpisodes)}-${Math.max(...this._lastTargetEpisodes)}集`
+      : ''
+
+    const reviewResult = result.review?.parsed || null
+    const reviewTag = reviewResult
+      ? ` | 质检：${reviewResult.passed ? 'PASS' : 'FAIL'} (${reviewResult.score}分)`
+      : ''
+
+    this.log('info', 'script_complete',
+      `✅ ${epRange}创作完成 | ${this._lastTargetEpisodes.length}集 | 水位：未用${this.context.waterLevel.unusedPlots}个${reviewTag}`)
+    this.emit('stageComplete', {
+      stage: 'script',
+      result: reviewResult,
+      episodeRange: epRange,
+      episodeCount: this._lastTargetEpisodes.length,
+      waterLevel: { ...this.context.waterLevel },
+      orchestratorStatus: result.status,
+      orchestratorNote: result.note
+    })
+
+    const flow = this.flowConfig ?? DEFAULT_FLOW_CONFIG
+
+    // 根据项目配置决定是否在首个 FAIL 时中止流程并等待人工干预
+    if (reviewResult && !reviewResult.passed) {
+      const qaMode: QAMode = this.reviewPolicy?.qaMode || 'strict'
+      const stopOnFirstFail = flow.stopOnFirstFail
+
+      if (stopOnFirstFail && qaMode === 'strict') {
+        this.context.retryCount += 1
+        this.log('warn', 'script_review_failed',
+          `剧本质检未通过，已触发 stopOnFirstFail（${epRange || '本批'}，得分 ${reviewResult.score.toFixed(1)}）`)
+        this.setState('adapt_awaiting_user')
+        this.emit('reviewFailed', {
           stage: 'script',
           result: reviewResult,
-          episodeRange: epRange,
-          episodeCount: this._lastTargetEpisodes.length,
-          waterLevel: { ...this.context.waterLevel }
+          retryCount: this.context.retryCount
         })
-
-        // 阶段自动升级：剧本产出后通知项目进入制作阶段
-        this.emit('phaseUpgrade', {
-          projectId: this.context.projectId,
-          projectPath: this.context.projectPath
-        })
-      } else {
-        this.context.retryCount++
-        this.context.lastReviewFeedback = reviewResult?.feedback || undefined
-        if (this.context.retryCount > this.settings.scriptMaxRetries) {
-          // 质检干预：进入等待用户状态
-          this.log('warn', 'review_fail',
-            `❌ 剧本质检未通过 (${reviewResult?.score || 0}分)，已达最大重试次数，等待用户指导`)
-          this.setState('adapt_awaiting_user')
-          this.emit('reviewFailed', {
-            stage: 'script',
-            result: reviewResult,
-            retryCount: this.context.retryCount
-          })
-          return
-        }
+        return
       }
+
+      if (qaMode === 'lenient') {
+        this.log('warn', 'script_review_lenient',
+          `剧本质检未通过（${epRange || '本批'}，得分 ${reviewResult.score.toFixed(1)}），qaMode=lenient：仅记录结果，不中断流程`)
+      } else if (qaMode === 'report_only') {
+        this.log('info', 'script_review_report_only',
+          `剧本质检未通过（${epRange || '本批'}，得分 ${reviewResult.score.toFixed(1)}），qaMode=report_only：仅作为报告记录，不中断流程`)
+      }
+    }
+
+    // autoContinueOnPass：仅在 QA 通过时自动流转到 Seedance 制作阶段
+    if (flow.autoContinueOnPass && (!reviewResult || reviewResult.passed)) {
+      this.emit('phaseUpgrade', {
+        projectId: this.context.projectId,
+        projectPath: this.context.projectPath
+      })
     }
   }
 
   private _lastTargetEpisodes: number[] = []
   private _lastTargetPlotIds: number[] = []
 
-  private async executeScriptGeneration(): Promise<string | null> {
-    this.setState('script_executing')
-    this.log('info', 'script_start', '✍️ 开始剧本创作')
 
-    try {
-      const skill = await this.skillLoader.load(ADAPT_SKILL_MAP.script)
-
-      // 读取拆解文件，获取未用剧情点
-      const breakdownContent = await readFile(
-        join(this.context.projectPath, 'plot-breakdown.md'), 'utf-8'
-      )
-      const plotsByEp = this.breakdownParser.getUnusedPlotsByEpisode(breakdownContent)
-      const targetEpisodes = Object.keys(plotsByEp)
-        .map(Number).sort((a, b) => a - b)
-        .slice(0, this.settings.maxEpisodesPerBatch)
-
-      if (targetEpisodes.length === 0) {
-        this.log('info', 'no_more_plots', '无更多未用剧情点')
-        return null
-      }
-
-      // 记录本批次目标集数和剧情点ID（用于后续状态更新）
-      this._lastTargetEpisodes = targetEpisodes
-      const targetPlots = targetEpisodes.flatMap(ep => plotsByEp[ep] || [])
-      this._lastTargetPlotIds = targetPlots.map(p => p.id)
-
-      // 获取对应剧情点文本
-      const plotPointsText = targetPlots
-        .map(p => `【剧情${p.id}】${p.scene}，${p.description}，${p.hookType}，第${p.episode}集，状态：未用`)
-        .join('\n')
-
-      // 读取上一集剧本
-      let previousScript: string | undefined
-      if (targetEpisodes[0] > 1) {
-        const prevEp = String(targetEpisodes[0] - 1).padStart(3, '0')
-        try {
-          previousScript = await readFile(
-            join(this.context.projectPath, 'script', `ep${prevEp}.md`), 'utf-8'
-          )
-        } catch { /* 不存在 */ }
-      }
-
-      // [P2-13 修复] 读取对应章节原文（根据目标剧情点所属批次反查章节范围）
-      const novelDir = join(this.context.projectPath, 'novel')
-      const novelInfo = await this.novelManager.getNovelInfo(this.context.projectPath)
-      const batchNums = [...new Set(targetPlots.map(p => p.batch))]
-      let novelChapters: Array<{ chapter: number; content: string }> = []
-      for (const batchNum of batchNums) {
-        const startCh = (batchNum - 1) * this.context.chaptersPerBatch + 1
-        const chs = await this.novelManager.readChapters(novelDir, startCh, this.context.chaptersPerBatch)
-        novelChapters = novelChapters.concat(chs)
-      }
-
-      const prompt = this.promptAssembler.assembleScript(
-        skill,
-        ADAPT_ROLE_DECLARATIONS.script,
-        {
-          plotBreakdown: breakdownContent,
-          previousScript,
-          plotPointsForBatch: plotPointsText,
-          novelChapters
-        },
-        {
-          novelTitle: novelInfo?.title || '',
-          novelGenre: novelInfo?.genre || '',
-          totalChapters: this.context.totalChapters,
-          processedChapters: this.context.processedChapters,
-          currentBatch: this.context.currentScriptBatch
-        },
-        targetEpisodes,
-        this.context.lastReviewFeedback,
-        this.getActiveVolume(),
-        this.context.userNotes
-      )
-
-      return await this.callLLM('script', prompt)
-    } catch (error) {
-      this.handleError('剧本创作执行失败', error)
-      return null
-    }
-  }
 
   private async executeScriptReview(output: string): Promise<ReviewResult | null> {
     this.setState('script_reviewing')
@@ -609,27 +849,24 @@ export class AdaptStateMachine extends EventEmitter {
       const minEp = Math.min(...this._lastTargetEpisodes)
       if (minEp > 1) {
         const prevEp = String(minEp - 1).padStart(3, '0')
+        const previousScriptPath = this.getReadableScriptPath(parseInt(prevEp, 10))
         try {
-          previousScript = await readFile(
-            join(this.context.projectPath, 'script', `ep${prevEp}.md`), 'utf-8'
-          )
+          if (previousScriptPath) {
+            previousScript = await readFile(previousScriptPath, 'utf-8')
+          }
         } catch { /* 不存在 */ }
       }
 
-      const prompt = this.promptAssembler.assembleScriptReview(
-        ADAPT_SCRIPT_ANTIBIAS,
-        output,
-        breakdownContent,
-        chaptersText,
-        adaptMethod,
+      const orchReview = await this.orchestrator.reviewScriptOnly({
+        scriptOutput: output,
+        plotBreakdown: breakdownContent,
+        novelChaptersText: chaptersText,
+        adaptMethodContent: adaptMethod,
         previousScript,
-        this._lastTargetEpisodes
-      )
+        targetEpisodes: this._lastTargetEpisodes,
+      })
 
-      const reviewOutput = await this.callLLM('script', prompt)
-      if (!reviewOutput) return null
-
-      return this.parseReviewResult('script', reviewOutput)
+      return orchReview.parsed
     } catch (error) {
       this.handleError('剧本质检执行失败', error)
       return null
@@ -656,6 +893,34 @@ export class AdaptStateMachine extends EventEmitter {
         break
       }
 
+      const flow = this.flowConfig ?? DEFAULT_FLOW_CONFIG
+
+      // 若剧本阶段被关闭，则只做拆解
+      if (!flow.enableAdaptScript && flow.enableAdaptBreakdown) {
+        if (wl.unprocessedChapters > 0) {
+          await this.executeSingleBreakdown()
+        } else {
+          break
+        }
+        continue
+      }
+
+      // 若拆解阶段被关闭，则只做剧本
+      if (!flow.enableAdaptBreakdown && flow.enableAdaptScript) {
+        if (wl.unusedPlots > 0) {
+          await this.executeSingleScript()
+        } else {
+          break
+        }
+        continue
+      }
+
+      // 两个阶段都关闭时直接退出
+      if (!flow.enableAdaptBreakdown && !flow.enableAdaptScript) {
+        this.log('warn', 'auto_disabled', 'auto 模式下拆解和剧本阶段均被禁用，提前结束')
+        break
+      }
+
       if (wl.unusedPlots >= 6) {
         // 剧情充足，优先创作消耗剧情
         await this.executeSingleScript()
@@ -674,9 +939,10 @@ export class AdaptStateMachine extends EventEmitter {
   // [DA-7] 独立自动模式
   async executeBreakdownAuto(): Promise<void> {
     this.log('info', 'breakdown_auto_start', '📊 独立拆解自动模式启动')
+    const currentEpoch = this._runEpoch
     let batchCount = 0
 
-    while (!this.shouldStop()) {
+    while (!this.shouldStop() && this._runEpoch === currentEpoch) {
       await this.refreshWaterLevel()
       if (this.context.waterLevel.unprocessedChapters <= 0) {
         this.log('info', 'breakdown_auto_done',
@@ -695,9 +961,10 @@ export class AdaptStateMachine extends EventEmitter {
 
   async executeScriptAuto(): Promise<void> {
     this.log('info', 'script_auto_start', '✍️ 独立创作自动模式启动')
+    const currentEpoch = this._runEpoch
     let batchCount = 0
 
-    while (!this.shouldStop()) {
+    while (!this.shouldStop() && this._runEpoch === currentEpoch) {
       await this.refreshWaterLevel()
       if (this.context.waterLevel.unusedPlots <= 0) {
         this.log('info', 'script_auto_done',
@@ -775,7 +1042,9 @@ export class AdaptStateMachine extends EventEmitter {
     const planOutput = await this.callLLM('breakdown', prompt)
     if (planOutput) {
       const updatedContent = content + '\n\n' + planOutput.trim() + '\n\n---\n'
-      await writeFile(breakdownPath, updatedContent, 'utf-8')
+      await this.persistPlotBreakdown(updatedContent, {
+        action: 'ensure_adapt_plan'
+      })
       this.log('info', 'adapt_plan_done', '📋 改编规划已生成并写入 plot-breakdown.md')
     }
   }
@@ -791,20 +1060,15 @@ export class AdaptStateMachine extends EventEmitter {
 
   /** 从 adapt-plan.json 加载改编规划 */
   async loadPlan(projectPath: string): Promise<AdaptPlan | null> {
-    try {
-      const planPath = join(projectPath, 'adapt-plan.json')
-      const raw = await readFile(planPath, 'utf-8')
-      return JSON.parse(raw) as AdaptPlan
-    } catch {
-      return null // 文件不存在
-    }
+    const result = await ensureProjectDataFile<AdaptPlan>(projectPath, 'adaptPlan')
+    if (!result.data) return null
+    return normalizeAdaptPlanContent(result.data)
   }
 
   /** 保存改编规划到 adapt-plan.json */
   async savePlan(projectPath: string, plan: AdaptPlan): Promise<void> {
-    const planPath = join(projectPath, 'adapt-plan.json')
     plan.updatedAt = new Date().toISOString()
-    await writeFile(planPath, JSON.stringify(plan, null, 2), 'utf-8')
+    await this.persistAdaptPlan(projectPath, plan)
 
     // 同步写入 plot-breakdown.md 头部
     await this.syncPlanToBreakdown(projectPath, plan)
@@ -833,20 +1097,30 @@ export class AdaptStateMachine extends EventEmitter {
         activeVol.llmPlan || '',
       ].filter(Boolean).join('\n')
 
-      // 替换或插入改编规划段落
-      const planRegex = /## (?:改编规划|改编方向|改编计划|Adaptation Plan)\s*\n[\s\S]*?(?=\n## |\n---\s*$|$)/im
-      if (planRegex.test(content)) {
-        content = content.replace(planRegex, planSection)
-      } else if (content.includes('---')) {
+      // 先移除所有旧规划段落，避免历史规划残留导致后续拆解串号。
+      const planRegex = /## (?:改编规划|改编方向|改编计划|Adaptation Plan)\s*\n[\s\S]*?(?=\n## |\n---\s*$|$)/gim
+      const cleanedContent = content.replace(planRegex, '').replace(/\n{3,}/g, '\n\n').trim()
+
+      if (cleanedContent.includes('---')) {
         // 插入到第一个 --- 之后
-        const firstSep = content.indexOf('---')
-        const insertPos = content.indexOf('\n', firstSep) + 1
-        content = content.substring(0, insertPos) + '\n' + planSection + '\n\n---\n' + content.substring(insertPos)
+        const firstSep = cleanedContent.indexOf('---')
+        const insertPos = cleanedContent.indexOf('\n', firstSep) + 1
+        content = cleanedContent.substring(0, insertPos) + '\n' + planSection + '\n\n---\n' + cleanedContent.substring(insertPos)
       } else {
-        content += '\n\n' + planSection + '\n\n---\n'
+        content = cleanedContent + '\n\n' + planSection + '\n\n---\n'
       }
 
-      await writeFile(breakdownPath, content, 'utf-8')
+      await writeArtifactText({
+        projectPath,
+        kind: 'plot_breakdown',
+        filePath: breakdownPath,
+        content,
+        contentType: 'text/markdown',
+        label: '剧情拆解',
+        stage: 'breakdown',
+        createdBy: 'system',
+        metadata: { action: 'sync_plan_to_breakdown' }
+      })
     } catch (err) {
       console.error('[syncPlanToBreakdown] 写入失败:', err)
     }
@@ -905,6 +1179,14 @@ export class AdaptStateMachine extends EventEmitter {
     return output || ''
   }
 
+  private getReadableScriptPath(episodeNum: number): string | null {
+    return resolveScriptEpisodePath(this.context.projectPath, episodeNum)
+  }
+
+  private getWritableScriptPath(episodeNum: number): string {
+    return getWritableScriptEpisodePath(this.context.projectPath, episodeNum)
+  }
+
   // [DA-6] 内容修订流程
   async reviseEpisode(episodeNum: number, revisionNotes: string): Promise<void> {
     if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
@@ -912,8 +1194,10 @@ export class AdaptStateMachine extends EventEmitter {
     this.log('info', 'revise_start', `📝 修订第${episodeNum}集：${revisionNotes.substring(0, 50)}...`)
 
     try {
-      const epStr = String(episodeNum).padStart(3, '0')
-      const scriptPath = join(this.context.projectPath, 'script', `ep${epStr}.md`)
+      const scriptPath = this.getReadableScriptPath(episodeNum)
+      if (!scriptPath) {
+        throw new Error(`第${episodeNum}集剧本文件不存在`)
+      }
       const originalScript = await readFile(scriptPath, 'utf-8')
 
       const breakdownContent = await readFile(
@@ -946,7 +1230,10 @@ export class AdaptStateMachine extends EventEmitter {
       const reviewResult = await this.executeScriptReview(revisedOutput)
 
       if (reviewResult && reviewResult.passed) {
-        await writeFile(scriptPath, revisedOutput.trim(), 'utf-8')
+        await this.persistScriptEpisode(episodeNum, revisedOutput.trim(), {
+          action: 'revise_episode'
+        })
+        await this.refreshWaterLevel()
         this.setState('script_done')
         this.log('info', 'revise_done', `✅ 第${episodeNum}集修订完成并通过质检`)
 
@@ -962,6 +1249,7 @@ export class AdaptStateMachine extends EventEmitter {
           waterLevel: { ...this.context.waterLevel }
         })
       } else {
+        this.setState(this.getStableStateAfterManualAction('script'))
         this.log('warn', 'revise_fail', `❌ 第${episodeNum}集修订未通过质检`)
       }
     } catch (error) {
@@ -998,7 +1286,7 @@ export class AdaptStateMachine extends EventEmitter {
       const streamDone = consumeStream()
 
       // 超时检测（不消费 stream，只做定时检查）
-      const timeoutPromise = new Promise<string>((_, reject) => {
+      const timeoutPromise = new Promise<string>((resolve, reject) => {
         const checker = setInterval(() => {
           if (Date.now() - lastChunkTime > TIMEOUT_MS) {
             clearInterval(checker)
@@ -1006,8 +1294,12 @@ export class AdaptStateMachine extends EventEmitter {
           }
         }, 5000)
 
-        // consumeStream 结束时（无论成功失败）清理 checker
-        streamDone.finally(() => clearInterval(checker))
+        // consumeStream 结束时（无论成功失败）清理 checker 并 resolve，
+        // 防止 timeoutPromise 悬挂导致 UnhandledPromiseRejection
+        streamDone.finally(() => {
+          clearInterval(checker)
+          resolve('done')
+        })
       })
 
       const result = await Promise.race([
@@ -1027,13 +1319,73 @@ export class AdaptStateMachine extends EventEmitter {
 
   // ==================== 文件操作 ====================
 
+  private async persistPlotBreakdown(content: string, metadata?: Record<string, unknown>): Promise<void> {
+    const breakdownPath = join(this.context.projectPath, 'plot-breakdown.md')
+    await writeArtifactText({
+      projectPath: this.context.projectPath,
+      kind: 'plot_breakdown',
+      filePath: breakdownPath,
+      content,
+      contentType: 'text/markdown',
+      label: '剧情拆解',
+      stage: 'breakdown',
+      createdBy: 'system',
+      metadata
+    })
+  }
+
+  private async persistScriptEpisode(episodeNum: number, content: string, metadata?: Record<string, unknown>): Promise<void> {
+    const epStr = String(episodeNum).padStart(3, '0')
+    await writeArtifactText({
+      projectPath: this.context.projectPath,
+      kind: 'script_episode',
+      filePath: this.getWritableScriptPath(episodeNum),
+      content,
+      contentType: 'text/markdown',
+      label: `EP${epStr} 剧本`,
+      episodeNum,
+      stage: 'script',
+      createdBy: 'system',
+      metadata
+    })
+  }
+
+  private async persistAdaptPlan(projectPath: string, plan: AdaptPlan): Promise<void> {
+    await writeArtifactJson({
+      projectPath,
+      kind: 'adapt_plan',
+      filePath: join(projectPath, 'adapt-plan.json'),
+      content: normalizeAdaptPlanContent(plan),
+      label: '改编规划',
+      stage: 'breakdown',
+      createdBy: 'system'
+    })
+  }
+
+  private async persistUserNotes(projectPath: string, notes: string): Promise<void> {
+    await writeArtifactText({
+      projectPath,
+      kind: 'adapt_notes',
+      filePath: join(projectPath, 'context-notes.md'),
+      content: notes,
+      contentType: 'text/markdown',
+      label: '用户指导笔记',
+      stage: this.context.currentStage,
+      createdBy: 'user'
+    })
+  }
+
   private async appendBreakdownOutput(output: string): Promise<void> {
     const breakdownPath = join(this.context.projectPath, 'plot-breakdown.md')
     try {
       let existing = ''
       try { existing = await readFile(breakdownPath, 'utf-8') } catch { /* */ }
-      const updated = this.breakdownParser.appendBatch(existing, output)
-      await writeFile(breakdownPath, updated, 'utf-8')
+      const updated = this.breakdownParser.sortBatches(
+        this.breakdownParser.appendBatch(existing, output)
+      )
+      await this.persistPlotBreakdown(updated, {
+        currentBatch: this.context.currentBatch
+      })
       this.log('info', 'file_written', `拆解已追加到 plot-breakdown.md`)
     } catch (error) {
       this.handleError('写入拆解文件失败', error)
@@ -1041,7 +1393,7 @@ export class AdaptStateMachine extends EventEmitter {
   }
 
   private async writeScriptOutput(output: string): Promise<void> {
-    const scriptDir = join(this.context.projectPath, 'script')
+    const scriptDir = resolvePreferredScriptDir(this.context.projectPath)
     await mkdir(scriptDir, { recursive: true })
 
     // [R3-5] 加强多集分割逻辑
@@ -1067,15 +1419,31 @@ export class AdaptStateMachine extends EventEmitter {
       positions.push({ episode: this._lastTargetEpisodes[0], start: 0 })
     }
 
+    const expectedEpisodes = [...new Set(this._lastTargetEpisodes)].sort((a, b) => a - b)
+    const foundEpisodes = [...new Set(positions.map((pos) => pos.episode))].sort((a, b) => a - b)
+
+    if (expectedEpisodes.length > 1) {
+      const missingEpisodeMarkers =
+        foundEpisodes.length !== expectedEpisodes.length ||
+        expectedEpisodes.some((episode, index) => foundEpisodes[index] !== episode)
+
+      if (missingEpisodeMarkers) {
+        throw new Error(
+          `多集剧本输出缺少明确分集标题，期望集数: ${expectedEpisodes.join(',')}，实际识别: ${foundEpisodes.join(',') || '无'}`
+        )
+      }
+    }
+
     for (let i = 0; i < positions.length; i++) {
       const pos = positions[i]
       const end = i + 1 < positions.length ? positions[i + 1].start : output.length
       const scriptContent = output.substring(pos.start, end).trim()
 
       const epStr = String(pos.episode).padStart(3, '0')
-      const scriptPath = join(scriptDir, `ep${epStr}.md`)
-      await writeFile(scriptPath, scriptContent, 'utf-8')
-      this.log('info', 'file_written', `剧本已写入: script/ep${epStr}.md`)
+      await this.persistScriptEpisode(pos.episode, scriptContent, {
+        currentScriptBatch: this.context.currentScriptBatch
+      })
+      this.log('info', 'file_written', `剧本已写入: ${scriptDir.split('/').pop() || 'script'}/ep${epStr}.md`)
     }
 
     // 更新剧情点状态为已用
@@ -1084,7 +1452,9 @@ export class AdaptStateMachine extends EventEmitter {
       try {
         const content = await readFile(breakdownPath, 'utf-8')
         const updated = this.breakdownParser.markPlotsAsUsed(content, this._lastTargetPlotIds)
-        await writeFile(breakdownPath, updated, 'utf-8')
+        await this.persistPlotBreakdown(updated, {
+          markedPlotIds: this._lastTargetPlotIds
+        })
         this.log('info', 'status_updated',
           `已更新 ${this._lastTargetPlotIds.length} 个剧情点状态为"已用"`)
         this._lastTargetPlotIds = []
@@ -1101,6 +1471,19 @@ export class AdaptStateMachine extends EventEmitter {
     )
   }
 
+  private getStableStateAfterManualAction(stage: AdaptStage): AdaptState {
+    if (stage === 'script' && this.context.waterLevel.completedEpisodes > 0) {
+      return 'script_done'
+    }
+    if (this.context.processedChapters > 0) {
+      return 'breakdown_done'
+    }
+    if (this.context.totalChapters > 0) {
+      return 'novel_loaded'
+    }
+    return 'adapt_idle'
+  }
+
   // ==================== 审核结果解析 ====================
 
   private parseReviewResult(stage: AdaptStage, output: string): ReviewResult {
@@ -1110,15 +1493,21 @@ export class AdaptStateMachine extends EventEmitter {
 
     const score = scoreMatch ? parseFloat(scoreMatch[1]) : 0
 
-    // [BUG-6 修复] 如果没匹配到 PASS/FAIL 关键词，用 score 兆底判断
-    const passScore = stage === 'breakdown'
+    // [BUG-6 修复] 如果没匹配到 PASS/FAIL 关键词，用 score 阈值判断
+    const overrideScore =
+      this.reviewPolicy && (stage === 'breakdown'
+        ? this.reviewPolicy.adaptBreakdownPassScore
+        : this.reviewPolicy.adaptScriptPassScore)
+
+    const passScore = overrideScore ?? (stage === 'breakdown'
       ? this.settings.breakdownPassScore
-      : this.settings.scriptPassScore
+      : this.settings.scriptPassScore)
+
     let passed: boolean
     if (passMatch) {
       passed = passMatch[1].toUpperCase() === 'PASS'
     } else {
-      // 兆底：score >= 阈值 则通过
+      // 底线：score >= 阈值 则通过
       passed = score >= passScore
     }
     if (score === 0 && passed) {
@@ -1127,7 +1516,7 @@ export class AdaptStateMachine extends EventEmitter {
     const finalScore = score > 0 ? score : (passed ? 8 : 5)
 
     const result: ReviewResult = {
-      stage: stage as any,
+      stage,
       reviewType: 'business',
       result: passed ? 'PASS' : 'FAIL',
       passed,
@@ -1171,7 +1560,17 @@ export class AdaptStateMachine extends EventEmitter {
       ``
     ].join('\n')
 
-    await writeFile(breakdownPath, header, 'utf-8')
+    await writeArtifactText({
+      projectPath: params.projectPath,
+      kind: 'plot_breakdown',
+      filePath: breakdownPath,
+      content: header,
+      contentType: 'text/markdown',
+      label: '剧情拆解',
+      stage: 'breakdown',
+      createdBy: 'system',
+      metadata: { action: 'init_project' }
+    })
     this.log('info', 'init_done', `✅ 已创建 plot-breakdown.md（${params.novelTitle} · ${params.novelGenre}）`)
   }
 
@@ -1179,113 +1578,148 @@ export class AdaptStateMachine extends EventEmitter {
    * [P1-6] 重新创作指定集
    */
   async reCreateEpisode(episodeNum: number): Promise<void> {
+    await this.runEpisodeScriptGeneration(episodeNum, {
+      consumeUnusedPlots: false,
+      mode: 'recreate'
+    })
+  }
+
+  async generateEpisode(episodeNum: number): Promise<void> {
+    await this.runEpisodeScriptGeneration(episodeNum, {
+      consumeUnusedPlots: true,
+      mode: 'generate'
+    })
+  }
+
+  private async runEpisodeScriptGeneration(
+    episodeNum: number,
+    options: { consumeUnusedPlots: boolean; mode: 'generate' | 'recreate' }
+  ): Promise<void> {
     if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
-    this.context.currentStage = 'script'
+
     this.context.retryCount = 0
     this._reviewSkipped = false
+    this.context.currentStage = 'script'
 
-    this.log('info', 're_script_start', `🔄 重新创作第${episodeNum}集`)
+    const isTargetedGenerate = options.mode === 'generate'
+    this.log(
+      'info',
+      isTargetedGenerate ? 'generate_episode_start' : 're_script_start',
+      isTargetedGenerate
+        ? `🩹 正在补生成第${episodeNum}集剧本...`
+        : `🔄 正在利用统筹器重创第${episodeNum}集剧本...`
+    )
 
     try {
-      const skill = await this.skillLoader.load(ADAPT_SKILL_MAP.script)
-
-      // 读取拆解文件
+      // 读取拆解文件，获取对应剧情点
       const breakdownContent = await readFile(
         join(this.context.projectPath, 'plot-breakdown.md'), 'utf-8'
       )
-      const { allPlots } = this.breakdownParser.parse(breakdownContent)
-      const episodePlots = allPlots.filter(p => p.episode === episodeNum)
+      const parsed = this.breakdownParser.parse(breakdownContent)
+      const targetPlots = parsed.allPlots.filter((plot) => plot.episode === episodeNum)
 
-      if (episodePlots.length === 0) {
-        this.log('warn', 're_no_plots', `第${episodeNum}集没有对应剧情点`)
+      if (targetPlots.length === 0) {
+        this.log('warn', 're_no_plots', `第${episodeNum}集没有分配任何剧情点，无法生成剧本`)
         return
       }
 
       this._lastTargetEpisodes = [episodeNum]
-      this._lastTargetPlotIds = episodePlots.map(p => p.id)
+      this._lastTargetPlotIds = options.consumeUnusedPlots
+        ? targetPlots.filter((plot) => plot.status === 'unused').map((plot) => plot.id)
+        : []
 
-      const plotPointsText = episodePlots
-        .map(p => `【剧情${p.id}】${p.scene}，${p.description}，${p.hookType}，第${p.episode}集`)
-        .join('\n')
-
-      // [R3-1] 读取上一集和下一集确保连贯
+      // 读取上一集剧本
       let previousScript: string | undefined
-      let nextScript: string | undefined
       if (episodeNum > 1) {
-        const prevEp = String(episodeNum - 1).padStart(3, '0')
+        const prevEpStr = String(episodeNum - 1).padStart(3, '0')
+        const previousScriptPath = this.getReadableScriptPath(parseInt(prevEpStr, 10))
         try {
-          previousScript = await readFile(
-            join(this.context.projectPath, 'script', `ep${prevEp}.md`), 'utf-8'
-          )
-        } catch { /* */ }
+          if (previousScriptPath) {
+            previousScript = await readFile(previousScriptPath, 'utf-8')
+          }
+        } catch { /* 忽略 */ }
       }
-      // 下一集
-      const nextEpStr = String(episodeNum + 1).padStart(3, '0')
-      try {
-        nextScript = await readFile(
-          join(this.context.projectPath, 'script', `ep${nextEpStr}.md`), 'utf-8'
-        )
-      } catch { /* */ }
 
-      // 读取对应章节原文
+      // [P2-13 修复] 读取对应章节原文（根据目标剧情点所属批次反查章节范围）
       const novelDir = join(this.context.projectPath, 'novel')
       const novelInfo = await this.novelManager.getNovelInfo(this.context.projectPath)
-      const batchNums = [...new Set(episodePlots.map(p => p.batch))]
+      const batchNums = [...new Set(targetPlots.map(p => p.batch))]
       let novelChapters: Array<{ chapter: number; content: string }> = []
-      for (const bn of batchNums) {
-        const startCh = (bn - 1) * this.context.chaptersPerBatch + 1
+      for (const batchNum of batchNums) {
+        const startCh = (batchNum - 1) * this.context.chaptersPerBatch + 1
         const chs = await this.novelManager.readChapters(novelDir, startCh, this.context.chaptersPerBatch)
         novelChapters = novelChapters.concat(chs)
       }
 
-      // 将下一集摘要注入 prompt（如果存在）
-      const upstreamInputs: any = {
-        plotBreakdown: breakdownContent,
+      const ctx = {
+        stage: 'script' as const,
+        projectId: this.context.projectId,
+        projectPath: this.context.projectPath,
+        novelTitle: novelInfo?.title || '',
+        novelGenre: novelInfo?.genre || '',
+        totalChapters: this.context.totalChapters,
+        chaptersPerBatch: this.context.chaptersPerBatch,
+        currentScriptBatch: this.context.currentScriptBatch, // 保持原样不增
+        targetEpisodes: [episodeNum],
+        targetPlots,
+        breakdownContent,
         previousScript,
-        plotPointsForBatch: plotPointsText,
-        novelChapters
-      }
-
-      const prompt = this.promptAssembler.assembleScript(
-        skill,
-        ADAPT_ROLE_DECLARATIONS.script,
-        upstreamInputs,
-        {
-          novelTitle: novelInfo?.title || '',
-          novelGenre: novelInfo?.genre || '',
-          totalChapters: this.context.totalChapters,
-          processedChapters: this.context.processedChapters,
-          currentBatch: 0
-        },
-        [episodeNum],
-        undefined,
-        this.getActiveVolume()
-      )
-
-      // [BUG-14 修复] 重创不需要改变剧情点状态（已是"已用"）
-      this._lastTargetPlotIds = []
-
-      // [R3-1] 如有下一集，在 user prompt 末尾追加
-      if (nextScript) {
-        prompt.user += `\n\n---\n\n# 下一集剧本（确保连贯衔接）\n\n${nextScript}`
+        novelChapters,
+        activeVolume: this.getActiveVolume(),
+        lastReviewFeedback: this.context.lastReviewFeedback,
+        userNotes: this.context.userNotes,
+        autoRepairRounds: this.reviewPolicy?.scriptAutoRepairRounds ?? 0,
       }
 
       this.setState('script_executing')
-      const output = await this.callLLM('script', prompt)
+      
+      const result = await this.orchestrator.runScriptBatch(ctx)
+      const output = result.finalText
+
+      if (result.status === 'failed') {
+        this.log(
+          'warn',
+          isTargetedGenerate ? 'generate_episode_fail' : 're_fail',
+          `🚨 第${episodeNum}集剧本${isTargetedGenerate ? '补生成' : '重创'}彻底溃败。\n反馈：${result.review?.parsed?.feedback || result.note || '格式完全损毁'}`
+        )
+        this.setState('adapt_awaiting_user')
+        this.emit('reviewFailed', {
+          stage: 'script',
+          result: result.review?.parsed || { passed: false, score: 0, feedback: result.note },
+          retryCount: this.context.retryCount
+        })
+        return
+      }
+      
       if (!output || this.shouldStop()) return
 
-      // 质检
-      const reviewResult = await this.executeScriptReview(output)
-      if (reviewResult && reviewResult.passed) {
-        await this.writeScriptOutput(output)
-        this.setState('script_done')
-        this.log('info', 're_complete', `✅ 第${episodeNum}集重新创作完成`)
-        this.emit('stageComplete', { stage: 'script', result: reviewResult })
-      } else {
-        this.log('warn', 're_fail', `❌ 第${episodeNum}集重创质检未通过`)
-      }
+      const reviewResult = result.review?.parsed || null
+      // 指定集补生成 / 重创：拿到有效文字后直接落盘，首次补生成会同步消耗未用剧情点。
+      await this.writeScriptOutput(output)
+      await this.refreshWaterLevel()
+      this.setState('script_done')
+      const tag = reviewResult ? (reviewResult.passed ? '✅' : '⚠️') : '✅'
+      this.log(
+        'info',
+        isTargetedGenerate ? 'generate_episode_complete' : 're_complete',
+        isTargetedGenerate
+          ? `${tag} 第${episodeNum}集补生成完成`
+          : `${tag} 第${episodeNum}集利用统筹器重新创作完成`
+      )
+      this.emit('stageComplete', { 
+        stage: 'script', 
+        result: reviewResult,
+        episodeRange: `第${episodeNum}集`,
+        episodeCount: 1,
+        waterLevel: { ...this.context.waterLevel },
+        orchestratorStatus: result.status,
+        orchestratorNote: result.note
+      })
     } catch (error) {
-      this.handleError(`重新创作第${episodeNum}集失败`, error)
+      this.handleError(
+        isTargetedGenerate ? `补生成第${episodeNum}集失败` : `利用统筹器重新创作第${episodeNum}集失败`,
+        error
+      )
     }
   }
 
@@ -1304,23 +1738,39 @@ export class AdaptStateMachine extends EventEmitter {
     this.context.retryCount = 0
 
     if (this.context.currentStage === 'breakdown') {
-      // [BUG-13 修复] 回退 processedChapters 并删除旧批次
-      const rollbackChapters = Math.max(0, this.context.processedChapters - this.context.chaptersPerBatch)
+      // [BUG 终极修复] 检查当前批次是否落盘，避免误杀上个正常批次
       const rollbackBatch = this.context.currentBatch
-
-      // 删除旧批次内容
       const breakdownPath = join(this.context.projectPath, 'plot-breakdown.md')
+
       try {
         const content = await readFile(breakdownPath, 'utf-8')
-        const cleaned = this.breakdownParser.removeBatch(content, rollbackBatch)
-        await writeFile(breakdownPath, cleaned, 'utf-8')
-        this.log('info', 'batch_removed', `已移除第${rollbackBatch}批旧内容`)
-      } catch { /* 忽略 */ }
+        const fullParsed = this.breakdownParser.parse(content)
+        const hasCurrentBatch = fullParsed.batches.some(b => b.batchNumber === rollbackBatch)
 
-      this.context.processedChapters = rollbackChapters
+        if (hasCurrentBatch) {
+          const cleaned = this.breakdownParser.removeBatch(content, rollbackBatch)
+          await this.persistPlotBreakdown(cleaned, {
+            action: 'fix_last_batch',
+            removedBatch: rollbackBatch
+          })
+          this.log('info', 'batch_removed', `已移除第${rollbackBatch}批旧内容`)
+          
+          // 只有确实存在于 DB 中，才需要回退 processedChapters
+          this.context.processedChapters = Math.max(0, this.context.processedChapters - this.context.chaptersPerBatch)
+        } else {
+          this.log('info', 'batch_not_found', `第${rollbackBatch}批未落盘，直接清理重试，避免误杀`)
+        }
+      } catch { 
+        /* 文件不存在忽略 */ 
+      }
+
       await this.executeSingleBreakdown()
     } else {
-      await this.executeSingleScript()
+      if (this._lastTargetEpisodes.length > 0) {
+        await this.reCreateEpisode(this._lastTargetEpisodes[0])
+      } else {
+        await this.executeSingleScript()
+      }
     }
   }
 
@@ -1330,6 +1780,7 @@ export class AdaptStateMachine extends EventEmitter {
    */
   async checkBreakdown(batchNumber?: number): Promise<ReviewResult | null> {
     if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
+    const resumeState = this.getStableStateAfterManualAction('breakdown')
 
     this.log('info', 'check_start', `🔍 手动质检${batchNumber ? `第${batchNumber}批` : '最新批次'}`)
 
@@ -1361,18 +1812,20 @@ export class AdaptStateMachine extends EventEmitter {
       const skill = await this.skillLoader.load(ADAPT_SKILL_MAP.breakdown)
       const adaptMethod = skill.methodology || ''
 
-      const prompt = this.promptAssembler.assembleBreakdownReview(
-        ADAPT_BREAKDOWN_ANTIBIAS,
-        batchPlots,
-        chaptersText,
-        adaptMethod
-      )
-
       this.setState('breakdown_reviewing')
-      const reviewOutput = await this.callLLM('breakdown', prompt)
-      if (!reviewOutput) return null
+      const orchReview = await this.orchestrator.reviewBreakdownOnly({
+        breakdownOutput: batchPlots,
+        novelChaptersText: chaptersText,
+        adaptMethodContent: adaptMethod
+      })
 
-      const result = this.parseReviewResult('breakdown', reviewOutput)
+      const result = orchReview.parsed
+      if (!result) {
+        this.log('warn', 'check_parse_failed', '🔍 质检输出无法解析为结构化结果')
+        this.setState(resumeState)
+        return null
+      }
+
       this.log('info', 'check_done', `🔍 质检完成: ${result.passed ? 'PASS' : 'FAIL'} (${result.score}分)`)
 
       // [R4-1] FAIL → 自动修正重检
@@ -1384,7 +1837,10 @@ export class AdaptStateMachine extends EventEmitter {
         try {
           const currentContent = await readFile(breakdownPath2, 'utf-8')
           const cleaned = this.breakdownParser.removeBatch(currentContent, batch.batchNumber)
-          await writeFile(breakdownPath2, cleaned, 'utf-8')
+          await this.persistPlotBreakdown(cleaned, {
+            action: 'check_breakdown_auto_fix',
+            removedBatch: batch.batchNumber
+          })
           this.log('info', 'batch_removed', `已移除第${batch.batchNumber}批旧内容`)
         } catch { /* 忽略 */ }
 
@@ -1396,11 +1852,111 @@ export class AdaptStateMachine extends EventEmitter {
         // 设置已拆解章节为该批次之前的值，让 executeSingleBreakdown 重做该批次
         this.context.processedChapters = batch.chapterStart - 1
         await this.executeSingleBreakdown()
+      } else {
+        this.setState(resumeState)
       }
 
       return result
     } catch (error) {
       this.handleError('手动质检失败', error)
+      return null
+    }
+  }
+
+  /**
+   * [P1-?] 手动触发剧本质检（不重算剧本），暂不做自动修正
+   */
+  async checkScript(episodeNum?: number): Promise<ReviewResult | null> {
+    if (!this.llmProvider) throw new Error('请先配置 LLM Provider')
+    const resumeState = this.getStableStateAfterManualAction('script')
+
+    // 默认使用最近创作过的集数
+    const targetEpisode = episodeNum ?? (this._lastTargetEpisodes[0] || 1)
+    const epStr = String(targetEpisode).padStart(3, '0')
+
+    this.log('info', 'check_script_start', `🔍 手动质检第${targetEpisode}集剧本`)
+
+    try {
+      // 1. 读取剧本文本
+      const scriptPath = this.getReadableScriptPath(targetEpisode)
+      if (!scriptPath) {
+        throw new Error(`第${targetEpisode}集剧本文件不存在`)
+      }
+      const scriptOutput = await readFile(scriptPath, 'utf-8')
+
+      // 2. 读取剧情拆解 & 解析目标集对应的剧情点
+      const breakdownContent = await readFile(
+        join(this.context.projectPath, 'plot-breakdown.md'), 'utf-8'
+      )
+      const { allPlots } = this.breakdownParser.parse(breakdownContent)
+      const targetPlots = allPlots.filter(p => p.episode === targetEpisode)
+      if (targetPlots.length === 0) {
+        this.log('warn', 'check_script_no_plots', `找不到第${targetEpisode}集对应的剧情点`)
+        return null
+      }
+
+      // 3. 反推出涉及的章节范围并读取原文
+      const novelDir = join(this.context.projectPath, 'novel')
+      const batchNums = [...new Set(targetPlots.map(p => p.batch))]
+      let chaptersText = ''
+      for (const batchNum of batchNums) {
+        const startCh = (batchNum - 1) * this.context.chaptersPerBatch + 1
+        const chs = await this.novelManager.readChapters(
+          novelDir,
+          startCh,
+          this.context.chaptersPerBatch,
+        )
+        chaptersText += chs.map(ch => `## 第${ch.chapter}章\n\n${ch.content}`).join('\n\n---\n\n')
+      }
+
+      // 4. 加载方法论 & 上一集剧本
+      const skill = await this.skillLoader.load(ADAPT_SKILL_MAP.script)
+      const adaptMethod = skill.methodology || ''
+
+      let previousScript: string | undefined
+      if (targetEpisode > 1) {
+        const prevEp = String(targetEpisode - 1).padStart(3, '0')
+        const previousScriptPath = this.getReadableScriptPath(parseInt(prevEp, 10))
+        try {
+          if (previousScriptPath) {
+            previousScript = await readFile(previousScriptPath, 'utf-8')
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 5. 调用 Orchestrator 执行质检
+      this._lastTargetEpisodes = [targetEpisode]
+      this.setState('script_reviewing')
+
+      const orchReview = await this.orchestrator.reviewScriptOnly({
+        scriptOutput,
+        plotBreakdown: breakdownContent,
+        novelChaptersText: chaptersText,
+        adaptMethodContent: adaptMethod,
+        previousScript,
+        targetEpisodes: [targetEpisode],
+      })
+
+      const result = orchReview.parsed
+      if (!result) {
+        this.log('warn', 'check_script_parse_failed', '🔍 剧本质检输出无法解析为结构化结果')
+        this.setState(resumeState)
+        return null
+      }
+
+      this.log(
+        'info',
+        'check_script_done',
+        `🔍 剧本质检完成: ${result.passed ? 'PASS' : 'FAIL'} (${result.score}分)`,
+      )
+
+      this.setState(resumeState)
+
+      return result
+    } catch (error) {
+      this.handleError(`手动剧本质检失败 (ep${epStr})`, error)
       return null
     }
   }
@@ -1460,8 +2016,7 @@ export class AdaptStateMachine extends EventEmitter {
 
   /** 保存用户指导笔记 */
   async saveUserNotes(projectPath: string, notes: string): Promise<void> {
-    const notesPath = join(projectPath, 'context-notes.md')
-    await writeFile(notesPath, notes, 'utf-8')
+    await this.persistUserNotes(projectPath, notes)
     this.context.userNotes = notes.trim() || undefined
     this.log('info', 'notes_saved', `📝 用户指导笔记已保存 (${notes.length} 字)`)
   }
@@ -1490,11 +2045,28 @@ export class AdaptStateMachine extends EventEmitter {
     this.setState('novel_loaded')
     this.log('info', 'guidance_resuming', '🔄 根据用户指导重新执行...')
 
-    // 根据当前阶段重新执行
+    // 根据当前阶段重新执行（包含清理旧坏档和回滚游标的动作）
     if (this.context.currentStage === 'breakdown') {
+      const rollbackChapters = Math.max(0, this.context.processedChapters - this.context.chaptersPerBatch)
+      const rollbackBatch = this.context.currentBatch
+      const breakdownPath = join(this.context.projectPath, 'plot-breakdown.md')
+      try {
+        const content = await readFile(breakdownPath, 'utf-8')
+        const cleaned = this.breakdownParser.removeBatch(content, rollbackBatch)
+        await this.persistPlotBreakdown(cleaned, {
+          action: 'submit_user_guidance',
+          removedBatch: rollbackBatch
+        })
+        this.log('info', 'batch_removed', `已安全移除上一回合出错残留的第${rollbackBatch}批拆解数据`)
+      } catch { /* 忽略 */ }
+      this.context.processedChapters = rollbackChapters
       await this.executeSingleBreakdown()
     } else {
-      await this.executeSingleScript()
+      if (this._lastTargetEpisodes.length > 0) {
+        await this.reCreateEpisode(this._lastTargetEpisodes[0])
+      } else {
+        await this.executeSingleScript()
+      }
     }
   }
 

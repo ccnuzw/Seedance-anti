@@ -6,14 +6,28 @@
   "author": "FEICAI",
   "license": "MIT",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview",
+    "dev": "npm run assets:monaco && node scripts/native-deps.mjs ensure-electron && electron-vite dev",
+    "build": "npm run assets:monaco && electron-vite build",
+    "preview": "npm run assets:monaco && node scripts/native-deps.mjs ensure-electron && electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "assets:icons": "node scripts/generate-app-icons.mjs",
+    "assets:monaco": "node scripts/sync-monaco-assets.mjs",
+    "web:platform": "node scripts/web-platform-server.mjs",
+    "pack": "npm run assets:icons && npm run build && electron-builder --dir",
+    "dist": "node scripts/dist-release-workflow.mjs",
+    "test": "node scripts/native-deps.mjs ensure-node && vitest run",
+    "test:watch": "node scripts/native-deps.mjs ensure-node && vitest",
+    "type-check": "tsc --noEmit",
+    "verify": "npm test && npm run build && npm run type-check",
+    "smoke:automation": "node scripts/native-deps.mjs ensure-node && vitest run src/main/engine/pipeline-runtime-manager.test.ts src/shared/project-task-validation.test.ts src/shared/project-task-settings.test.ts src/main/project/project-config-store.test.ts",
+    "smoke:batch": "node scripts/native-deps.mjs ensure-node && vitest run src/renderer/pages/batch-planner.test.ts src/main/engine/pipeline-runtime-manager.test.ts src/main/engine/pipeline-runtime-manager.integration.test.ts",
+    "smoke:reports": "node scripts/native-deps.mjs ensure-node && vitest run src/renderer/pages/task-center-reporting.test.ts src/shared/project-task-validation.test.ts",
+    "native:status": "node scripts/native-deps.mjs status",
+    "native:rebuild:node": "node scripts/native-deps.mjs rebuild-node",
+    "native:rebuild:electron": "node scripts/native-deps.mjs rebuild-electron",
+    "smoke:release": "npm run assets:icons && npm run build && node scripts/release-preflight.mjs",
+    "qa:batch": "npm run smoke:batch && npm run smoke:reports && npm run smoke:automation",
+    "pack:verify": "node scripts/pack-verify-workflow.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
@@ -31,6 +45,7 @@
     "recharts": "^2.15.0"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^3.0.0",
     "@types/better-sqlite3": "^7.6.12",

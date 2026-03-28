@@ -1,6 +1,9 @@
 .dashboard {
   max-width: var(--page-width-normal);
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
 }
 
 /* header 使用 global.css 中的 .page-header-top / .page-title-2xl / .page-actions */
@@ -131,6 +134,131 @@
 
 .dir-select .input { flex: 1; }
 
+.delivery-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  overflow: hidden;
+}
+
+.delivery-status-card.is-ready {
+  border-color: color-mix(in srgb, var(--color-success) 28%, var(--color-border));
+}
+
+.delivery-status-card.is-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 24%, var(--color-border));
+}
+
+.delivery-status-card.is-blocked {
+  border-color: color-mix(in srgb, var(--color-error) 26%, var(--color-border));
+}
+
+.delivery-status-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.delivery-status-header h2 {
+  margin-bottom: 6px;
+  font-size: var(--font-size-lg);
+}
+
+.delivery-status-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.delivery-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.delivery-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.delivery-metric span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.delivery-metric strong {
+  font-size: var(--font-size-lg);
+}
+
+.delivery-status-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  font-size: var(--font-size-xs);
+}
+
+.delivery-status-issues,
+.delivery-status-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.delivery-issue {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  line-height: 1.55;
+}
+
+.delivery-issue strong {
+  min-width: 40px;
+}
+
+.delivery-issue.is-error {
+  border-color: color-mix(in srgb, var(--color-error) 32%, var(--color-border));
+  color: color-mix(in srgb, var(--color-error) 86%, white);
+}
+
+.delivery-issue.is-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 32%, var(--color-border));
+}
+
+.delivery-issue.is-info {
+  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+}
+
+.delivery-issue.is-success {
+  border-color: color-mix(in srgb, var(--color-success) 32%, var(--color-border));
+  color: color-mix(in srgb, var(--color-success) 82%, white);
+}
+
+.delivery-status-errors h3 {
+  font-size: var(--font-size-sm);
+}
+
+.delivery-error-entry {
+  display: grid;
+  grid-template-columns: 160px 64px 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-error) 20%, var(--color-border));
+  background: color-mix(in srgb, var(--color-error) 6%, var(--color-bg-secondary));
+  font-size: var(--font-size-xs);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .about-card { padding: var(--spacing-md); }
 .about-row {
   display: flex;
@@ -224,6 +352,15 @@
   margin-top: var(--spacing-lg);
 }
 
+.wizard-preset-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
 /* 类型选择卡片 */
 .source-type-grid {
   display: grid;
@@ -299,4 +436,19 @@
 .project-card-info {
   font-size: var(--font-size-xs);
   margin-top: var(--spacing-xs);
+}
+
+@media (max-width: 900px) {
+  .dashboard-stats,
+  .source-type-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-status-header {
+    flex-direction: column;
+  }
+
+  .delivery-error-entry {
+    grid-template-columns: 1fr;
+  }
 }

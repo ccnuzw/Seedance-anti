@@ -8,5 +8,5 @@ interface FeicaiAPI {
 }
 
 interface Window {
-  feicaiAPI: FeicaiAPI
+  feicaiAPI?: FeicaiAPI
 }

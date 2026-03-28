@@ -1,0 +1,21 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="144" y1="120" x2="888" y2="904" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FE7A3A"/>
+      <stop offset="0.52" stop-color="#E6482E"/>
+      <stop offset="1" stop-color="#6B1421"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="272" y1="224" x2="736" y2="800" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF6DB"/>
+      <stop offset="1" stop-color="#FFD58A"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="96" y="96" width="832" height="832" rx="220" fill="url(#bg)"/>
+  <rect x="182" y="182" width="660" height="660" rx="176" fill="black" fill-opacity="0.14"/>
+
+  <path d="M332 286C332 246.235 364.235 214 404 214H694V324H470C448.461 324 431 341.461 431 363V436H645V542H431V810H332V286Z" fill="url(#panel)"/>
+  <path d="M572 472L780 348V596L572 472Z" fill="#FFF6DB"/>
+  <circle cx="706" cy="710" r="74" fill="#FFF6DB"/>
+  <path d="M706 648L720.843 691.157H766.312L729.515 717.843L743.559 761L706 733.714L668.441 761L682.485 717.843L645.688 691.157H691.157L706 648Z" fill="#E6482E"/>
+</svg>

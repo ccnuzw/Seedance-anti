@@ -1,0 +1,627 @@
+.delivery-handoff-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  max-width: var(--page-width-xl);
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.delivery-handoff-page > * {
+  min-width: 0;
+}
+
+.delivery-handoff-page.is-embedded {
+  gap: var(--spacing-md);
+  max-width: none;
+  margin: 0;
+}
+
+.delivery-handoff-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.delivery-handoff-header h1 {
+  margin: 0 0 6px;
+}
+
+.delivery-handoff-header p {
+  margin: 0;
+  max-width: 760px;
+}
+
+.delivery-handoff-score,
+.delivery-handoff-pill,
+.delivery-handoff-badge,
+.delivery-handoff-episode-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.delivery-handoff-score {
+  min-height: 40px;
+  font-weight: 700;
+  border-color: color-mix(in srgb, var(--color-warning) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: color-mix(in srgb, var(--color-warning) 90%, white);
+}
+
+.delivery-handoff-score.is-ready,
+.delivery-handoff-pill.is-success {
+  border-color: color-mix(in srgb, var(--color-success) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: color-mix(in srgb, var(--color-success) 84%, white);
+}
+
+.delivery-handoff-pill.is-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: color-mix(in srgb, var(--color-warning) 88%, white);
+}
+
+.delivery-handoff-overview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.delivery-handoff-overview-card {
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: space-between;
+  border-color: color-mix(in srgb, var(--color-border) 92%, white);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-secondary) 74%, white), var(--color-bg-card));
+  box-shadow: 0 8px 18px color-mix(in srgb, black 3%, transparent);
+}
+
+.delivery-handoff-overview-card strong {
+  font-size: calc(var(--font-size-md) + 2px);
+  font-family: var(--font-mono);
+  line-height: 1.05;
+}
+
+.delivery-handoff-embedded-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: calc(var(--spacing-lg) + 2px);
+  border-color: color-mix(in srgb, var(--color-accent) 16%, var(--color-border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 5%, white), var(--color-bg-card));
+  box-shadow: 0 16px 34px color-mix(in srgb, var(--color-accent) 7%, transparent);
+}
+
+.delivery-handoff-embedded-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--spacing-md);
+  align-items: stretch;
+}
+
+.delivery-handoff-embedded-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.delivery-handoff-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.9fr);
+  gap: var(--spacing-md);
+  min-width: 0;
+  align-items: start;
+}
+
+.delivery-handoff-main,
+.delivery-handoff-sidebar,
+.delivery-handoff-checklist,
+.delivery-handoff-episodes,
+.delivery-handoff-summary,
+.delivery-handoff-gap-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.delivery-handoff-main,
+.delivery-handoff-sidebar {
+  gap: var(--spacing-md);
+}
+
+.delivery-handoff-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-section-head h3 {
+  margin: 0;
+}
+
+.delivery-handoff-list,
+.delivery-handoff-episode-list,
+.delivery-handoff-gap-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-list--compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.delivery-handoff-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.delivery-handoff-item p,
+.delivery-handoff-summary-copy p {
+  margin: 4px 0 0;
+}
+
+.delivery-handoff-item.is-ready {
+  border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+}
+
+.delivery-handoff-item.is-pending {
+  border-color: color-mix(in srgb, var(--color-warning) 30%, var(--color-border));
+}
+
+.delivery-handoff-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-compact-bar,
+.delivery-handoff-episode-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border);
+  background: color-mix(in srgb, var(--color-bg-card) 50%, var(--color-bg-secondary));
+}
+
+.delivery-handoff-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-search {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.delivery-handoff-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-search input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.delivery-handoff-search input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.delivery-handoff-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.delivery-handoff-filter strong {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+
+.delivery-handoff-filter.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-secondary));
+  color: var(--color-accent);
+}
+
+.delivery-handoff-episode-headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 3%, var(--color-bg-card)), var(--color-bg-secondary));
+}
+
+.delivery-handoff-episode-headline strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.delivery-handoff-episode-headline p {
+  margin: 0;
+}
+
+.delivery-handoff-episode {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1fr) minmax(132px, auto);
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  align-items: stretch;
+}
+
+.delivery-handoff-episode.is-ready {
+  border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 4%, var(--color-bg-secondary));
+}
+
+.delivery-handoff-episode.is-waiting {
+  border-color: color-mix(in srgb, var(--color-warning) 30%, var(--color-border));
+}
+
+.delivery-handoff-episode.is-empty {
+  border-style: dashed;
+}
+
+.delivery-handoff-episode-primary,
+.delivery-handoff-episode-meta,
+.delivery-handoff-episode-actions {
+  min-width: 0;
+}
+
+.delivery-handoff-episode-primary,
+.delivery-handoff-episode-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.delivery-handoff-episode-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-episode-meta-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg-card) 55%, var(--color-bg-secondary));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.delivery-handoff-episode-head,
+.delivery-handoff-episode-badges,
+.delivery-handoff-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.delivery-handoff-episode-head {
+  align-items: center;
+}
+
+.delivery-handoff-episode-head strong,
+.delivery-handoff-summary-copy strong {
+  color: var(--color-accent);
+}
+
+.delivery-handoff-episode-actions {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  flex-direction: column;
+}
+
+.delivery-handoff-episode-actions .btn {
+  justify-content: center;
+  min-width: 116px;
+}
+
+.delivery-handoff-summary-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--spacing-md);
+  border-radius: calc(var(--radius-lg) - 2px);
+  border: 1px solid color-mix(in srgb, var(--color-border) 92%, white);
+  background: color-mix(in srgb, var(--color-bg-card) 82%, white);
+}
+
+.delivery-handoff-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-metric {
+  min-width: 0;
+  min-height: 108px;
+  padding: var(--spacing-md);
+  border: 1px solid color-mix(in srgb, var(--color-border) 92%, white);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-secondary) 72%, white), var(--color-bg-card));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: space-between;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 72%, transparent);
+}
+
+.delivery-handoff-metric strong {
+  font-size: var(--font-size-lg);
+  font-family: var(--font-mono);
+}
+
+.delivery-handoff-gap-item {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-border) 92%, white);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-secondary) 72%, white), var(--color-bg-card));
+  color: var(--color-text-secondary);
+}
+
+.delivery-handoff-gap-item.is-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+}
+
+.delivery-handoff-gap-item.is-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+}
+
+.delivery-handoff-gap-item.is-success {
+  border-color: color-mix(in srgb, var(--color-success) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+}
+
+.delivery-handoff-empty-state {
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-overview {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-overview-card {
+  min-height: 82px;
+  padding: 11px 12px;
+  gap: 5px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-overview-card strong {
+  font-size: var(--font-size-md);
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-grid {
+  grid-template-columns: 1fr;
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-checklist,
+.delivery-handoff-page.is-embedded .delivery-handoff-episodes,
+.delivery-handoff-page.is-embedded .delivery-handoff-embedded-summary {
+  gap: var(--spacing-sm);
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-list--compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-item {
+  padding: 12px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-filter-bar {
+  gap: 6px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-compact-bar,
+.delivery-handoff-page.is-embedded .delivery-handoff-episode-more {
+  padding: 8px 10px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-filter {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-toolbar {
+  align-items: center;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-episode-headline {
+  padding: 12px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-episode {
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 0.95fr) auto;
+  padding: 12px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-episode-meta-item {
+  padding: 8px 10px;
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  justify-content: stretch;
+  padding: 10px;
+  border-radius: calc(var(--radius-lg) - 2px);
+  border: 1px solid color-mix(in srgb, var(--color-border) 92%, white);
+  background: color-mix(in srgb, var(--color-bg-secondary) 78%, white);
+}
+
+.delivery-handoff-page.is-embedded .delivery-handoff-actions .btn {
+  width: 100%;
+  justify-content: center;
+  min-height: 40px;
+}
+
+@media (max-width: 1200px) {
+  .delivery-handoff-overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .delivery-handoff-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-episode {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-episode-actions {
+    justify-content: flex-start;
+  }
+
+  .delivery-handoff-embedded-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .delivery-handoff-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .delivery-handoff-list--compact,
+  .delivery-handoff-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .delivery-handoff-compact-bar,
+  .delivery-handoff-episode-more {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .delivery-handoff-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .delivery-handoff-episode-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-episode-headline {
+    flex-direction: column;
+  }
+
+  .delivery-handoff-episode,
+  .delivery-handoff-item {
+    flex-direction: column;
+  }
+
+  .delivery-handoff-episode-actions {
+    justify-content: flex-start;
+    align-items: flex-start;
+  }
+
+  .delivery-handoff-page.is-embedded .delivery-handoff-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .delivery-handoff-page.is-embedded .delivery-handoff-list--compact {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-page.is-embedded .delivery-handoff-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .delivery-handoff-page.is-embedded .delivery-handoff-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-page.is-embedded .delivery-handoff-episode {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .delivery-handoff-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-page.is-embedded .delivery-handoff-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-handoff-filter {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

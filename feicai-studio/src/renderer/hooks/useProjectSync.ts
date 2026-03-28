@@ -5,6 +5,7 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useToastStore } from '@renderer/stores/toastStore'
 
 /**
  * 在任何包含 /project/:id 路由的页面中调用。
@@ -14,10 +15,16 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 export function useProjectSync(): void {
   const { id } = useParams<{ id: string }>()
   const { currentProject, loadProject } = useProjectStore()
+  const addToast = useToastStore(s => s.addToast)
 
   useEffect(() => {
     if (id && (!currentProject || currentProject.id !== id)) {
-      loadProject(id)
+      void (async () => {
+        const loaded = await loadProject(id)
+        if (!loaded && useProjectStore.getState().currentProject?.id !== id) {
+          addToast('warning', '项目加载失败或项目不存在')
+        }
+      })()
     }
-  }, [id, currentProject, loadProject])
+  }, [id, currentProject, loadProject, addToast])
 }

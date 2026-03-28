@@ -3,16 +3,20 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: var(--spacing-2xl);
+  padding: var(--spacing-xl);
   text-align: center;
-  gap: var(--spacing-sm);
-  min-height: 200px;
+  gap: var(--spacing-md);
+  min-height: 220px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--color-accent) 6%, transparent), transparent 48%),
+    color-mix(in srgb, var(--color-bg-tertiary) 72%, var(--color-bg-secondary));
 }
 
 .empty-state-icon {
-  font-size: 48px;
-  opacity: 0.5;
-  margin-bottom: var(--spacing-sm);
+  font-size: 52px;
+  opacity: 0.72;
 }
 
 .empty-state-title {
@@ -22,6 +26,6 @@
 
 .empty-state-desc {
   font-size: var(--font-size-sm);
-  max-width: 400px;
+  max-width: 460px;
   line-height: 1.6;
 }

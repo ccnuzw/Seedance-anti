@@ -1,32 +1,158 @@
-/* ============================================================
-   NovelPage — 小说管理页面样式
-   ============================================================ */
-
 .novel-page {
-  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
   max-width: var(--page-width-xl);
+  width: 100%;
+  margin: 0 auto;
+  min-width: 0;
 }
 
-/* 统计卡片使用 global.css 中的 .water-level-grid / .water-level-card */
+.novel-page > * {
+  min-width: 0;
+}
 
-/* 进度条使用 global.css 中的 .progress-bar / .progress-bar-fill */
+.novel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
 
-/* 导入拖拽区 */
+.novel-header-copy p {
+  margin: 6px 0 0;
+  max-width: 760px;
+}
+
+.novel-header-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.novel-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.9fr);
+  gap: var(--spacing-md);
+}
+
+.novel-next-step,
+.novel-readiness,
+.novel-progress-card,
+.novel-init-card,
+.novel-chapter-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.novel-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.novel-section-head h3 {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.novel-next-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.novel-next-step-body strong {
+  font-size: var(--font-size-lg);
+  color: var(--color-accent);
+}
+
+.novel-next-step-body p {
+  margin: 0;
+}
+
+.novel-next-step-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.novel-readiness-score {
+  font-size: clamp(30px, 4vw, 52px);
+  line-height: 1;
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}
+
+.novel-readiness-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.novel-readiness-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.novel-readiness-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.novel-mini-progress {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  overflow: hidden;
+}
+
+.novel-mini-progress > div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 72%, white), var(--color-accent));
+}
+
+.novel-init-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: var(--spacing-md);
+  align-items: end;
+}
+
+.novel-init-actions {
+  display: flex;
+  align-items: flex-end;
+}
+
 .novel-drop-zone {
-  background: var(--color-bg-card);
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 45%),
+    var(--color-bg-card);
   border: 2px dashed var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--spacing-xl);
   text-align: center;
-  transition: all var(--transition-fast);
+  transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
 }
 
 .novel-drop-zone.drag-over {
   border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 5%, var(--color-bg-card));
+  transform: translateY(-1px);
 }
 
-/* 章节列表 */
+.novel-drop-zone h3,
+.novel-drop-zone p {
+  margin: 0;
+}
+
 .chapter-list {
   background: var(--color-bg-card);
   border: 1px solid var(--color-border);
@@ -35,10 +161,11 @@
 }
 
 .chapter-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--spacing-md);
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: 12px var(--spacing-md);
   border-bottom: 1px solid var(--color-border);
   font-size: var(--font-size-sm);
 }
@@ -57,14 +184,20 @@
 }
 
 .chapter-num {
-  font-weight: 600;
-  min-width: 60px;
+  font-weight: 700;
   color: var(--color-accent);
 }
 
-.chapter-status {
-  margin-left: auto;
+.chapter-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chapter-status,
+.chapter-read-btn {
   font-size: var(--font-size-xs);
+  white-space: nowrap;
 }
 
 .chapter-status.processed {
@@ -76,7 +209,6 @@
 }
 
 .chapter-read-btn {
-  font-size: var(--font-size-xs);
   color: var(--color-accent);
   opacity: 0;
   transition: opacity var(--transition-fast);
@@ -86,16 +218,9 @@
   opacity: 1;
 }
 
-/* =============================================
-   阅读器侧滑面板
-   ============================================= */
-
 .reader-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: rgba(0, 0, 0, 0.5);
   z-index: 1000;
   display: flex;
@@ -114,7 +239,7 @@
 }
 
 .reader-panel {
-  width: min(600px, 70vw);
+  width: min(620px, 72vw);
   height: 100vh;
   background: var(--color-bg-primary);
   border-left: 1px solid var(--color-border);
@@ -127,18 +252,18 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--spacing-md) var(--spacing-lg);
+  gap: var(--spacing-md);
+  padding: 36px var(--spacing-md) var(--spacing-md);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-card);
   flex-shrink: 0;
-  /* 保留拖拽区域给 macOS 标题栏 */
-  padding-top: 36px;
 }
 
 .reader-nav {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
+  min-width: 0;
 }
 
 .reader-title {
@@ -151,10 +276,6 @@
   color: var(--color-text-secondary);
   font-weight: 400;
   font-size: var(--font-size-sm);
-}
-
-.reader-close {
-  font-size: var(--font-size-md);
 }
 
 .reader-body {
@@ -171,13 +292,12 @@
 
 .reader-content {
   font-size: var(--font-size-base);
-  line-height: 2;
+  line-height: 1.95;
   color: var(--color-text-primary);
   white-space: pre-wrap;
   font-family: 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
 }
 
-/* 阅读器滚动条美化 */
 .reader-body::-webkit-scrollbar {
   width: 6px;
 }
@@ -193,4 +313,39 @@
 
 .reader-body::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
+}
+
+@media (max-width: 980px) {
+  .novel-hero-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .novel-init-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .novel-init-actions {
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 760px) {
+  .chapter-item {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+
+  .chapter-read-btn {
+    opacity: 1;
+  }
+
+  .reader-panel {
+    width: 100vw;
+  }
+
+  .reader-header,
+  .reader-nav {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

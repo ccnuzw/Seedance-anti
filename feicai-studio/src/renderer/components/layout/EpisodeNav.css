@@ -4,14 +4,14 @@
 
 .epnav {
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .epnav-track {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-xs);
-  padding: var(--spacing-xs) var(--spacing-xs);
+  padding: calc(var(--spacing-xs) + 4px) var(--spacing-xs) var(--spacing-xs);
 }
 
 

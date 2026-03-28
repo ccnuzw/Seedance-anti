@@ -22,7 +22,10 @@ import { ProjectStatePersistence } from './project-state'
 import { EventEmitter } from 'events'
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join, dirname } from 'path'
+import { resolveScriptEpisodePath } from '../project/script-file-utils'
 import type {
+  LLMFailureClass,
+  LLMUsageMetrics,
   PipelineState,
   PipelineStage,
   PipelineContext,
@@ -41,9 +44,12 @@ import {
 import { SkillLoader } from './skill-loader'
 import { PromptAssembler, type UpstreamInputs, type ProjectContext } from './prompt-assembler'
 import { ReviewEngine } from './review-engine'
+import { loadStoryboardEpisodeInputs } from './storyboard-inputs'
 import { createProvider } from '../llm/provider-factory'
 import type { ILLMProvider } from '../llm/types'
 import { v4 as uuid } from 'uuid'
+import { writeArtifactText } from '../project/artifact-service'
+import { classifyLLMFailure, estimateCostUsd } from '../llm/telemetry'
 
 // 状态转换表
 const STAGE_STATES: Record<PipelineStage, {
@@ -70,6 +76,22 @@ const STAGE_STATES: Record<PipelineStage, {
 
 const STAGE_ORDER: PipelineStage[] = ['director', 'art', 'storyboard']
 
+interface PipelineLLMTelemetryEvent {
+  stage: PipelineStage
+  phase: 'stage_execution' | 'business_review' | 'compliance_review'
+  provider: string
+  model: string
+  stream: boolean
+  status: 'success' | 'failed'
+  startedAt: string
+  endedAt: string
+  durationMs: number
+  usage?: LLMUsageMetrics
+  estimatedCostUsd?: number
+  failureClass?: LLMFailureClass
+  errorMessage?: string
+}
+
 export class PipelineStateMachine extends EventEmitter {
   private context: PipelineContext
   private skillLoader: SkillLoader
@@ -82,20 +104,27 @@ export class PipelineStateMachine extends EventEmitter {
   private pipelineSettings: PipelineSettings = { ...DEFAULT_PIPELINE_SETTINGS }
   private _aborted = false
   private _reviewSkipped = false
+  private activeAbortController: AbortController | null = null
 
   constructor(skillsDir: string) {
     super()
     this.skillLoader = new SkillLoader(skillsDir)
     this.promptAssembler = new PromptAssembler()
     this.reviewEngine = new ReviewEngine(this.skillLoader, this.promptAssembler)
+    this.reviewEngine.setTelemetryReporter((event) => {
+      this.emit('llmTelemetry', event)
+    })
 
     this.context = {
+      runId: '',
       projectId: '',
       projectPath: '',
       episodeNum: 0,
       currentStage: 'director',
       state: 'idle',
+      singleStage: false,
       retryCount: 0,
+      lastUpdatedAt: new Date().toISOString(),
       reviews: [],
       logs: []
     }
@@ -123,11 +152,39 @@ export class PipelineStateMachine extends EventEmitter {
     this.reviewEngine.setPassScore(this.pipelineSettings.passScore)
   }
 
+  private persistRuntimeSnapshot(): void {
+    this.statePersistence?.updateRuntime(this.getContext()).catch(console.error)
+  }
+
+  private beginAbortableRequest(): AbortController {
+    this.activeAbortController?.abort()
+    const controller = new AbortController()
+    this.activeAbortController = controller
+    return controller
+  }
+
+  private endAbortableRequest(controller: AbortController): void {
+    if (this.activeAbortController === controller) {
+      this.activeAbortController = null
+    }
+  }
+
+  private isAbortError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false
+    const maybeError = error as { name?: string; message?: string }
+    const signature = `${maybeError.name || ''} ${maybeError.message || ''}`.toLowerCase()
+    return signature.includes('abort')
+  }
+
   // ==================== 状态转换 ====================
 
   private setState(newState: PipelineState): void {
     const oldState = this.context.state
     this.context.state = newState
+    this.context.lastUpdatedAt = new Date().toISOString()
+    if (['idle', 'director_done', 'art_done', 'episode_complete', 'error'].includes(newState)) {
+      this.context.runEndedAt = this.context.lastUpdatedAt
+    }
     this.log('info', 'state_changed', `状态: ${oldState} → ${newState}`)
     this.emit('stateChanged', { oldState, newState, context: this.getContext() })
   }
@@ -144,6 +201,7 @@ export class PipelineStateMachine extends EventEmitter {
     projectContext: ProjectContext
     startStage?: PipelineStage
     singleStage?: boolean
+    runId?: string
   }): Promise<void> {
     if (!this.llmProvider) {
       throw new Error('请先配置 LLM Provider')
@@ -151,7 +209,7 @@ export class PipelineStateMachine extends EventEmitter {
 
     // 状态断言：引擎必须处于终止状态才能启动
     const currentState = this.context.state
-    const terminalStates: PipelineState[] = ['idle', 'episode_complete', 'error', 'paused']
+    const terminalStates: PipelineState[] = ['idle', 'director_done', 'art_done', 'episode_complete', 'error']
     if (!terminalStates.includes(currentState)) {
       throw new Error(`无法在 ${currentState} 状态下启动流水线`)
     }
@@ -160,13 +218,18 @@ export class PipelineStateMachine extends EventEmitter {
     this._aborted = false
     this._reviewSkipped = false
     this.pausedState = null
+    this.activeAbortController = null
     this.context = {
+      runId: params.runId || uuid(),
       projectId: params.projectId,
       projectPath: params.projectPath,
       episodeNum: params.episodeNum,
       currentStage: params.startStage || 'director',
       state: 'idle',
+      singleStage: !!params.singleStage,
       retryCount: 0,
+      runStartedAt: new Date().toISOString(),
+      lastUpdatedAt: new Date().toISOString(),
       reviews: [],
       logs: []
     }
@@ -179,32 +242,22 @@ export class PipelineStateMachine extends EventEmitter {
     await this.statePersistence.load()
 
     // 加载剧本
+    const resolvedScriptPath = resolveScriptEpisodePath(params.projectPath, params.episodeNum)
     const epStr = String(params.episodeNum).padStart(3, '0')
-    const scriptPath = join(params.projectPath, 'script', `ep${epStr}.md`)
+    const scriptPath = resolvedScriptPath || join(params.projectPath, 'script', `ep${epStr}.md`)
     try {
+      if (!resolvedScriptPath) {
+        throw new Error(`未找到 EP${epStr} 剧本文件，支持 script/ep${epStr}.md 或 script/ep${String(params.episodeNum).padStart(2, '0')}-*.md`) 
+      }
       this.context.scriptPath = scriptPath
-      this.log('info', 'script_loaded', `剧本已加载: ep${epStr}.md`)
+      this.log('info', 'script_loaded', `剧本已加载: ${scriptPath}`)
       this.setState('script_loaded')
     } catch (error) {
       this.handleError('加载剧本失败', error)
       return
     }
 
-    // 从指定阶段开始执行
-    const startIdx = STAGE_ORDER.indexOf(params.startStage || 'director')
-    // singleStage 模式：只跑一个阶段
-    const endIdx = params.singleStage ? startIdx + 1 : STAGE_ORDER.length
-    
-    for (let i = startIdx; i < endIdx; i++) {
-      if (this.shouldStop()) break
-      await this.executeFullStage(STAGE_ORDER[i])
-    }
-    
-    // 单阶段模式完成后，切换到终止状态让前端停止计时
-    if (params.singleStage && !this.shouldStop()) {
-      this.log('info', 'single_stage_done', `✅ 单阶段模式完成: ${this.getStageName(params.startStage || 'director')}`)
-      this.setState('episode_complete')
-    }
+    await this.runStageSequence(params.startStage || 'director', !!params.singleStage)
   }
 
   /** 检查是否应该中止执行（暂停、出错、abort、或 idle） */
@@ -215,13 +268,38 @@ export class PipelineStateMachine extends EventEmitter {
       this.context.state === 'idle'  // abort() 后状态为 idle
   }
 
+  private async runStageSequence(
+    startStage: PipelineStage,
+    singleStage: boolean,
+    options?: { preserveCurrentStage?: boolean }
+  ): Promise<void> {
+    const startIdx = STAGE_ORDER.indexOf(startStage)
+    const endIdx = singleStage ? startIdx + 1 : STAGE_ORDER.length
+
+    for (let i = startIdx; i < endIdx; i++) {
+      if (this.shouldStop()) break
+      await this.executeFullStage(STAGE_ORDER[i], {
+        preserveCurrentStage: !!options?.preserveCurrentStage && i === startIdx
+      })
+    }
+
+    if (singleStage && !this.shouldStop()) {
+      this.log('info', 'single_stage_done', `✅ 单阶段模式完成: ${this.getStageName(startStage)}`)
+    }
+  }
+
   /**
    * 执行完整的单个阶段（执行 + 审核 + 可能的重试）
    */
-  private async executeFullStage(stage: PipelineStage): Promise<void> {
+  private async executeFullStage(
+    stage: PipelineStage,
+    options?: { preserveCurrentStage?: boolean }
+  ): Promise<void> {
     this.context.currentStage = stage
-    this.context.retryCount = 0
-    this.context.lastReviewFeedback = undefined
+    if (!options?.preserveCurrentStage) {
+      this.context.retryCount = 0
+      this.context.lastReviewFeedback = undefined
+    }
     this._reviewSkipped = false
 
     let passed = false
@@ -279,6 +357,12 @@ export class PipelineStateMachine extends EventEmitter {
     this.setState(STAGE_STATES[stage].executing)
     const stageEmoji = { director: '🎬', art: '🎨', storyboard: '📐' }[stage]
     this.log('info', 'stage_start', `${stageEmoji} 开始${this.getStageName(stage)}`)
+    const startedAt = new Date().toISOString()
+    let usage: LLMUsageMetrics | undefined
+    let provider = this.llmProvider?.providerType || 'unknown'
+    let model = this.getProviderModelName()
+    let llmTelemetrySettled = false
+    const requestAbortController = this.beginAbortableRequest()
 
     try {
       // 1. 加载 Skill
@@ -307,12 +391,20 @@ export class PipelineStateMachine extends EventEmitter {
       let output = ''
       let lastChunkTime = Date.now()
       const LLM_TIMEOUT_MS = this.pipelineSettings.llmTimeoutSec * 1000
+      provider = this.llmProvider!.providerType
+      model = this.getProviderModelName()
 
       const stream = this.llmProvider!.generateStream(prompt, {
+        signal: requestAbortController.signal,
         onChunk: (chunk) => {
           output += chunk
           lastChunkTime = Date.now()
           this.emit('stream', { stage, chunk, totalLength: output.length })
+        },
+        onTelemetry: (metrics) => {
+          usage = metrics.usage
+          provider = metrics.provider
+          model = metrics.model
         }
       })
 
@@ -342,16 +434,55 @@ export class PipelineStateMachine extends EventEmitter {
         clearInterval(timeoutChecker)
       }
 
+      const endedAt = new Date().toISOString()
+      this.emit('llmTelemetry', {
+        stage,
+        phase: 'stage_execution',
+        provider,
+        model,
+        stream: true,
+        status: 'success',
+        startedAt,
+        endedAt,
+        durationMs: new Date(endedAt).getTime() - new Date(startedAt).getTime(),
+        usage,
+        estimatedCostUsd: estimateCostUsd(provider, model, usage)
+      } satisfies PipelineLLMTelemetryEvent)
+      llmTelemetrySettled = true
       this.log('info', 'llm_complete', `LLM 生成完成 (${output.length} chars)`)
 
       // 5. 写入文件
       await this.writeStageOutput(stage, output)
     } catch (error) {
+      if (this._aborted || requestAbortController.signal.aborted || this.isAbortError(error)) {
+        this.log('info', 'aborted_during_gen', '⚓ LLM 生成已中断')
+        return
+      }
+      if (!llmTelemetrySettled) {
+        const endedAt = new Date().toISOString()
+        this.emit('llmTelemetry', {
+          stage,
+          phase: 'stage_execution',
+          provider: this.llmProvider!.providerType,
+          model: this.getProviderModelName(),
+          stream: true,
+          status: 'failed',
+          startedAt,
+          endedAt,
+          durationMs: new Date(endedAt).getTime() - new Date(startedAt).getTime(),
+          usage,
+          estimatedCostUsd: estimateCostUsd(this.llmProvider!.providerType, this.getProviderModelName(), usage),
+          failureClass: classifyLLMFailure(error),
+          errorMessage: error instanceof Error ? error.message : String(error)
+        } satisfies PipelineLLMTelemetryEvent)
+      }
       const errMsg = error instanceof Error ? error.message : String(error)
       const isTimeout = errMsg.includes('超时')
-      const isNetwork = errMsg.includes('fetch') || errMsg.includes('ECONNREFUSED') || errMsg.includes('ETIMEDOUT')
+      const isNetwork = errMsg.includes('fetch') || errMsg.includes('ECONNREFUSED') || errMsg.includes('ETIMEDOUT') || errMsg.includes('terminated')
       const hint = isTimeout ? '（将自动重试）' : isNetwork ? '（网络错误，请检查连接）' : ''
       this.handleError(`${this.getStageName(stage)}执行失败${hint}`, error)
+    } finally {
+      this.endAbortableRequest(requestAbortController)
     }
   }
 
@@ -361,20 +492,37 @@ export class PipelineStateMachine extends EventEmitter {
   private async executeReview(stage: PipelineStage): Promise<ReviewResult | null> {
     this.setState(STAGE_STATES[stage].reviewing)
     this.log('info', 'review_start', `⚠️ 开始审核 (对抗性立场 + 评分锚定 7 分)`)
+    const requestAbortController = this.beginAbortableRequest()
 
     try {
       const result = await this.reviewEngine.review(stage, {
         projectPath: this.context.projectPath,
         episodeNum: this.context.episodeNum,
         scriptPath: this.context.scriptPath
+      }, {
+        signal: requestAbortController.signal
       })
 
       this.context.reviews.push(result)
+      this.persistRuntimeSnapshot()
       this.emit('reviewResult', { stage, result })
+      if (this.statePersistence) {
+        this.statePersistence.appendReview(
+          this.context.episodeNum,
+          result,
+          stage
+        ).catch(console.error)
+      }
       return result
     } catch (error) {
+      if (this._aborted || requestAbortController.signal.aborted || this.isAbortError(error)) {
+        this.log('info', 'review_aborted', '⚓ 审核已中断')
+        return null
+      }
       this.handleError('审核执行失败', error)
       return null
+    } finally {
+      this.endAbortableRequest(requestAbortController)
     }
   }
 
@@ -383,6 +531,17 @@ export class PipelineStateMachine extends EventEmitter {
   private async gatherInputs(stage: PipelineStage): Promise<UpstreamInputs> {
     const inputs: UpstreamInputs = {}
     const epStr = String(this.context.episodeNum).padStart(3, '0')
+
+    if (stage === 'storyboard') {
+      const storyboardInputs = await loadStoryboardEpisodeInputs(this.context.projectPath, this.context.episodeNum)
+      inputs.directorAnalysis = storyboardInputs.directorAnalysis
+      inputs.characterPrompts = storyboardInputs.characterPrompts
+      inputs.scenePrompts = storyboardInputs.scenePrompts
+      if (this.context.scriptPath) {
+        inputs.script = await readFile(this.context.scriptPath, 'utf-8')
+      }
+      return inputs
+    }
 
     // 剧本（所有阶段都可能需要）
     if (this.context.scriptPath) {
@@ -416,7 +575,18 @@ export class PipelineStateMachine extends EventEmitter {
       const outputDir = join(this.context.projectPath, 'outputs', `ep${epStr}`)
       await mkdir(outputDir, { recursive: true })
       const outputPath = join(outputDir, '01.5-art-design-output.md')
-      await writeFile(outputPath, content, 'utf-8')
+      await writeArtifactText({
+        projectPath: this.context.projectPath,
+        kind: 'art_output',
+        filePath: outputPath,
+        content,
+        contentType: 'text/markdown',
+        label: `EP${epStr} 美术设计`,
+        episodeNum: this.context.episodeNum,
+        stage: 'art',
+        sourceRunId: this.context.runId,
+        createdBy: 'system'
+      })
       this.log('info', 'file_written', `产出已写入: ${outputPath}`)
 
       // 2. 解析并追加到 assets/ 目录
@@ -437,7 +607,18 @@ export class PipelineStateMachine extends EventEmitter {
       const outputDir = join(this.context.projectPath, 'outputs', `ep${epStr}`)
       await mkdir(outputDir, { recursive: true })
       const outputPath = join(outputDir, fileName)
-      await writeFile(outputPath, content, 'utf-8')
+      await writeArtifactText({
+        projectPath: this.context.projectPath,
+        kind: stage === 'director' ? 'director_output' : 'seedance_prompts',
+        filePath: outputPath,
+        content,
+        contentType: 'text/markdown',
+        label: stage === 'director' ? `EP${epStr} 导演分析` : `EP${epStr} Seedance 提示词`,
+        episodeNum: this.context.episodeNum,
+        stage,
+        sourceRunId: this.context.runId,
+        createdBy: 'system'
+      })
 
       if (stage === 'director') {
         this.context.directorAnalysisPath = outputPath
@@ -458,11 +639,13 @@ export class PipelineStateMachine extends EventEmitter {
   }
 
   /** 强制中止（用于停止执行）—— 状态回到 idle 而非 error */
-  abort(): void {
+  abort(reason?: string): void {
     this._aborted = true  // 立即设置标志，阻止 LLM 流继续消费
+    this.activeAbortController?.abort()
+    this.activeAbortController = null
     this.log('warn', 'aborted', '⏹ 流水线已中止')
     this.pausedState = null
-    this.context.error = undefined
+    this.context.error = reason
     this.setState('idle')
   }
 
@@ -470,8 +653,12 @@ export class PipelineStateMachine extends EventEmitter {
     if (this.context.state !== 'paused' || !this.pausedState) return
     this.log('info', 'resumed', '▶ 流水线已恢复')
     this.setState(this.pausedState)
+    const resumedStage = this.context.currentStage
+    const singleStage = !!this.context.singleStage
     this.pausedState = null
-    // 自动继续当前阶段需要由调用方处理
+    this.runStageSequence(resumedStage, singleStage, { preserveCurrentStage: true }).catch((error) => {
+      this.handleError('恢复流水线失败', error)
+    })
   }
 
   /**
@@ -482,13 +669,10 @@ export class PipelineStateMachine extends EventEmitter {
     this.context.retryCount = 0
     this._aborted = false
     this._reviewSkipped = false
-    this.context.state = 'script_loaded' // 重置到可以开始的状态
+    this.context.runEndedAt = undefined
+    this.setState('script_loaded') // 重置到可以开始的状态
 
-    const startIdx = STAGE_ORDER.indexOf(targetStage)
-    for (let i = startIdx; i < STAGE_ORDER.length; i++) {
-      if (this.shouldStop()) break
-      await this.executeFullStage(STAGE_ORDER[i])
-    }
+    await this.runStageSequence(targetStage, false)
   }
 
   /**
@@ -507,7 +691,9 @@ export class PipelineStateMachine extends EventEmitter {
    */
   waitForCompletion(): Promise<{ state: PipelineState; stage: PipelineStage }> {
     // 如果已经是终止状态，立即返回
-    const terminalStates: PipelineState[] = ['idle', 'episode_complete', 'error', 'paused']
+    const terminalStates: PipelineState[] = this.context.singleStage
+      ? ['idle', 'director_done', 'art_done', 'episode_complete', 'error', 'paused']
+      : ['idle', 'episode_complete', 'error', 'paused']
     if (terminalStates.includes(this.context.state)) {
       return Promise.resolve({ state: this.context.state, stage: this.context.currentStage })
     }
@@ -526,12 +712,14 @@ export class PipelineStateMachine extends EventEmitter {
   /** 重置到初始状态 */
   reset(): void {
     this.context = {
+      runId: '',
       projectId: '',
       projectPath: '',
       episodeNum: 0,
       currentStage: 'director',
       state: 'idle',
       retryCount: 0,
+      lastUpdatedAt: new Date().toISOString(),
       reviews: [],
       logs: []
     }
@@ -555,6 +743,7 @@ export class PipelineStateMachine extends EventEmitter {
     }
     this.context.logs.push(entry)
     this.emit('log', entry)
+    this.persistRuntimeSnapshot()
   }
 
   private handleError(message: string, error: unknown): void {
@@ -563,6 +752,11 @@ export class PipelineStateMachine extends EventEmitter {
     this.context.error = `${message}${detail ? ': ' + detail : ''}`
     this.setState('error')
     this.emit('error', { message, error: detail })
+  }
+
+  private getProviderModelName(): string {
+    const provider = this.llmProvider as ILLMProvider & { config?: { model?: string } }
+    return provider?.config?.model || provider?.name || 'unknown'
   }
 
   private getStageName(stage: PipelineStage): string {

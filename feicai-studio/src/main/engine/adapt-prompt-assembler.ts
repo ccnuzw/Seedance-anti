@@ -43,6 +43,18 @@ export interface AdaptProjectContext {
 }
 
 export class AdaptPromptAssembler {
+  private extractLatestPlanSection(plotBreakdown: string): string {
+    const matches = [...plotBreakdown.matchAll(/##\s*(?:改编规划|改编方向|改编策略|改编计划|Adaptation Plan)\s*\n[\s\S]*?(?=\n##\s*第|\n#\s*第|\n---\n|$)/gim)]
+    return matches.length > 0 ? matches[matches.length - 1][0].trim() : ''
+  }
+
+  private stripPlanSections(plotBreakdown: string): string {
+    return plotBreakdown
+      .replace(/##\s*(?:改编规划|改编方向|改编策略|改编计划|Adaptation Plan)\s*\n[\s\S]*?(?=\n##\s*第|\n#\s*第|\n---\n|$)/gim, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+
   /**
    * 组装拆解 (breakdown) 的 Prompt
    */
@@ -100,8 +112,11 @@ export class AdaptPromptAssembler {
     ].join('\n'))
 
     // 8. 已有拆解内容（上下文参考）
+    let extractedPlan = ''
     if (inputs.plotBreakdown) {
-      userParts.push(`\n---\n\n# 已有剧情拆解（上下文参考，确保编号连续、集数不冲突）\n\n${inputs.plotBreakdown}`)
+      extractedPlan = this.extractLatestPlanSection(inputs.plotBreakdown)
+      const sanitizedBreakdown = this.stripPlanSections(inputs.plotBreakdown)
+      userParts.push(`\n---\n\n# 已有剧情拆解（上下文参考，确保编号连续、集数不冲突）\n\n${sanitizedBreakdown}`)
     }
 
     // 8.5. 用户指导笔记（最高优先级）
@@ -111,7 +126,26 @@ export class AdaptPromptAssembler {
       )
     }
 
-    // 9. 小说原文（核心输入）
+    // 9. 全卷改编规划大纲与节奏指导（核心骨架）
+    if (volumePlan && (volumePlan.chapterAllocation || volumePlan.additionalNotes || volumePlan.llmPlan)) {
+      const planParts = []
+      if (volumePlan.llmPlan) planParts.push(`【全局改编大纲】：\n${volumePlan.llmPlan}`)
+      if (volumePlan.chapterAllocation) planParts.push(`【章集分配原则】：\n${volumePlan.chapterAllocation}`)
+      if (volumePlan.additionalNotes) planParts.push(`【其他特殊要求】：\n${volumePlan.additionalNotes}`)
+      userParts.push(
+        `\n---\n\n# 🗺️ 顶层改编规划与战略大纲（拆解时必须严格贯彻，不可偏离）\n\n` +
+        `在进行本批次的拆解时，必须要时刻参照以下全卷宏观规划，决定当前章节中哪些应该着重保留，哪些属于注水应被抛弃，以确保全卷节奏的连贯度：\n\n` +
+        planParts.join('\n\n')
+      )
+    } else if (extractedPlan) {
+      userParts.push(
+        `\n---\n\n# 🗺️ 顶层改编规划与战略大纲（拆解时必须严格贯彻，不可偏离）\n\n` +
+        `在进行本批次的拆解时，必须要时刻参照以下全卷宏观规划大纲。所有提取的剧情点、爽点反馈、以及集数分配都必须与该规划强一致，不得任性发挥：\n\n` +
+        extractedPlan
+      )
+    }
+
+    // 10. 小说原文（核心输入）
     if (inputs.novelChapters && inputs.novelChapters.length > 0) {
       const chapterTexts = inputs.novelChapters
         .map(ch => `## 第${ch.chapter}章\n\n${ch.content}`)
@@ -119,15 +153,25 @@ export class AdaptPromptAssembler {
       userParts.push(`\n---\n\n# 本批次小说原文（请逐章阅读后拆解）\n\n${chapterTexts}`)
     }
 
-    // 10. 执行指令（从 volumePlan 动态读取参数）
-    const wordRange = volumePlan ? `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}` : '1500-2000'
-    const plotRange = volumePlan ? `${volumePlan.plotsPerEpisode[0]}-${volumePlan.plotsPerEpisode[1]}` : '3-4'
+    // 11. 执行指令（从 volumePlan 动态读取参数）
+    let plotRange = '3-4'
+    let wordRange = '1500-2000'
+    let rangeRule = `- 每集 ${plotRange} 个剧情点，${wordRange} 字\n`
+    
+    if (volumePlan) {
+      plotRange = `${volumePlan.plotsPerEpisode[0]}-${volumePlan.plotsPerEpisode[1]}`
+      wordRange = `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}`
+      rangeRule = `- 每集 ${plotRange} 个剧情点，${wordRange} 字\n`
+    } else if (extractedPlan) {
+      rangeRule = `- 💡 智能自适应参数：请根据以上的《改编规划》中设定的切割方案灵活决定每集提取几个核心剧情点（通常 4-8 个），**不必**拘泥于固定的数量或死板字数限制。\n`
+    }
+
     userParts.push(
       `\n---\n\n❗执行指令：请阅读以上 ${inputs.novelChapters?.length || 6} 章小说原文，按照改编方法论和拆解模板格式，提取核心冲突和情绪钩子（≥7分才提取），生成剧情点列表并标注分集。\n\n` +
       `要求：\n` +
       `- 编号必须紧接已有剧情点（如已有到【剧情30】则从【剧情31】开始）\n` +
       `- 集数必须紧接已有集数\n` +
-      `- 每集 ${plotRange} 个剧情点，${wordRange} 字\n` +
+      rangeRule +
       `- 状态默认为"未用"\n` +
       `- 输出格式：### 第X批（第X-X章）然后【剧情n】...`
     )
@@ -217,7 +261,31 @@ export class AdaptPromptAssembler {
       )
     }
 
-    // 10. 小说原文
+    // 10. 全卷改编规划大纲与节奏指导（核心骨架）
+    let extractedPlan = ''
+    if (inputs.plotBreakdown) {
+      extractedPlan = this.extractLatestPlanSection(inputs.plotBreakdown)
+    }
+
+    if (volumePlan && (volumePlan.chapterAllocation || volumePlan.additionalNotes || volumePlan.llmPlan)) {
+      const planParts = []
+      if (volumePlan.llmPlan) planParts.push(`【全局改编大纲】：\n${volumePlan.llmPlan}`)
+      if (volumePlan.chapterAllocation) planParts.push(`【章集分配原则】：\n${volumePlan.chapterAllocation}`)
+      if (volumePlan.additionalNotes) planParts.push(`【其他特殊要求】：\n${volumePlan.additionalNotes}`)
+      userParts.push(
+        `\n---\n\n# 🗺️ 顶层改编规划与战略大纲（创作必然要参考的核心航标）\n\n` +
+        `在创作这几集剧本时，你需要让故事走向、铺垫和打脸的爽点分布符合以下总体规划的要求（若本批次拆解与规划有冲突以规划纲要的节奏为准）：\n\n` +
+        planParts.join('\n\n')
+      )
+    } else if (extractedPlan) {
+      userParts.push(
+        `\n---\n\n# 🗺️ 顶层改编规划与战略大纲（创作必然要参考的核心航标）\n\n` +
+        `在创作这几集剧本时，你需要让故事走向、铺垫和打脸的爽点分布符合以下总体规划的要求（若本批次拆解与规划有冲突以规划纲要的节奏为准）：\n\n` +
+        extractedPlan
+      )
+    }
+
+    // 11. 小说原文
     if (inputs.novelChapters && inputs.novelChapters.length > 0) {
       const chapterTexts = inputs.novelChapters
         .map(ch => `## 第${ch.chapter}章\n\n${ch.content}`)
@@ -225,15 +293,26 @@ export class AdaptPromptAssembler {
       userParts.push(`\n---\n\n# 对应章节小说原文（创作参考）\n\n${chapterTexts}`)
     }
 
-    // 11. 执行指令（从 volumePlan 动态读取参数）
-    const wordRange = volumePlan ? `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}` : '1500-2000'
-    const sceneRange = volumePlan ? `${volumePlan.scenesPerEpisode[0]}-${volumePlan.scenesPerEpisode[1]}` : '3-4'
-    const seedanceRange = volumePlan ? `${volumePlan.seedancePerEpisode[0]}-${volumePlan.seedancePerEpisode[1]}` : '9-12'
+    // 12. 执行指令（从 volumePlan 动态读取参数）
+    let wordRange = '1500-2000'
+    let sceneRange = '3-4'
+    let seedanceRange = '9-12'
+    let rangeRule = `- 每集 ${wordRange} 字，${sceneRange} 个场景，${seedanceRange} 个 Seedance 段\n`
+
+    if (volumePlan) {
+      wordRange = `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}`
+      sceneRange = `${volumePlan.scenesPerEpisode[0]}-${volumePlan.scenesPerEpisode[1]}`
+      seedanceRange = `${volumePlan.seedancePerEpisode[0]}-${volumePlan.seedancePerEpisode[1]}`
+      rangeRule = `- 每集 ${wordRange} 字，${sceneRange} 个场景，${seedanceRange} 个 Seedance 段\n`
+    } else if (extractedPlan) {
+       rangeRule = `- 💡 智能自适应参数：不要拘泥于固定死板的字数和场景数，请根据《改编规划》的纲要充分燃烧情绪与爽点！\n`
+    }
+
     const epList = targetEpisodes.map(e => `第${e}集`).join('、')
     userParts.push(
       `\n---\n\n❗执行指令：请基于以上剧情点和小说原文，创作 ${epList} 的完整剧本。\n\n` +
       `要求：\n` +
-      `- 每集 ${wordRange} 字，${sceneRange} 个场景，${seedanceRange} 个 Seedance 段\n` +
+      rangeRule +
       `- 使用视觉描述符号：※场景、△动作、【特效】【音效】【系统面板】【独白】【闪回】\n` +
       `- 对话不超过 20 字/句\n` +
       `- 每集必须以【卡黑】结尾\n` +
@@ -262,7 +341,8 @@ export class AdaptPromptAssembler {
     antibiasPrompt: string,
     breakdownOutput: string,
     novelChaptersText: string,
-    adaptMethodContent: string
+    adaptMethodContent: string,
+    globalPlan?: string
   ): AssembledPrompt {
     const BREAKDOWN_REVIEW_CHECKLIST = `
 # 拆解质检清单（8维度 · breakdown-aligner）
@@ -289,9 +369,9 @@ export class AdaptPromptAssembler {
 - 基准：adapt-method.md → 三+四
 
 **【维度4】分集标注合理性**
-- 每集3-4个剧情点（灵活掌握），集数由内容密度动态决定
+- 如果存在项目《改编规划》，集数容量（几章为1集）必须完全服从规划设定的节奏！
+- 如果没有特殊强调，依据内容密度灵活决定（通常4-8个剧情点一集）。
 - 巅峰钩子（10-9分）2-3个/集；核心钩子（8-7分）3-4个/集
-- 每集字数估算1500-2000字范围
 - 基准：adapt-method.md → 五、剧情拆解与分集标注
 
 **【维度5】压缩策略正确性**
@@ -330,8 +410,9 @@ export class AdaptPromptAssembler {
       user: [
         `# 待审核的剧情拆解\n\n${breakdownOutput}`,
         `\n---\n\n# 对应章节小说原文（必须逐条对比）\n\n${novelChaptersText}`,
+        globalPlan ? `\n---\n\n# 🗺️ 项目顶层改编规划（必须验证拆解结果是否符合该战略定调与集数节奏控制！）\n\n${globalPlan}` : '',
         `\n---\n\n${BREAKDOWN_REVIEW_CHECKLIST}`
-      ].join('\n\n')
+      ].filter(Boolean).join('\n\n')
     }
   }
 
@@ -349,7 +430,8 @@ export class AdaptPromptAssembler {
     novelChaptersText: string,
     adaptMethodContent?: string,
     previousScript?: string,
-    targetEpisodes?: number[]
+    targetEpisodes?: number[],
+    globalPlan?: string
   ): AssembledPrompt {
     const SCRIPT_REVIEW_CHECKLIST = `
 # 剧本质检清单（11维度 · webtoon-aligner）
@@ -367,9 +449,8 @@ export class AdaptPromptAssembler {
 - 时间/空间/情节逻辑衔接
 
 **【维度4】节奏控制一致性**
-- 每集1500-2000字
-- 3-4个场景
-- 9-12个Seedance段
+- 如果存在顶层《改编规划》，剧本容量、爆点频率和节奏分配必须优先服从战略节奏！
+- （若无全局规划限制）参考标准：每集1500-2000字，3-4个场景，9-12个Seedance段
 - 25-40条△动作描写
 - 15-25句台词
 - 起承转钩结构
@@ -423,8 +504,9 @@ export class AdaptPromptAssembler {
     const userParts = [
       `# 待审核的剧本\n\n${scriptOutput}`,
       `\n---\n\n# 剧情拆解（对照用）\n\n${plotBreakdown}`,
+      globalPlan ? `\n---\n\n# 🗺️ 项目顶层改编规划（质检必须严查剧本是否兑现了这些核心卖点、冲突与节奏设定！）\n\n${globalPlan}` : '',
       `\n---\n\n# 对应章节小说原文（对照用）\n\n${novelChaptersText}`
-    ]
+    ].filter(Boolean)
 
     // [DA-3] 上一集剧本（跨集连贯性）
     if (previousScript) {
@@ -438,5 +520,158 @@ export class AdaptPromptAssembler {
       user: userParts.join('\n\n')
     }
   }
-}
 
+  /**
+   * 组装拆解修订 (breakdown repair) 的 Prompt
+   * 用于在质检 FAIL 后，根据问题清单进行有约束的自修
+   */
+  assembleBreakdownRepair(
+    skill: Skill,
+    roleDeclaration: string,
+    breakdownOutput: string,
+    novelChaptersText: string,
+    reviewFeedback: string,
+    projectContext: AdaptProjectContext,
+    volumePlan?: VolumePlan | null,
+    userNotes?: string
+  ): AssembledPrompt {
+    const systemParts: string[] = []
+    const userParts: string[] = []
+
+    // 1. 角色 + 方法论 + 规范
+    systemParts.push(roleDeclaration)
+    if (skill.methodology) {
+      systemParts.push(`\n---\n\n# 改编方法论\n\n${skill.methodology}`)
+    }
+    systemParts.push(`\n---\n\n# 技能规范\n\n${skill.systemPrompt}`)
+    if (skill.guides?.['output-style']) {
+      systemParts.push(`\n---\n\n# 写作风格\n\n${skill.guides['output-style']}`)
+    }
+
+    // 2. 项目信息
+    userParts.push([
+      `# 小说信息`,
+      ``,
+      `- 小说名称：《${projectContext.novelTitle}》`,
+      `- 小说类型：${projectContext.novelGenre}`,
+      `- 总章节：${projectContext.totalChapters} 章`,
+      `- 已拆解：${projectContext.processedChapters} 章`,
+      `- 当前批次：第 ${projectContext.currentBatch} 批`
+    ].join('\n'))
+
+    // 3. 用户指导笔记
+    if (userNotes) {
+      userParts.push(`\n---\n\n# 📝 用户指导笔记（必须严格遵守，优先级最高）\n\n${userNotes}`)
+    }
+
+    // 4. 上一轮拆解输出
+    userParts.push(`\n---\n\n# 上一轮拆解输出（待修订）\n\n${breakdownOutput}`)
+
+    // 5. 对应章节原文
+    userParts.push(`\n---\n\n# 对应章节小说原文（请逐条对比修订）\n\n${novelChaptersText}`)
+
+    // 6. 质检问题反馈
+    userParts.push(
+      `\n---\n\n# 上一轮质检问题反馈（必须全部解决）\n\n${reviewFeedback}`
+    )
+
+    // 7. 修订指令
+    const wordRange = volumePlan ? `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}` : '1500-2000'
+    const plotRange = volumePlan ? `${volumePlan.plotsPerEpisode[0]}-${volumePlan.plotsPerEpisode[1]}` : '3-4'
+    userParts.push(
+      `\n---\n\n❗修订指令：在尽量保留上一版拆解中已正确的结构和编号的前提下，仅针对质检反馈指出的问题进行精确修订。\n\n` +
+      `要求：\n` +
+      `- 必须逐条解决反馈中提到的所有问题，不得遗漏\n` +
+      `- 不能随意丢弃已有的高质量剧情点，只在必要时合并或重写\n` +
+      `- 保持编号连续性和分集规划稳定，每集仍保持 ${plotRange} 个剧情点，${wordRange} 字左右\n` +
+      `- 避免引入新的逻辑错误或类型不匹配问题（以改编方法论和质检清单为基准）`
+    )
+
+    return {
+      system: systemParts.join('\n\n'),
+      user: userParts.join('\n\n')
+    }
+  }
+
+  /**
+   * 组装剧本修订 (script repair) 的 Prompt
+   * 用于在剧本质检 FAIL 后执行有约束的自修
+   */
+  assembleScriptRepair(
+    skill: Skill,
+    roleDeclaration: string,
+    scriptOutput: string,
+    plotBreakdown: string,
+    novelChaptersText: string,
+    reviewFeedback: string,
+    projectContext: AdaptProjectContext,
+    targetEpisodes: number[],
+    previousScript?: string,
+    volumePlan?: VolumePlan | null,
+    userNotes?: string
+  ): AssembledPrompt {
+    const systemParts: string[] = []
+    const userParts: string[] = []
+
+    // 1. 角色 + 方法论 + 规范 + 风格
+    systemParts.push(roleDeclaration)
+    if (skill.methodology) {
+      systemParts.push(`\n---\n\n# 改编方法论\n\n${skill.methodology}`)
+    }
+    systemParts.push(`\n---\n\n# 技能规范\n\n${skill.systemPrompt}`)
+    if (skill.guides?.['output-style']) {
+      systemParts.push(`\n---\n\n# 视觉化快节奏写作风格\n\n${skill.guides['output-style']}`)
+    }
+
+    // 2. 项目信息
+    const epList = targetEpisodes.map(e => `第${e}集`).join('、')
+    userParts.push([
+      `# 小说信息`,
+      ``,
+      `- 小说名称：《${projectContext.novelTitle}》`,
+      `- 小说类型：${projectContext.novelGenre}`,
+      `- 本次修订集数：${epList}`
+    ].join('\n'))
+
+    // 3. 用户指导笔记
+    if (userNotes) {
+      userParts.push(`\n---\n\n# 📝 用户指导笔记（必须严格遵守，优先级最高）\n\n${userNotes}`)
+    }
+
+    // 4. 上一版剧本
+    userParts.push(`\n---\n\n# 上一版剧本输出（待修订）\n\n${scriptOutput}`)
+
+    // 5. 剧情拆解
+    userParts.push(`\n---\n\n# 对应剧情拆解（对照用）\n\n${plotBreakdown}`)
+
+    // 6. 小说原文
+    userParts.push(`\n---\n\n# 对应章节小说原文（对照用）\n\n${novelChaptersText}`)
+
+    // 7. 上一集剧本（跨集连贯性）
+    if (previousScript) {
+      userParts.push(`\n---\n\n# 上一集剧本（跨集连贯性对照）\n\n${previousScript}`)
+    }
+
+    // 8. 质检问题反馈
+    userParts.push(`\n---\n\n# 上一轮质检问题反馈（必须全部解决）\n\n${reviewFeedback}`)
+
+    // 9. 修订指令
+    const wordRange = volumePlan ? `${volumePlan.episodeWordCount[0]}-${volumePlan.episodeWordCount[1]}` : '1500-2000'
+    const sceneRange = volumePlan ? `${volumePlan.scenesPerEpisode[0]}-${volumePlan.scenesPerEpisode[1]}` : '3-4'
+    const seedanceRange = volumePlan ? `${volumePlan.seedancePerEpisode[0]}-${volumePlan.seedancePerEpisode[1]}` : '9-12'
+    userParts.push(
+      `\n---\n\n❗修订指令：在保留上一版剧本中已正确的结构、节奏和高质量桥段的前提下，仅针对质检反馈指出的问题进行精准修订。\n\n` +
+      `要求：\n` +
+      `- 必须逐条解决反馈中的所有问题，不得只做表面修改\n` +
+      `- 尽量保持场景数量、Seedance 段数量和字数与规划一致（每集 ${wordRange} 字，${sceneRange} 个场景，${seedanceRange} 个 Seedance 段）\n` +
+      `- 保持人物行为和时间线逻辑稳定，只在必要时重写局部以修复问题\n` +
+      `- 继续使用※△【】等视觉化符号，确保每集以【卡黑】结尾\n` +
+      `- 修订完成后请直接给出新的完整剧本正文，不要输出质检报告`
+    )
+
+    return {
+      system: systemParts.join('\n\n'),
+      user: userParts.join('\n\n')
+    }
+  }
+}

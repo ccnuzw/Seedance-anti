@@ -1,9 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { IPC } from '@shared/ipc-channels'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import type { ThemeMode, ZoomLevel, SidebarWidth } from '@renderer/stores/settingsStore'
+import { platformAPI } from '@renderer/platform/api'
+import {
+  getWebTransportConfig,
+  probeWebTransportConfig,
+  resetWebTransportConfig,
+  saveWebTransportConfig,
+  type WebTransportMode
+} from '@renderer/platform/webTransport'
 import { useToastStore } from '@renderer/stores/toastStore'
-import type { LLMConfig, LLMProviderType, ModelCategory } from '@shared/types'
+import type { AppDeliveryStatus, LLMConfig, LLMProviderType, ModelCategory } from '@shared/types'
 import './SettingsPage.css'
 
 const PROVIDER_OPTIONS: { value: LLMProviderType; label: string }[] = [
@@ -52,6 +60,10 @@ const CATEGORY_TABS: { value: ModelCategory; label: string; emoji: string; desc:
   { value: 'video', label: '视频生成', emoji: '🎬', desc: 'AI 生视频模型', color: 'purple' }
 ]
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export default function SettingsPage() {
   const { llmConfigs, loadLLMConfigs, addLLMConfig, deleteLLMConfig, setDefaultLLM, updateLLMConfig, appSettings, updateAppSettings, resetAppSettings } = useSettingsStore()
   const { addToast } = useToastStore()
@@ -64,6 +76,18 @@ export default function SettingsPage() {
   const [cardTestResult, setCardTestResult] = useState<Record<string, { success: boolean; message: string }>>({})
   const [fetchingModels, setFetchingModels] = useState(false)
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
+  const [appVersion, setAppVersion] = useState('0.1.0')
+  const [deliveryStatus, setDeliveryStatus] = useState<AppDeliveryStatus | null>(null)
+  const [exportingDeliveryReport, setExportingDeliveryReport] = useState(false)
+  const [webTransportMode, setWebTransportMode] = useState<WebTransportMode>('browser-local')
+  const [webTransportBaseUrl, setWebTransportBaseUrl] = useState('')
+  const [webTransportInvokePath, setWebTransportInvokePath] = useState('/api/platform/invoke')
+  const [webTransportEventsPath, setWebTransportEventsPath] = useState('/api/platform/events')
+  const [testingTransport, setTestingTransport] = useState(false)
+  const [transportTestMessage, setTransportTestMessage] = useState<string | null>(null)
+  const fetchModelsTokenRef = useRef(0)
+  const formTestTokenRef = useRef(0)
+  const cardTestTokenRef = useRef(0)
 
   const [form, setForm] = useState({
     name: '',
@@ -77,23 +101,65 @@ export default function SettingsPage() {
     isDefault: true
   })
 
+  const resetFormAsyncState = () => {
+    fetchModelsTokenRef.current += 1
+    formTestTokenRef.current += 1
+    setFetchingModels(false)
+    setTesting(false)
+    setAvailableModels([])
+    setTestResult(null)
+  }
+
   useEffect(() => {
-    loadLLMConfigs()
-  }, [])
+    let active = true
+    const transportConfig = getWebTransportConfig()
+    setWebTransportMode(transportConfig.mode)
+    setWebTransportBaseUrl(transportConfig.baseUrl)
+    setWebTransportInvokePath(transportConfig.invokePath)
+    setWebTransportEventsPath(transportConfig.eventsPath)
+    loadLLMConfigs().then((loaded) => {
+      if (active && !loaded) {
+        addToast('warning', '模型列表加载失败')
+      }
+    })
+    platformAPI.invoke(IPC.APP_GET_VERSION)
+      .then((version) => setAppVersion(String(version || '0.1.0')))
+      .catch(() => setAppVersion('0.1.0'))
+    platformAPI.invoke(IPC.APP_GET_DELIVERY_STATUS)
+      .then((status) => {
+        if (active) setDeliveryStatus(status as AppDeliveryStatus)
+      })
+      .catch(() => {
+        if (active) setDeliveryStatus(null)
+      })
+    return () => {
+      active = false
+      resetFormAsyncState()
+      cardTestTokenRef.current += 1
+      setTestingCardId(null)
+    }
+  }, [loadLLMConfigs, addToast])
 
   const handleProviderChange = (provider: LLMProviderType) => {
+    resetFormAsyncState()
     setForm({ ...form, provider, baseUrl: DEFAULT_URLS[provider] })
-    setAvailableModels([])
   }
 
   const handleFetchModels = async () => {
     if (!form.apiKey || !form.baseUrl) return
+    const requestToken = ++fetchModelsTokenRef.current
     setFetchingModels(true)
     setAvailableModels([])
     try {
-      const result = await window.feicaiAPI.invoke(IPC.LLM_LIST_MODELS, form.baseUrl, form.apiKey) as {
+      const result = await platformAPI.invoke(
+        IPC.LLM_LIST_MODELS,
+        form.baseUrl,
+        form.apiKey,
+        form.provider
+      ) as {
         success: boolean; models: ModelInfo[]; message: string
       }
+      if (fetchModelsTokenRef.current !== requestToken) return
       if (result.success) {
         setAvailableModels(result.models)
         addToast('success', result.message)
@@ -103,44 +169,64 @@ export default function SettingsPage() {
       } else {
         addToast('error', result.message)
       }
-    } catch {
-      addToast('error', '获取模型列表失败')
+    } catch (e) {
+      if (fetchModelsTokenRef.current === requestToken) {
+        addToast('error', `获取模型列表失败：${getErrorMessage(e)}`)
+      }
     }
-    setFetchingModels(false)
+    if (fetchModelsTokenRef.current === requestToken) {
+      setFetchingModels(false)
+    }
   }
 
   const handleTestConnection = async () => {
+    const requestToken = ++formTestTokenRef.current
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await window.feicaiAPI.invoke(IPC.LLM_TEST_CONNECTION, form) as {
+      const result = await platformAPI.invoke(IPC.LLM_TEST_CONNECTION, form) as {
         success: boolean; message: string
       }
+      if (formTestTokenRef.current !== requestToken) return
       setTestResult(result)
       addToast(result.success ? 'success' : 'error', result.message)
-    } catch {
-      const failResult = { success: false, message: '测试失败：无法连接' }
+    } catch (e) {
+      if (formTestTokenRef.current !== requestToken) return
+      const failResult = { success: false, message: `测试失败：${getErrorMessage(e)}` }
       setTestResult(failResult)
       addToast('error', failResult.message)
     }
-    setTesting(false)
+    if (formTestTokenRef.current === requestToken) {
+      setTesting(false)
+    }
   }
 
   const handleSave = async () => {
-    if (editingId) {
-      await updateLLMConfig(editingId, form)
-      addToast('success', `模型「${form.name}」已更新`)
-    } else {
-      await addLLMConfig(form)
-      addToast('success', `模型「${form.name}」已保存`)
+    try {
+      if (editingId) {
+        const refreshed = await updateLLMConfig(editingId, form)
+        addToast(refreshed ? 'success' : 'warning', refreshed
+          ? `模型「${form.name}」已更新`
+          : `模型「${form.name}」已更新，但模型列表刷新失败`)
+      } else {
+        const result = await addLLMConfig(form)
+        addToast(result.refreshed ? 'success' : 'warning', result.refreshed
+          ? `模型「${form.name}」已保存`
+          : `模型「${form.name}」已保存，但模型列表刷新失败`)
+      }
+    } catch (e) {
+      addToast('error', `保存失败：${e instanceof Error ? e.message : String(e)}`)
+      return
     }
     setShowForm(false)
     setEditingId(null)
     setForm({ ...form, name: '', apiKey: '', model: '' })
     setAvailableModels([])
+    setTestResult(null)
   }
 
   const handleEdit = (config: LLMConfig) => {
+    resetFormAsyncState()
     setForm({
       name: config.name,
       category: config.category,
@@ -154,46 +240,85 @@ export default function SettingsPage() {
     })
     setEditingId(config.id)
     setShowForm(true)
-    setAvailableModels([])
-    setTestResult(null)
   }
 
   const handleCancel = () => {
     setShowForm(false)
     setEditingId(null)
+    resetFormAsyncState()
     setForm({ name: '', category: activeCategory, provider: 'openai-compatible', baseUrl: DEFAULT_URLS['openai-compatible'], apiKey: '', model: '', maxTokens: 8192, temperature: 0.7, isDefault: true })
-    setAvailableModels([])
-    setTestResult(null)
+  }
+
+  const handleExportDeliveryReport = async () => {
+    setExportingDeliveryReport(true)
+    try {
+      const result = await platformAPI.invoke(IPC.APP_EXPORT_DELIVERY_REPORT) as {
+        filePath: string
+        status: AppDeliveryStatus
+      }
+      setDeliveryStatus(result.status)
+      addToast('success', `交付诊断已导出：${result.filePath}`)
+    } catch (error) {
+      addToast('error', `交付诊断导出失败：${getErrorMessage(error)}`)
+    } finally {
+      setExportingDeliveryReport(false)
+    }
   }
 
   const handleCategoryChange = (cat: ModelCategory) => {
     setActiveCategory(cat)
     setShowForm(false)
     setEditingId(null)
+    resetFormAsyncState()
     setForm({ name: '', category: cat, provider: 'openai-compatible', baseUrl: DEFAULT_URLS['openai-compatible'], apiKey: '', model: '', maxTokens: 8192, temperature: 0.7, isDefault: true })
-    setAvailableModels([])
-    setTestResult(null)
   }
 
   const handleAddNew = () => {
-    setForm(prev => ({ ...prev, category: activeCategory }))
+    resetFormAsyncState()
+    setEditingId(null)
+    setForm({
+      name: '',
+      category: activeCategory,
+      provider: 'openai-compatible',
+      baseUrl: DEFAULT_URLS['openai-compatible'],
+      apiKey: '',
+      model: '',
+      maxTokens: 8192,
+      temperature: 0.7,
+      isDefault: true
+    })
     setShowForm(true)
   }
 
   const filteredConfigs = llmConfigs.filter(c => (c.category || 'llm') === activeCategory)
   const activeTab = CATEGORY_TABS.find(t => t.value === activeCategory)!
+  const supportsModelListing = form.provider === 'openai' || form.provider === 'openai-compatible'
+  const isWebPreview = platformAPI.isWebPreview
 
   const handleDelete = async (id: string) => {
-    await deleteLLMConfig(id)
-    addToast('info', '模型已删除')
+    try {
+      const refreshed = await deleteLLMConfig(id)
+      addToast(refreshed ? 'info' : 'warning', refreshed
+        ? '模型已删除'
+        : '模型已删除，但模型列表刷新失败')
+    } catch (e) {
+      addToast('error', `删除失败：${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   const handleSetDefault = async (id: string) => {
-    await setDefaultLLM(id)
-    addToast('success', '已设为默认模型')
+    try {
+      const refreshed = await setDefaultLLM(id)
+      addToast(refreshed ? 'success' : 'warning', refreshed
+        ? '已设为默认模型'
+        : '已设为默认模型，但模型列表刷新失败')
+    } catch (e) {
+      addToast('error', `设置默认失败：${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   const handleCardTest = async (config: LLMConfig) => {
+    const requestToken = ++cardTestTokenRef.current
     setTestingCardId(config.id)
     // 清除该卡片之前的测试结果
     setCardTestResult(prev => {
@@ -202,17 +327,21 @@ export default function SettingsPage() {
       return next
     })
     try {
-      const result = await window.feicaiAPI.invoke(IPC.LLM_TEST_CONNECTION, config) as {
+      const result = await platformAPI.invoke(IPC.LLM_TEST_CONNECTION, config) as {
         success: boolean; message: string
       }
+      if (cardTestTokenRef.current !== requestToken) return
       setCardTestResult(prev => ({ ...prev, [config.id]: result }))
       addToast(result.success ? 'success' : 'error', result.message)
-    } catch {
-      const failResult = { success: false, message: '测试失败：无法连接' }
+    } catch (e) {
+      if (cardTestTokenRef.current !== requestToken) return
+      const failResult = { success: false, message: `测试失败：${getErrorMessage(e)}` }
       setCardTestResult(prev => ({ ...prev, [config.id]: failResult }))
       addToast('error', failResult.message)
     }
-    setTestingCardId(null)
+    if (cardTestTokenRef.current === requestToken) {
+      setTestingCardId(null)
+    }
   }
 
   const handleResetSettings = () => {
@@ -221,8 +350,129 @@ export default function SettingsPage() {
     addToast('success', '外观设置已恢复默认')
   }
 
+  const handleSaveWebTransport = async () => {
+    const saved = saveWebTransportConfig({
+      mode: webTransportMode,
+      baseUrl: webTransportBaseUrl,
+      invokePath: webTransportInvokePath,
+      eventsPath: webTransportEventsPath
+    })
+    setWebTransportMode(saved.mode)
+    setWebTransportBaseUrl(saved.baseUrl)
+    setWebTransportInvokePath(saved.invokePath)
+    setWebTransportEventsPath(saved.eventsPath)
+    setTransportTestMessage(`已保存为 ${saved.mode === 'remote-http' ? '远程 HTTP' : '浏览器本地'} 模式`)
+    addToast('success', 'Web transport 配置已保存')
+    const [version, status] = await Promise.all([
+      platformAPI.invoke(IPC.APP_GET_VERSION).catch(() => appVersion),
+      platformAPI.invoke(IPC.APP_GET_DELIVERY_STATUS).catch(() => deliveryStatus)
+    ])
+    setAppVersion(String(version || '0.1.0'))
+    if (status) setDeliveryStatus(status as AppDeliveryStatus)
+  }
+
+  const handleTestWebTransport = async () => {
+    setTestingTransport(true)
+    setTransportTestMessage(null)
+    const result = await probeWebTransportConfig({
+      mode: webTransportMode,
+      baseUrl: webTransportBaseUrl,
+      invokePath: webTransportInvokePath,
+      eventsPath: webTransportEventsPath
+    })
+    setTransportTestMessage(result.message)
+    addToast(result.success ? 'success' : 'error', result.message)
+    setTestingTransport(false)
+  }
+
+  const handleResetWebTransport = () => {
+    const reset = resetWebTransportConfig()
+    setWebTransportMode(reset.mode)
+    setWebTransportBaseUrl(reset.baseUrl)
+    setWebTransportInvokePath(reset.invokePath)
+    setWebTransportEventsPath(reset.eventsPath)
+    setTransportTestMessage('已恢复浏览器本地模式')
+    addToast('info', 'Web transport 已恢复默认')
+  }
+
   return (
     <div className="settings">
+      {isWebPreview && (
+        <section className="card" style={{ marginBottom: 16, borderColor: 'var(--color-warning)' }}>
+          <h2 style={{ marginTop: 0 }}>网页预览说明</h2>
+          <p className="text-secondary" style={{ marginBottom: 8 }}>
+            当前页面会把模型配置保存到浏览器 `localStorage`，可用于前端预览和后续 web 适配联调。
+          </p>
+          <p className="text-secondary" style={{ marginBottom: 0 }}>
+            如果要测试第三方模型连接或拉取模型列表，建议优先使用同源代理；直接调用第三方接口通常会受 CORS 和密钥暴露限制。
+          </p>
+        </section>
+      )}
+      {isWebPreview && (
+        <section className="settings-section">
+          <div className="section-header">
+            <h2>🌐 Web Transport</h2>
+          </div>
+          <div className="card config-form">
+            <div className="form-grid">
+              <div className="form-group">
+                <label>运行模式</label>
+                <select
+                  className="input"
+                  value={webTransportMode}
+                  onChange={(e) => setWebTransportMode(e.target.value as WebTransportMode)}
+                >
+                  <option value="browser-local">浏览器本地</option>
+                  <option value="remote-http">远程 HTTP 后端</option>
+                </select>
+              </div>
+              <div className="form-group full-width">
+                <label>Base URL</label>
+                <input
+                  className="input"
+                  placeholder="例如 http://localhost:8787"
+                  value={webTransportBaseUrl}
+                  onChange={(e) => setWebTransportBaseUrl(e.target.value)}
+                  disabled={webTransportMode !== 'remote-http'}
+                />
+              </div>
+              <div className="form-group">
+                <label>Invoke Path</label>
+                <input
+                  className="input"
+                  value={webTransportInvokePath}
+                  onChange={(e) => setWebTransportInvokePath(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>Events Path</label>
+                <input
+                  className="input"
+                  value={webTransportEventsPath}
+                  onChange={(e) => setWebTransportEventsPath(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="text-secondary" style={{ marginTop: 8 }}>
+              当前 transport 能把现有 `platformAPI.invoke(channel, ...)` 映射到远程后端，无需重写页面层调用。最小后端已覆盖 APP / PROJECT / SCRIPT / PROMPT / EXPORT 主链路。
+            </div>
+            <div className="form-actions">
+              <button className="btn" onClick={handleTestWebTransport} disabled={testingTransport}>
+                {testingTransport ? '⏳ 测试中...' : '测试后端'}
+              </button>
+              <button className="btn" onClick={handleResetWebTransport}>
+                恢复默认
+              </button>
+              <button className="btn btn-primary" onClick={handleSaveWebTransport}>
+                保存 Transport
+              </button>
+              {transportTestMessage && (
+                <span className="text-secondary">{transportTestMessage}</span>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
       {/* ---- LLM 模型配置 ---- */}
       <section className="settings-section">
         <div className="section-header">
@@ -290,7 +540,10 @@ export default function SettingsPage() {
                 <input
                   className="input"
                   value={form.baseUrl}
-                  onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+                  onChange={(e) => {
+                    resetFormAsyncState()
+                    setForm({ ...form, baseUrl: e.target.value })
+                  }}
                 />
               </div>
               <div className="form-group full-width">
@@ -300,7 +553,10 @@ export default function SettingsPage() {
                   type="password"
                   placeholder="sk-..."
                   value={form.apiKey}
-                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                  onChange={(e) => {
+                    resetFormAsyncState()
+                    setForm({ ...form, apiKey: e.target.value })
+                  }}
                 />
               </div>
 
@@ -311,7 +567,10 @@ export default function SettingsPage() {
                   <select
                     className="input"
                     value={form.model}
-                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                    onChange={(e) => {
+                      setTestResult(null)
+                      setForm({ ...form, model: e.target.value })
+                    }}
                   >
                     <option value="">-- 选择模型 --</option>
                     {availableModels.map(m => (
@@ -325,19 +584,28 @@ export default function SettingsPage() {
                     className="input"
                     placeholder="e.g. gpt-5 或 claude-sonnet-4-20250514"
                     value={form.model}
-                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                    onChange={(e) => {
+                      setTestResult(null)
+                      setForm({ ...form, model: e.target.value })
+                    }}
                   />
                 )}
               </div>
               <div className="form-group">
                 <label>&nbsp;</label>
-                <button
-                  className="btn btn-sm"
-                  onClick={handleFetchModels}
-                  disabled={fetchingModels || !form.apiKey || !form.baseUrl}
-                >
-                  {fetchingModels ? '⏳ 获取中...' : '📋 获取模型列表'}
-                </button>
+                {supportsModelListing ? (
+                  <button
+                    className="btn btn-sm"
+                    onClick={handleFetchModels}
+                    disabled={fetchingModels || !form.apiKey || !form.baseUrl}
+                  >
+                    {fetchingModels ? '⏳ 获取中...' : '📋 获取模型列表'}
+                  </button>
+                ) : (
+                  <div className="text-secondary text-xs">
+                    当前 Provider 不支持自动拉取模型，请手动填写模型名
+                  </div>
+                )}
               </div>
             </div>
 
@@ -519,15 +787,46 @@ export default function SettingsPage() {
         <div className="card about-card">
           <div className="about-row">
             <span className="text-secondary">版本</span>
-            <span>v0.1.0</span>
+            <span>v{appVersion}</span>
+          </div>
+          <div className="about-row">
+            <span className="text-secondary">环境</span>
+            <span>{deliveryStatus?.packaged ? '正式包' : '开发环境'}</span>
           </div>
           <div className="about-row">
             <span className="text-secondary">框架</span>
             <span>Electron + React + Vite</span>
+          </div>
+          <div className="about-row">
+            <span className="text-secondary">交付评分</span>
+            <span>{deliveryStatus?.readiness.score ?? '--'}</span>
+          </div>
+          <div className="about-row">
+            <span className="text-secondary">UserData</span>
+            <span className="about-path">{deliveryStatus?.paths.userData || '--'}</span>
+          </div>
+          <div className="about-row">
+            <span className="text-secondary">数据库</span>
+            <span className="about-path">{deliveryStatus?.paths.database || '--'}</span>
+          </div>
+          <div className="about-row">
+            <span className="text-secondary">运行日志</span>
+            <span className="about-path">{deliveryStatus?.paths.runtimeLog || '--'}</span>
+          </div>
+          <div className="about-row">
+            <span className="text-secondary">最近错误</span>
+            <span>{deliveryStatus?.recentErrors.length || 0}</span>
+          </div>
+          <div className="about-actions">
+            <button className="btn btn-sm" onClick={() => window.location.assign('/')}>
+              返回仪表盘
+            </button>
+            <button className="btn btn-sm btn-primary" onClick={() => void handleExportDeliveryReport()} disabled={exportingDeliveryReport}>
+              {exportingDeliveryReport ? '导出中...' : '导出交付诊断'}
+            </button>
           </div>
         </div>
       </section>
     </div>
   )
 }
-

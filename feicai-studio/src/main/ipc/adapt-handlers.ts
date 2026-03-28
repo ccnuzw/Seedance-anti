@@ -2,16 +2,34 @@
 // Adapt Handlers — 编剧管线 IPC Handlers
 // ============================================================
 
-import { readdirSync, existsSync } from 'fs'
-import { join } from 'path'
 import { ipcMain, BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc-channels'
 import { AdaptStateMachine } from '../engine/adapt-state-machine'
 import { NovelManager } from '../engine/novel-manager'
 import { PlotBreakdownParser } from '../engine/plot-breakdown-parser'
 import { updateProjectPhase, syncEpisodesFromFilesystem } from '../db/queries'
-import { getDatabase } from '../db/database'
-import type { LLMConfig, AdaptPlan, VolumePlan } from '@shared/types'
+import type { LLMConfig, AdaptPlan, VolumePlan, AdaptSettings, ReviewPolicyConfig, FlowConfig } from '@shared/types'
+import { DEFAULT_ADAPT_SETTINGS, DEFAULT_REVIEW_POLICY, DEFAULT_FLOW_CONFIG } from '@shared/types'
+import { assertPathAccess, assertProjectPathAccess } from './path-access'
+import { readProjectConfigSync } from '../project/project-config-store'
+
+/** 从 project-config.json 读取 Adapt 设置 */
+function loadAdaptSettings(projectPath: string): AdaptSettings {
+  const config = readProjectConfigSync(projectPath)
+  return { ...DEFAULT_ADAPT_SETTINGS, ...(config?.adaptSettings || {}) }
+}
+
+/** 从 project-config.json 读取 ReviewPolicy + FlowConfig */
+function loadAdaptReviewAndFlow(projectPath: string): {
+  reviewPolicy: ReviewPolicyConfig
+  flowConfig: FlowConfig
+} {
+  const config = readProjectConfigSync(projectPath)
+  return {
+    reviewPolicy: { ...DEFAULT_REVIEW_POLICY, ...(config?.reviewPolicy || {}) },
+    flowConfig: { ...DEFAULT_FLOW_CONFIG, ...(config?.flowConfig || {}) }
+  }
+}
 
 let adaptMachine: AdaptStateMachine | null = null
 const novelManager = new NovelManager()
@@ -54,23 +72,23 @@ function getOrCreateMachine(skillsDir: string): AdaptStateMachine {
       try {
         updateProjectPhase(data.projectId, 'production')
         syncEpisodesFromFilesystem(data.projectId, data.projectPath, 0)
-
-        // 同步 totalEpisodes：扫描 script/ 目录计算实际集数
-        const scriptDir = join(data.projectPath, 'script')
-        if (existsSync(scriptDir)) {
-          const epFiles = readdirSync(scriptDir).filter((f: string) => /^ep\d+\.md$/.test(f))
-          if (epFiles.length > 0) {
-            const db = getDatabase()
-            db.prepare('UPDATE projects SET total_episodes = ?, updated_at = ? WHERE id = ?')
-              .run(epFiles.length, new Date().toISOString(), data.projectId)
-          }
-        }
       } catch (err) {
         console.error('[phaseUpgrade] 自动升级失败:', err)
       }
     })
   }
   return adaptMachine
+}
+
+function reloadEngineSettings(machine: AdaptStateMachine) {
+  const projectPath = machine.getContext().projectPath
+  if (projectPath) {
+    const as = loadAdaptSettings(projectPath)
+    const { reviewPolicy, flowConfig } = loadAdaptReviewAndFlow(projectPath)
+    machine.setSettings(as)
+    machine.setReviewPolicy(reviewPolicy)
+    machine.setFlowConfig(flowConfig)
+  }
 }
 
 export function registerAdaptHandlers(skillsDir: string): void {
@@ -80,76 +98,130 @@ export function registerAdaptHandlers(skillsDir: string): void {
     projectPath: string
     llmConfig: LLMConfig
   }) => {
-    const machine = getOrCreateMachine(skillsDir)
-    machine.setProvider(params.llmConfig)
-    await machine.start({
-      projectId: params.projectId,
-      projectPath: params.projectPath
-    })
-    return machine.getContext()
+    try {
+      const machine = getOrCreateMachine(skillsDir)
+      const safeProjectPath = assertProjectPathAccess(params.projectPath)
+      machine.setProvider(params.llmConfig)
+      // 加载项目级 Adapt 设置
+      const as = loadAdaptSettings(safeProjectPath)
+      const { reviewPolicy, flowConfig } = loadAdaptReviewAndFlow(safeProjectPath)
+      machine.setSettings(as)
+      machine.setReviewPolicy(reviewPolicy)
+      machine.setFlowConfig(flowConfig)
+      await machine.start({
+        projectId: params.projectId,
+        projectPath: safeProjectPath
+      })
+      return machine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // 执行拆解
   ipcMain.handle(IPC.ADAPT_BREAKDOWN, async (_e, params: {
     batchCount?: number
   }) => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.executeBreakdown(params?.batchCount || 1)
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.executeBreakdown(params?.batchCount || 1)
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // 执行剧本创作
   ipcMain.handle(IPC.ADAPT_SCRIPT, async (_e, params: {
     batchCount?: number
   }) => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.executeScript(params?.batchCount || 1)
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.executeScript(params?.batchCount || 1)
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // 全自动模式
   ipcMain.handle(IPC.ADAPT_AUTO, async () => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.executeAuto()
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.executeAuto()
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // 暂停
   ipcMain.handle(IPC.ADAPT_PAUSE, () => {
-    adaptMachine?.pause()
-    return adaptMachine?.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      adaptMachine.pause()
+      return { success: true }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // 中止
   ipcMain.handle(IPC.ADAPT_ABORT, () => {
-    adaptMachine?.abort()
-    return adaptMachine?.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      adaptMachine.abort()
+      return { success: true }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // 获取状态
   ipcMain.handle(IPC.ADAPT_GET_STATE, () => {
-    return adaptMachine?.getContext() || null
+    if (!adaptMachine) return null
+    // 防止串台
+    return adaptMachine.getContext()
   })
 
   // 获取进度状态（含水位）
   ipcMain.handle(IPC.ADAPT_GET_STATUS, async (_e, params: {
     projectPath: string
   }) => {
-    const novelInfo = await novelManager.getNovelInfo(params.projectPath)
+    const safeProjectPath = assertProjectPathAccess(params.projectPath)
+    const novelInfo = await novelManager.getNovelInfo(safeProjectPath)
     const totalChapters = novelInfo?.totalChapters || 0
     const waterLevel = await breakdownParser.getWaterLevelFromFile(
-      params.projectPath, totalChapters
+      safeProjectPath, totalChapters
     )
+
+    let state: string = 'adapt_idle'
+    if (adaptMachine) {
+      const ctx = adaptMachine.getContext()
+      if (ctx.projectPath === safeProjectPath) {
+        state = adaptMachine.getState()
+      }
+    }
+
     return {
       novelInfo,
       waterLevel,
-      state: adaptMachine?.getState() || 'adapt_idle'
+      state
     }
   })
 
   // 扫描小说
   ipcMain.handle(IPC.ADAPT_SCAN_NOVEL, async (_e, novelDir: string) => {
-    return novelManager.scanNovelDir(novelDir)
+    return novelManager.scanNovelDir(assertPathAccess(novelDir))
   })
 
   // ==================== 小说管理 ====================
@@ -159,12 +231,15 @@ export function registerAdaptHandlers(skillsDir: string): void {
     sourcePath: string
     projectPath: string
   }) => {
-    return novelManager.importNovel(params.sourcePath, params.projectPath)
+    return novelManager.importNovel(
+      assertPathAccess(params.sourcePath),
+      assertProjectPathAccess(params.projectPath)
+    )
   })
 
   // 扫描小说目录
   ipcMain.handle(IPC.NOVEL_SCAN, async (_e, novelDir: string) => {
-    return novelManager.scanNovelDir(novelDir)
+    return novelManager.scanNovelDir(assertPathAccess(novelDir))
   })
 
   // 读取章节
@@ -173,19 +248,23 @@ export function registerAdaptHandlers(skillsDir: string): void {
     startChapter: number
     count: number
   }) => {
-    return novelManager.readChapters(params.novelDir, params.startChapter, params.count)
+    return novelManager.readChapters(
+      assertPathAccess(params.novelDir),
+      params.startChapter,
+      params.count
+    )
   })
 
   // 获取小说信息
   ipcMain.handle(IPC.NOVEL_GET_INFO, async (_e, projectPath: string) => {
-    return novelManager.getNovelInfo(projectPath)
+    return novelManager.getNovelInfo(assertProjectPathAccess(projectPath))
   })
 
   // ==================== 剧情拆解 ====================
 
   // 获取拆解数据
   ipcMain.handle(IPC.PLOT_GET_BREAKDOWN, async (_e, projectPath: string) => {
-    return breakdownParser.parseFile(projectPath)
+    return breakdownParser.parseFile(assertProjectPathAccess(projectPath))
   })
 
   // 获取水位
@@ -193,7 +272,10 @@ export function registerAdaptHandlers(skillsDir: string): void {
     projectPath: string
     totalChapters: number
   }) => {
-    return breakdownParser.getWaterLevelFromFile(params.projectPath, params.totalChapters)
+    return breakdownParser.getWaterLevelFromFile(
+      assertProjectPathAccess(params.projectPath),
+      params.totalChapters
+    )
   })
 
   // ==================== P1 新增 ====================
@@ -205,40 +287,118 @@ export function registerAdaptHandlers(skillsDir: string): void {
     projectPath: string
     llmConfig: LLMConfig
   }) => {
-    const machine = getOrCreateMachine(skillsDir)
-    machine.setProvider(params.llmConfig)
-    await machine.initProject(params)
-    return { success: true }
+    try {
+      const machine = getOrCreateMachine(skillsDir)
+      const safeProjectPath = assertProjectPathAccess(params.projectPath)
+      machine.setProvider(params.llmConfig)
+      // 初始化阶段同样加载项目级 Adapt 设置（如果存在）
+      const as = loadAdaptSettings(safeProjectPath)
+      const { reviewPolicy, flowConfig } = loadAdaptReviewAndFlow(safeProjectPath)
+      machine.setSettings(as)
+      machine.setReviewPolicy(reviewPolicy)
+      machine.setFlowConfig(flowConfig)
+      await machine.initProject({ ...params, projectPath: safeProjectPath })
+      return { success: true }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [P1-6] 重新创作指定集
   ipcMain.handle(IPC.ADAPT_RE_SCRIPT, async (_e, params: {
     episodeNum: number
   }) => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.reCreateEpisode(params.episodeNum)
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.reCreateEpisode(params.episodeNum)
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
+  })
+
+  ipcMain.handle(IPC.ADAPT_GENERATE_EPISODE, async (_e, params: {
+    episodeNum: number
+  }) => {
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.generateEpisode(params.episodeNum)
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
+  })
+
+  ipcMain.handle(IPC.ADAPT_REBUILD_BREAKDOWN, async (_e, params: {
+    chapterStart?: number
+    chapterEnd?: number
+    episodeStart?: number
+    episodeEnd?: number
+  }) => {
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.rebuildBreakdown(params || {})
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [P1-7] 修正上批次
   ipcMain.handle(IPC.ADAPT_FIX, async () => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.fixLastBatch()
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      reloadEngineSettings(adaptMachine)
+      await adaptMachine.fixLastBatch()
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [P1-8] 手动拆解质检
   ipcMain.handle(IPC.ADAPT_CHECK_BREAKDOWN, async (_e, params: {
     batchNumber?: number
   }) => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    return adaptMachine.checkBreakdown(params?.batchNumber)
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      return adaptMachine.checkBreakdown(params?.batchNumber)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
+  })
+
+  // 手动剧本质检
+  ipcMain.handle(IPC.ADAPT_CHECK_SCRIPT, async (_e, params: {
+    episodeNum?: number
+  }) => {
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      return adaptMachine.checkScript(params?.episodeNum)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [P1-9] 智能下一步
   ipcMain.handle(IPC.ADAPT_SMART_NEXT, async () => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    return adaptMachine.smartNext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      return adaptMachine.smartNext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [DA-6] 内容修订
@@ -246,30 +406,50 @@ export function registerAdaptHandlers(skillsDir: string): void {
     episodeNum: number
     revisionNotes: string
   }) => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.reviseEpisode(params.episodeNum, params.revisionNotes)
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      await adaptMachine.reviseEpisode(params.episodeNum, params.revisionNotes)
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [DA-7] 独立拆解自动
   ipcMain.handle(IPC.ADAPT_BREAKDOWN_AUTO, async () => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.executeBreakdownAuto()
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      await adaptMachine.executeBreakdownAuto()
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [DA-7] 独立创作自动
   ipcMain.handle(IPC.ADAPT_SCRIPT_AUTO, async () => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.executeScriptAuto()
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      await adaptMachine.executeScriptAuto()
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // [DA-4] 改编规划
   ipcMain.handle(IPC.ADAPT_ENSURE_PLAN, async () => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.ensureAdaptPlan()
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      await adaptMachine.ensureAdaptPlan()
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // ==================== 改编规划管理 ====================
@@ -280,14 +460,14 @@ export function registerAdaptHandlers(skillsDir: string): void {
     plan: AdaptPlan
   }) => {
     const machine = getOrCreateMachine(skillsDir)
-    await machine.savePlan(params.projectPath, params.plan)
+    await machine.savePlan(assertProjectPathAccess(params.projectPath), params.plan)
     return { success: true }
   })
 
   // 加载改编规划
   ipcMain.handle(IPC.ADAPT_LOAD_PLAN, async (_e, projectPath: string) => {
     const machine = getOrCreateMachine(skillsDir)
-    return machine.loadPlan(projectPath)
+    return machine.loadPlan(assertProjectPathAccess(projectPath))
   })
 
   // LLM 辅助生成单卷规划
@@ -296,10 +476,16 @@ export function registerAdaptHandlers(skillsDir: string): void {
     volumePlan: VolumePlan
     llmConfig: LLMConfig
   }) => {
-    const machine = getOrCreateMachine(skillsDir)
-    machine.setProvider(params.llmConfig)
-    const result = await machine.generateVolumePlan(params.projectPath, params.volumePlan)
-    return { llmPlan: result }
+    try {
+      const machine = getOrCreateMachine(skillsDir)
+      const safeProjectPath = assertProjectPathAccess(params.projectPath)
+      machine.setProvider(params.llmConfig)
+      const result = await machine.generateVolumePlan(safeProjectPath, params.volumePlan)
+      return { llmPlan: result }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 
   // ==================== 用户笔记 & 质检干预 ====================
@@ -310,22 +496,27 @@ export function registerAdaptHandlers(skillsDir: string): void {
     notes: string
   }) => {
     const machine = getOrCreateMachine(skillsDir)
-    await machine.saveUserNotes(params.projectPath, params.notes)
+    await machine.saveUserNotes(assertProjectPathAccess(params.projectPath), params.notes)
     return { success: true }
   })
 
   // 加载用户指导笔记
   ipcMain.handle(IPC.ADAPT_LOAD_NOTES, async (_e, projectPath: string) => {
     const machine = getOrCreateMachine(skillsDir)
-    return machine.loadUserNotes(projectPath)
+    return machine.loadUserNotes(assertProjectPathAccess(projectPath))
   })
 
   // 用户提交质检修正指导
   ipcMain.handle(IPC.ADAPT_SUBMIT_GUIDANCE, async (_e, params: {
     guidance: string
   }) => {
-    if (!adaptMachine) throw new Error('编剧管线未初始化')
-    await adaptMachine.submitUserGuidance(params.guidance)
-    return adaptMachine.getContext()
+    try {
+      if (!adaptMachine) throw new Error('编剧管线未初始化')
+      await adaptMachine.submitUserGuidance(params.guidance)
+      return adaptMachine.getContext()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { error: msg }
+    }
   })
 }

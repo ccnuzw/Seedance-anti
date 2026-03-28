@@ -1,0 +1,91 @@
+.operation-status-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+}
+
+.operation-status-banner.is-busy {
+  position: relative;
+}
+
+.operation-status-banner.is-busy::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.8;
+  animation: operation-status-pulse 1.2s ease-in-out infinite;
+}
+
+.operation-status-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.operation-status-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.operation-status-message,
+.operation-status-time {
+  font-size: var(--font-size-xs);
+}
+
+.operation-status-time {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.operation-status-dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.operation-status-dismiss:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.operation-status-banner.tone-info {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-card));
+}
+
+.operation-status-banner.tone-success {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 8%, var(--color-bg-card));
+}
+
+.operation-status-banner.tone-warning {
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 10%, var(--color-bg-card));
+}
+
+.operation-status-banner.tone-error {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-bg-card));
+}
+
+@keyframes operation-status-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  50% { transform: scale(1.35); opacity: 0.9; }
+}

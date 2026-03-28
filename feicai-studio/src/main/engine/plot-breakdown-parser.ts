@@ -7,6 +7,7 @@
 import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
 import type { PlotPoint, WaterLevel } from '@shared/types'
+import { getExistingScriptEpisodeSet } from '../project/script-file-utils'
 
 /** 剧情点匹配正则：【剧情N】场景，描述，钩子类型，第X集，状态：未用/已用 */
 const PLOT_PATTERN = /【剧情(\d+)】(.+?)，(.+?)，(.+?)，第(\d+)集，状态[：:]\s*(未用|已用)/g
@@ -21,7 +22,46 @@ export interface BatchInfo {
   plots: PlotPoint[]
 }
 
+interface BatchBlock extends BatchInfo {
+  startIndex: number
+  endIndex: number
+  rawContent: string
+}
+
 export class PlotBreakdownParser {
+  private getBatchBlocks(content: string): BatchBlock[] {
+    const batchRegex = /###\s*第\s*(\d+)\s*批\s*[（(]\s*第\s*(\d+)\s*-\s*(\d+)\s*章\s*[）)]/g
+    const positions: Array<{
+      batchNumber: number
+      chapterStart: number
+      chapterEnd: number
+      startIndex: number
+    }> = []
+    let match: RegExpExecArray | null
+
+    while ((match = batchRegex.exec(content)) !== null) {
+      positions.push({
+        batchNumber: parseInt(match[1]),
+        chapterStart: parseInt(match[2]),
+        chapterEnd: parseInt(match[3]),
+        startIndex: match.index
+      })
+    }
+
+    return positions.map((position, index) => {
+      const endIndex = index + 1 < positions.length ? positions[index + 1].startIndex : content.length
+      const rawContent = content.substring(position.startIndex, endIndex).trim()
+      const parsed = this.parse(rawContent)
+      return {
+        ...position,
+        startIndex: position.startIndex,
+        endIndex,
+        rawContent,
+        plots: parsed.allPlots
+      }
+    })
+  }
+
   /**
    * 解析 plot-breakdown.md 为结构化数据
    */
@@ -39,7 +79,7 @@ export class PlotBreakdownParser {
 
     // 解析批次
     const batches: BatchInfo[] = []
-    const batchRegex = /### 第(\d+)批（第(\d+)-(\d+)章）/g
+    const batchRegex = /###\s*第\s*(\d+)\s*批\s*[（(]\s*第\s*(\d+)\s*-\s*(\d+)\s*章\s*[）)]/g
     let batchMatch: RegExpExecArray | null
 
     // 先收集所有批次位置
@@ -71,7 +111,7 @@ export class PlotBreakdownParser {
       const batchContent = content.substring(bp.startIndex, nextStart)
       const plots: PlotPoint[] = []
 
-      const plotRegex = /【剧情(\d+)】(.+?)，(.+?)，(.+?)，第(\d+)集，状态[：:]\s*(未用|已用)/g
+      const plotRegex = /【剧情\s*(\d+)\s*】\s*(.+?)[，,]\s*(.+?)[，,]\s*(.+?)[，,]\s*第\s*(\d+)\s*集[，,]\s*状态[：:]\s*(未用|已用)/g
       let plotMatch: RegExpExecArray | null
 
       while ((plotMatch = plotRegex.exec(batchContent)) !== null) {
@@ -114,7 +154,7 @@ export class PlotBreakdownParser {
     let result = content
     for (const id of plotIds) {
       const pattern = new RegExp(
-        `(【剧情${id}】.+?，状态[：:]\\s*)未用`,
+        `(【剧情\\s*${id}\\s*】.+?[，,]\\s*状态[：:]\\s*)未用`,
         'g'
       )
       result = result.replace(pattern, '$1已用')
@@ -138,7 +178,7 @@ export class PlotBreakdownParser {
    * [BUG-2] 移除指定批次内容（用于 checkBreakdown 自动修正前清理）
    */
   removeBatch(content: string, batchNumber: number): string {
-    const batchRegex = /### 第(\d+)批（第\d+-\d+章）/g
+    const batchRegex = /###\s*第\s*(\d+)\s*批\s*[（(]\s*第\s*\d+\s*-\s*\d+\s*章\s*[）)]/g
     let match: RegExpExecArray | null
     const positions: Array<{ batchNum: number; start: number }> = []
 
@@ -158,31 +198,117 @@ export class PlotBreakdownParser {
     return (content.substring(0, startPos) + content.substring(endPos)).replace(/\n{3,}/g, '\n\n')
   }
 
+  removeBatchesInChapterRange(content: string, chapterStart: number, chapterEnd: number): string {
+    const blocks = this.getBatchBlocks(content)
+    const keptBlocks = blocks.filter(
+      (block) => block.chapterEnd < chapterStart || block.chapterStart > chapterEnd
+    )
+
+    if (keptBlocks.length === blocks.length) return content
+
+    const firstBatchStart = blocks[0]?.startIndex ?? content.length
+    const header = content.substring(0, firstBatchStart).trimEnd()
+    const body = keptBlocks
+      .sort((a, b) => a.batchNumber - b.batchNumber || a.chapterStart - b.chapterStart)
+      .map((block) => block.rawContent.trim())
+      .join('\n\n')
+
+    if (!body) {
+      return `${header}\n\n---\n`
+    }
+
+    return `${header}\n\n${body}\n\n---\n`
+  }
+
+  sortBatches(content: string): string {
+    const blocks = this.getBatchBlocks(content)
+    if (blocks.length <= 1) return content
+
+    const firstBatchStart = blocks[0]?.startIndex ?? content.length
+    const header = content.substring(0, firstBatchStart).trimEnd()
+    const body = blocks
+      .sort((a, b) => a.batchNumber - b.batchNumber || a.chapterStart - b.chapterStart)
+      .map((block) => block.rawContent.trim())
+      .join('\n\n')
+
+    return `${header}\n\n${body}\n\n---\n`
+  }
+
+  getChapterRangeForEpisodeRange(content: string, episodeStart: number, episodeEnd: number): {
+    chapterStart: number
+    chapterEnd: number
+    batchNumbers: number[]
+  } | null {
+    const { batches } = this.parse(content)
+    const normalizedStart = Math.min(episodeStart, episodeEnd)
+    const normalizedEnd = Math.max(episodeStart, episodeEnd)
+
+    const relatedBatches = batches.filter((batch) =>
+      batch.plots.some((plot) => plot.episode >= normalizedStart && plot.episode <= normalizedEnd)
+    )
+
+    if (relatedBatches.length === 0) return null
+
+    return {
+      chapterStart: Math.min(...relatedBatches.map((batch) => batch.chapterStart)),
+      chapterEnd: Math.max(...relatedBatches.map((batch) => batch.chapterEnd)),
+      batchNumbers: relatedBatches.map((batch) => batch.batchNumber).sort((a, b) => a - b)
+    }
+  }
+
   /**
    * 计算资源水位
    */
   getWaterLevel(content: string, totalChapters: number): WaterLevel {
+    return this.getWaterLevelForProject(content, totalChapters)
+  }
+
+  getWaterLevelForProject(content: string, totalChapters: number, projectPath?: string): WaterLevel {
     const { allPlots, batches } = this.parse(content)
 
     const unusedPlots = allPlots.filter(p => p.status === 'unused').length
-    const usedPlots = allPlots.filter(p => p.status === 'used').length
     const lastBatch = batches.length > 0
       ? batches[batches.length - 1]
       : null
     const processedChapters = lastBatch ? lastBatch.chapterEnd : 0
 
-    // 统计已完成的集数（所有"已用"剧情点涉及的集数）
-    const completedEpisodes = new Set(
-      allPlots.filter(p => p.status === 'used').map(p => p.episode)
-    ).size
+    const plotsByEpisode = new Map<number, { used: number; unused: number }>()
+    for (const plot of allPlots) {
+      const current = plotsByEpisode.get(plot.episode) || { used: 0, unused: 0 }
+      if (plot.status === 'used') {
+        current.used += 1
+      } else {
+        current.unused += 1
+      }
+      plotsByEpisode.set(plot.episode, current)
+    }
+
+    const assignedEpisodes = plotsByEpisode.size
+    const fullyUsedEpisodes = [...plotsByEpisode.values()]
+      .filter((entry) => entry.used > 0 && entry.unused === 0)
+      .length
+    const partialUsedEpisodes = [...plotsByEpisode.values()]
+      .filter((entry) => entry.used > 0 && entry.unused > 0)
+      .length
+
+    const scriptEpisodesSet = projectPath ? getExistingScriptEpisodeSet(projectPath) : new Set<number>()
+    const scriptEpisodes = scriptEpisodesSet.size
+    const pendingScriptEpisodes = [...plotsByEpisode.keys()]
+      .filter((episode) => !scriptEpisodesSet.has(episode))
+      .length
 
     return {
       unusedPlots,
       unprocessedChapters: totalChapters - processedChapters,
-      completedEpisodes,
+      completedEpisodes: scriptEpisodes,
       totalPlots: allPlots.length,
       totalChapters,
-      processedChapters
+      processedChapters,
+      assignedEpisodes,
+      scriptEpisodes,
+      pendingScriptEpisodes,
+      fullyUsedEpisodes,
+      partialUsedEpisodes
     }
   }
 
@@ -221,7 +347,7 @@ export class PlotBreakdownParser {
   async getWaterLevelFromFile(projectPath: string, totalChapters: number): Promise<WaterLevel> {
     try {
       const content = await readFile(join(projectPath, 'plot-breakdown.md'), 'utf-8')
-      return this.getWaterLevel(content, totalChapters)
+      return this.getWaterLevelForProject(content, totalChapters, projectPath)
     } catch {
       return {
         unusedPlots: 0,
@@ -229,7 +355,12 @@ export class PlotBreakdownParser {
         completedEpisodes: 0,
         totalPlots: 0,
         totalChapters,
-        processedChapters: 0
+        processedChapters: 0,
+        assignedEpisodes: 0,
+        scriptEpisodes: 0,
+        pendingScriptEpisodes: 0,
+        fullyUsedEpisodes: 0,
+        partialUsedEpisodes: 0
       }
     }
   }

@@ -5,8 +5,11 @@ copyright: Copyright © 2024 FEICAI
 directories:
   output: dist
   buildResources: resources
+afterSign: scripts/notarize.mjs
 
 files:
+  - package.json
+  - node_modules/**/*
   - out/**/*
   - resources/builtin-skills/**/*
   - "!**/*.map"
@@ -18,6 +21,7 @@ extraResources:
       - "**/*"
 
 mac:
+  icon: resources/release-assets/generated/icon.icns
   category: public.app-category.productivity
   target:
     - target: dmg
@@ -28,6 +32,7 @@ mac:
   hardenedRuntime: true
   
 dmg:
+  icon: resources/release-assets/generated/icon.icns
   artifactName: "${productName}-${version}-${arch}.${ext}"
   contents:
     - x: 130
@@ -43,6 +48,7 @@ nsis:
   allowToChangeInstallationDirectory: true
 
 linux:
+  icon: resources/release-assets/generated
   target:
     - AppImage
   category: AudioVideo

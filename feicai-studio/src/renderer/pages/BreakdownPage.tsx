@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useAdaptStore } from '@renderer/stores/adaptStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { useToastStore } from '@renderer/stores/toastStore'
+import { platformAPI } from '@renderer/platform/api'
 import { IPC } from '@shared/ipc-channels'
-import type { PlotPoint, VolumePlan, AdaptPlan, ModelCategory } from '@shared/types'
+import type { PlotPoint, VolumePlan, AdaptPlan, ModelCategory, ReviewResult } from '@shared/types'
 import { createDefaultVolumePlan } from '@shared/types'
 import SimpleMarkdown from '@renderer/components/SimpleMarkdown'
 import EmptyState from '@renderer/components/layout/EmptyState'
 import './BreakdownPage.css'
+
+interface BreakdownPageProps {
+  embedded?: boolean
+}
 
 /** 批次信息 */
 interface BatchInfo {
@@ -28,22 +34,36 @@ interface BreakdownData {
 
 type DrawerTab = 'plots' | 'plan'
 
-export default function BreakdownPage() {
+interface LoadBreakdownOptions {
+  preserveOnError?: boolean
+}
+
+interface LoadPlanContentOptions {
+  preserveOnError?: boolean
+}
+
+export default function BreakdownPage({ embedded = false }: BreakdownPageProps) {
+  const navigate = useNavigate()
   const { currentProject } = useProjectStore()
   const {
     adaptState, waterLevel, isRunning, logs, streamOutput, error,
-    lastStageReport, adaptPlan,
+    lastStageReport, lastReviewResult, adaptPlan,
     userNotes, awaitingUser, reviewFailedData,
     fetchStatus, initAdapt, startBreakdown, startScript, startAuto,
-    pause, abort, clearStream, fix, checkBreakdown, smartNext,
-    breakdownAuto, scriptAuto, ensurePlan, loadPlan, savePlan, generatePlan,
+    pause, abort, clearStream, fix, checkBreakdown, checkScript, smartNext,
+    breakdownAuto, scriptAuto, ensurePlan, loadPlan, savePlan, generatePlan, rebuildBreakdown,
     loadNotes, saveNotes, submitGuidance, clearReviewFailed,
-    setupEventListeners
+    setupEventListeners, resetState
   } = useAdaptStore()
   const { getDefaultConfig } = useSettingsStore()
   const { addToast } = useToastStore()
   const streamRef = useRef<HTMLDivElement>(null)
   const [smartResult, setSmartResult] = useState<string | null>(null)
+  const [reviewEpisode, setReviewEpisode] = useState<number | ''>('')
+  const [rebuildChapterStart, setRebuildChapterStart] = useState<number | ''>('')
+  const [rebuildChapterEnd, setRebuildChapterEnd] = useState<number | ''>('')
+  const [rebuildEpisodeStart, setRebuildEpisodeStart] = useState<number | ''>('')
+  const [rebuildEpisodeEnd, setRebuildEpisodeEnd] = useState<number | ''>('')
 
   // 底部抽屉
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -57,6 +77,8 @@ export default function BreakdownPage() {
   const [plotFilter, setPlotFilter] = useState<'all' | 'unused' | 'used'>('all')
   const [dataLoading, setDataLoading] = useState(false)
   const isFirstRender = useRef(true)
+  const breakdownLoadTokenRef = useRef(0)
+  const planContentLoadTokenRef = useRef(0)
 
   // 改编规划相关状态
   const [editingPlan, setEditingPlan] = useState<AdaptPlan | null>(null)
@@ -75,12 +97,37 @@ export default function BreakdownPage() {
   const [guidanceText, setGuidanceText] = useState('')
 
   useEffect(() => {
+    breakdownLoadTokenRef.current += 1
+    planContentLoadTokenRef.current += 1
+    resetState()
+    setSmartResult(null)
+    setReviewEpisode('')
+    setRebuildChapterStart('')
+    setRebuildChapterEnd('')
+    setRebuildEpisodeStart('')
+    setRebuildEpisodeEnd('')
+    setDrawerOpen(false)
+    setDrawerTab('plots')
+    setBreakdownData(null)
+    setPlanContent('')
+    setPlanLoaded(false)
+    setExpandedBatches(new Set())
+    setPlotFilter('all')
+    setDataLoading(false)
+    setEditingPlan(null)
+    setActiveVolIndex(0)
+    setPlanGenerating(false)
+    setLogsCollapsed(false)
+    setNotesOpen(false)
+    setNotesDraft('')
+    setNotesSaving(false)
+    setGuidanceText('')
     if (currentProject) {
       fetchStatus(currentProject.projectPath)
       loadPlan(currentProject.projectPath)
       loadNotes(currentProject.projectPath)
     }
-  }, [currentProject])
+  }, [currentProject?.id])
 
   // 同步 userNotes 到 notesDraft
   useEffect(() => {
@@ -116,41 +163,68 @@ export default function BreakdownPage() {
       return
     }
     if (lastStageReport && currentProject) {
-      loadBreakdownData()
+      loadBreakdownData({ preserveOnError: true })
     }
   }, [lastStageReport])
 
-  const loadBreakdownData = async () => {
-    if (!currentProject) return
+  const loadBreakdownData = async (options?: LoadBreakdownOptions): Promise<boolean> => {
+    if (!currentProject) return false
+    const projectId = currentProject.id
+    const requestToken = ++breakdownLoadTokenRef.current
     setDataLoading(true)
+    let loaded = false
     try {
-      const data = await window.feicaiAPI.invoke(
+      const data = await platformAPI.invoke(
         IPC.PLOT_GET_BREAKDOWN, currentProject.projectPath
       ) as BreakdownData | null
+      if (breakdownLoadTokenRef.current !== requestToken || useProjectStore.getState().currentProject?.id !== projectId) {
+        return false
+      }
       setBreakdownData(data)
       if (data && data.batches.length > 0) {
         const lastBatches = data.batches.slice(-3).map(b => b.batchNumber)
         setExpandedBatches(new Set(lastBatches))
       }
+      loaded = true
     } catch {
-      setBreakdownData(null)
+      if (breakdownLoadTokenRef.current === requestToken && useProjectStore.getState().currentProject?.id === projectId && !options?.preserveOnError) {
+        setBreakdownData(null)
+      }
+    } finally {
+      if (breakdownLoadTokenRef.current === requestToken && useProjectStore.getState().currentProject?.id === projectId) {
+        setDataLoading(false)
+      }
     }
-    setDataLoading(false)
+    return loaded
   }
 
-  const loadPlanContent = async () => {
-    if (!currentProject) return
+  const loadPlanContent = async (options?: LoadPlanContentOptions): Promise<boolean> => {
+    if (!currentProject) return false
+    const projectId = currentProject.id
+    const requestToken = ++planContentLoadTokenRef.current
+    let loaded = false
     try {
-      const raw = await window.feicaiAPI.invoke(
-        IPC.FILE_READ, `${currentProject.projectPath}/plot-breakdown.md`
+      const raw = await platformAPI.invoke(
+        IPC.PLOT_READ_RAW,
+        currentProject.projectPath
       ) as string | null
+      if (planContentLoadTokenRef.current !== requestToken || useProjectStore.getState().currentProject?.id !== projectId) {
+        return false
+      }
       if (!raw) throw new Error('文件不存在')
       const planMatch = raw.match(/## (?:改编规划|改编计划|Adaptation Plan)\s*\n([\s\S]*?)(?=\n## |\n---\s*$)/im)
       setPlanContent(planMatch ? planMatch[1].trim() : '暂无改编规划。可点击「生成改编规划」按钮创建。')
+      loaded = true
     } catch {
-      setPlanContent('暂无 plot-breakdown.md 文件。')
+      if (planContentLoadTokenRef.current === requestToken && useProjectStore.getState().currentProject?.id === projectId && !options?.preserveOnError) {
+        setPlanContent('暂无 plot-breakdown.md 文件。')
+      }
+    } finally {
+      if (planContentLoadTokenRef.current === requestToken && useProjectStore.getState().currentProject?.id === projectId) {
+        setPlanLoaded(loaded || !options?.preserveOnError)
+      }
     }
-    setPlanLoaded(true)
+    return loaded
   }
 
   const toggleBatch = (batchNum: number) => {
@@ -168,36 +242,36 @@ export default function BreakdownPage() {
   }
   const collapseAll = () => setExpandedBatches(new Set())
 
-  const handleInit = async () => {
-    if (!currentProject) return
+  const handleInit = async (): Promise<boolean> => {
+    if (!currentProject) return false
     const llmConfig = getDefaultConfig('llm')
     if (!llmConfig) {
       addToast('error', '请先在设置中配置 LLM')
-      return
+      return false
     }
-    await initAdapt(currentProject.id, currentProject.projectPath, llmConfig)
+    return initAdapt(currentProject.id, currentProject.projectPath, llmConfig)
   }
 
   const handleBreakdown = async (count: number) => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     await startBreakdown(count)
   }
 
   const handleScript = async (count: number) => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     await startScript(count)
   }
 
   const handleAuto = async () => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     await startAuto()
   }
 
   const handleSmartNext = async () => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     const result = await smartNext()
     if (result) {
@@ -207,9 +281,57 @@ export default function BreakdownPage() {
   }
 
   const handleCheckBreakdown = async () => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     await checkBreakdown()
+  }
+
+  const handleRebuildByChapterRange = async () => {
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
+    if (rebuildChapterStart === '' || rebuildChapterEnd === '') {
+      addToast('warning', '请先填写要重拆的章节范围')
+      return
+    }
+    clearStream()
+    const success = await rebuildBreakdown({
+      chapterStart: rebuildChapterStart,
+      chapterEnd: rebuildChapterEnd
+    })
+    if (!success) return
+    addToast('success', `已开始重拆第${rebuildChapterStart}-${rebuildChapterEnd}章`)
+  }
+
+  const handleRebuildByEpisodeRange = async () => {
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
+    if (rebuildEpisodeStart === '' || rebuildEpisodeEnd === '') {
+      addToast('warning', '请先填写要重拆的集数区间')
+      return
+    }
+    clearStream()
+    const success = await rebuildBreakdown({
+      episodeStart: rebuildEpisodeStart,
+      episodeEnd: rebuildEpisodeEnd
+    })
+    if (!success) return
+    addToast('success', `已开始按第${rebuildEpisodeStart}-${rebuildEpisodeEnd}集关联范围重拆`)
+  }
+
+  const handleRebuildBatch = async (batch: BatchInfo) => {
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
+    clearStream()
+    const success = await rebuildBreakdown({
+      chapterStart: batch.chapterStart,
+      chapterEnd: batch.chapterEnd
+    })
+    if (!success) return
+    addToast('success', `已开始重拆第${batch.batchNumber}批（第${batch.chapterStart}-${batch.chapterEnd}章）`)
+  }
+
+  const handleCheckScript = async () => {
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
+    clearStream()
+    const ep = reviewEpisode === '' ? undefined : reviewEpisode
+    await checkScript(ep)
   }
 
   const handleFix = async () => {
@@ -218,25 +340,46 @@ export default function BreakdownPage() {
   }
 
   const handleBreakdownAuto = async () => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     await breakdownAuto()
   }
 
   const handleScriptAuto = async () => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
     await scriptAuto()
   }
 
   const handleEnsurePlan = async () => {
-    if (adaptState === 'adapt_idle') await handleInit()
+    if (adaptState === 'adapt_idle' && !(await handleInit())) return
     clearStream()
-    await ensurePlan()
+    const success = await ensurePlan()
+    if (!success) return
     addToast('success', '改编规划已生成')
     setPlanLoaded(false)
-    setPlanContent('')
-    await loadPlanContent()
+    const refreshed = await loadPlanContent({ preserveOnError: true })
+    if (!refreshed) {
+      addToast('warning', '改编规划已生成，但规划内容刷新失败')
+    }
+  }
+
+  const handlePause = async () => {
+    const success = await pause()
+    addToast(success ? 'info' : 'error', success ? '编剧管线已暂停' : '暂停失败')
+  }
+
+  const handleAbort = async (options?: { clearIntervention?: boolean }) => {
+    const success = await abort()
+    if (!success) {
+      addToast('error', '停止失败')
+      return false
+    }
+    if (options?.clearIntervention) {
+      clearReviewFailed()
+    }
+    addToast('warning', '编剧管线已停止')
+    return true
   }
 
   if (!currentProject) {
@@ -266,6 +409,119 @@ export default function BreakdownPage() {
   const totalCh = waterLevel?.totalChapters || 0
   const plotStatus = unusedPlots >= 10 ? '🟢 充足' : unusedPlots >= 5 ? '🟡 即将用尽' : unusedPlots > 0 ? '🟠 低' : '🔴 空'
   const breakdownPct = totalCh > 0 ? Math.round((processedCh / totalCh) * 100) : 0
+  const planReady = !!adaptPlan
+  const scriptsNeedMorePlots = unusedPlots < 4 && unprocessedCh > 0
+  const stateToneClass = isRunning
+    ? 'badge-warning'
+    : adaptState.includes('done')
+      ? 'badge-success'
+      : adaptState === 'adapt_error'
+        ? 'badge-danger'
+        : 'badge-info'
+  const currentFocus = reviewFailedData
+    ? {
+        title: '先处理失败项',
+        description: reviewFailedData.stage === 'breakdown'
+          ? '当前阻塞发生在剧情拆解环节，先把拆解质检问题闭环。'
+          : '当前阻塞发生在剧本环节，建议先转到分集剧本处理修订。',
+        action: reviewFailedData.stage === 'breakdown' ? '处理拆解问题' : '去分集剧本',
+        onClick: () => {
+          if (reviewFailedData.stage === 'breakdown') {
+            if (!awaitingUser) return
+            const el = document.querySelector('.bd-intervention-card')
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          } else if (currentProject) {
+            navigate(`/project/${currentProject.id}/script`)
+          }
+        }
+      }
+    : totalCh === 0
+      ? {
+          title: '先补源稿输入',
+          description: '当前没有章节输入，规划和拆解都缺少基础材料。',
+          action: '打开小说源稿',
+          onClick: () => {
+            if (!currentProject) return
+            navigate(`/project/${currentProject.id}/source`)
+          }
+        }
+      : !planReady && processedCh === 0
+        ? {
+            title: '先形成规划基础',
+            description: '当前还没有稳定的剧情库存与卷级规划，建议先拆解一批章节。',
+            action: '开始拆解',
+            onClick: () => { void handleBreakdown(1) }
+          }
+        : scriptsNeedMorePlots
+          ? {
+              title: '补充剧情库存',
+              description: `当前只剩 ${unusedPlots} 个可用剧情点，建议继续拆解，避免剧本写到一半断粮。`,
+              action: '继续拆解',
+              onClick: () => { void handleBreakdown(1) }
+            }
+          : {
+              title: '把库存转成剧本',
+              description: '当前库存和规划已经具备基本条件，可以开始把剧情点转成分集剧本。',
+              action: '进入分集剧本',
+              onClick: () => {
+                if (!currentProject) return
+                navigate(`/project/${currentProject.id}/script`)
+              }
+            }
+
+  const planningRisks = [
+    reviewFailedData
+      ? '当前存在待处理审核失败项，建议先闭环后再扩张流程。'
+      : '',
+    totalCh === 0
+      ? '当前还没有可用章节输入，规划和拆解都会缺少依据。'
+      : '',
+    !planReady && processedCh > 0
+      ? '已经有拆解结果，但还没有稳定的卷级规划，后续创作可能缺少统一方向。'
+      : '',
+    scriptsNeedMorePlots
+      ? `当前库存仅剩 ${unusedPlots} 个剧情点，继续写作前建议先补库存。`
+      : '',
+    !isRunning && totalCh > 0 && unprocessedCh === 0 && unusedPlots === 0
+      ? '章节已经拆完且库存已用尽，后续主要工作会转向剧本修订与交付。'
+      : ''
+  ].filter(Boolean)
+  const focusMeta = [
+    planReady ? '卷级规划已建立' : '卷级规划待建立',
+    `库存 ${unusedPlots}/${totalPlots || 0}`,
+    `章节覆盖 ${breakdownPct}%`
+  ]
+  const overviewCards = [
+    {
+      label: '章节拆解覆盖',
+      value: `${breakdownPct}%`,
+      detail: `已拆 ${processedCh} / ${totalCh || 0} 章`,
+      tone: 'accent'
+    },
+    {
+      label: '可用剧情库存',
+      value: `${unusedPlots}`,
+      detail: plotStatus,
+      tone: unusedPlots < 5 ? 'warn' : 'ok'
+    },
+    {
+      label: '已转剧本集数',
+      value: `${completedEps}`,
+      detail: '已生成剧本',
+      tone: 'accent'
+    },
+    {
+      label: '待补拆解章节',
+      value: `${unprocessedCh}`,
+      detail: unprocessedCh > 0 ? '还有源稿待处理' : '当前已拆完',
+      tone: unprocessedCh > 0 ? 'warn' : 'ok'
+    }
+  ] as const
+  const advancedToolsSummary = [
+    reviewEpisode !== '' ? `复查剧本第 ${reviewEpisode} 集` : '可指定集数复查剧本',
+    rebuildChapterStart !== '' || rebuildChapterEnd !== '' ? '章节重拆参数已填写' : '支持按章节范围重拆',
+    rebuildEpisodeStart !== '' || rebuildEpisodeEnd !== '' ? '集区间重拆参数已填写' : '支持按集区间重拆'
+  ]
 
   const getSmartSuggestion = () => {
     if (unusedPlots === 0 && unprocessedCh === 0) return '🎉 所有工作已完成！'
@@ -296,29 +552,102 @@ export default function BreakdownPage() {
   return (
     <div className="breakdown-page">
       {/* ==================== 页头 ==================== */}
-      <div className="bd-page-header">
-        <div className="bd-header-left">
-          <h1 className="page-title">📊 剧情拆解</h1>
-          <span className={`badge ${isRunning ? 'badge-warning' : adaptState.includes('done') ? 'badge-success' : 'badge-info'}`}>
-            {stateLabel[adaptState] || adaptState}
-          </span>
+      {!embedded && (
+        <div className="bd-page-header">
+          <div className="bd-header-left">
+            <div>
+              <h1 className="page-title">改编规划</h1>
+              <p className="text-secondary bd-page-desc">
+                在这里统一决定“还要不要继续拆解”“库存够不够写剧本”“卷规划是否已经稳定”。
+              </p>
+            </div>
+            <span className={`badge ${stateToneClass}`}>
+              {stateLabel[adaptState] || adaptState}
+            </span>
+          </div>
+          <div className="bd-header-right">
+            {currentProject && (
+              <>
+                <button className="btn btn-sm" onClick={() => navigate(`/project/${currentProject.id}/script`)}>
+                  ✍️ 分集剧本
+                </button>
+                <button className="btn btn-sm" onClick={() => navigate(`/project/${currentProject.id}/script?tab=issues`)}>
+                  🛠️ 质检修订
+                </button>
+              </>
+            )}
+            {isRunning && (
+              <>
+                <button className="btn btn-sm" onClick={handlePause}>⏸ 暂停</button>
+                <button className="btn btn-sm btn-danger" onClick={() => { void handleAbort() }}>⏹ 停止</button>
+              </>
+            )}
+          </div>
         </div>
-        <div className="bd-header-right">
-          {isRunning && (
-            <>
-              <button className="btn btn-sm" onClick={pause}>⏸ 暂停</button>
-              <button className="btn btn-sm btn-danger" onClick={abort}>⏹ 停止</button>
-            </>
-          )}
-        </div>
-      </div>
+      )}
 
-      {/* ==================== 双栏仪表盘 ==================== */}
+      <section className="card bd-hero">
+        <div className="bd-hero-main">
+          <div className="bd-section-label">内容准备 / 改编规则</div>
+          <div className="bd-hero-copy">
+            <h2>{currentFocus.title}</h2>
+            <p className="text-secondary">{currentFocus.description}</p>
+          </div>
+          <div className="bd-hero-meta">
+            {focusMeta.map((item) => (
+              <span key={item} className="bd-hero-chip">{item}</span>
+            ))}
+          </div>
+          <div className="bd-hero-actions">
+            <button className="btn btn-primary" onClick={currentFocus.onClick}>
+              {currentFocus.action}
+            </button>
+            <button className="btn" disabled={isRunning} onClick={handleSmartNext}>
+              推荐推进
+            </button>
+            {currentProject && (
+              <button className="btn" onClick={() => navigate(`/project/${currentProject.id}/workspace`)}>
+                返回总控台
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="bd-hero-side">
+          <div className="bd-hero-side-head">
+            <h3>当前缺口</h3>
+            <span className="text-secondary text-xs">{planningRisks.length > 0 ? `${planningRisks.length} 项待关注` : '当前无显式阻塞'}</span>
+          </div>
+          <div className="bd-risk-list">
+            {planningRisks.length === 0 ? (
+              <div className="bd-risk-item is-ok">当前规划侧没有显式阻塞，可以根据库存和剧本覆盖决定是否继续创作。</div>
+            ) : (
+              planningRisks.map((risk) => (
+                <div key={risk} className="bd-risk-item">{risk}</div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+
       <div className="bd-grid">
-        {/* ===== 左栏：操作区 ===== */}
         <div className="bd-left">
-          {/* ① 进度仪表盘 */}
-          <div className="bd-dashboard">
+          <section className="card bd-overview-card">
+            <div className="bd-panel-head">
+              <div>
+                <div className="bd-panel-title">阶段概览</div>
+                <p className="text-secondary">先判断覆盖率、库存和剧本转化是否处在可继续推进的状态。</p>
+              </div>
+              <span className="badge badge-info">总库存 {totalPlots}</span>
+            </div>
+            <div className="bd-overview-grid">
+              {overviewCards.map((card) => (
+                <div key={card.label} className={`bd-overview-item tone-${card.tone}`}>
+                  <span className="bd-overview-label">{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <span className="bd-overview-detail">{card.detail}</span>
+                </div>
+              ))}
+            </div>
             <div className="bd-progress-card">
               <div className="bd-progress-header">
                 <span className="bd-progress-title">拆解进度</span>
@@ -331,110 +660,185 @@ export default function BreakdownPage() {
                 已拆 {processedCh} 章 / 共 {totalCh} 章 · 剩余 {unprocessedCh} 章
               </div>
             </div>
+            <div className="bd-suggestion">{getSmartSuggestion()}</div>
+          </section>
 
-            <div className="bd-metrics">
-              <div className="bd-metric-card">
-                <div className="bd-metric-icon">📊</div>
-                <div className="bd-metric-value bd-v-accent">{totalPlots}</div>
-                <div className="bd-metric-label">总剧情点</div>
+          <section className="card bd-actions-card">
+            <div className="bd-panel-head">
+              <div>
+                <div className="bd-panel-title">执行控制台</div>
+                <p className="text-secondary">把操作按“判断下一步 / 补库存 / 转剧本 / 精细修复”重新分层，避免按钮堆叠。</p>
               </div>
-              <div className="bd-metric-card">
-                <div className="bd-metric-icon">🎯</div>
-                <div className={`bd-metric-value ${unusedPlots < 5 ? 'bd-v-warn' : 'bd-v-ok'}`}>
-                  {unusedPlots}
+              {isRunning && (
+                <div className="bd-inline-actions">
+                  <button className="btn btn-sm" onClick={handlePause}>暂停</button>
+                  <button className="btn btn-sm btn-danger" onClick={() => { void handleAbort() }}>停止</button>
                 </div>
-                <div className="bd-metric-label">未用剧情 {plotStatus}</div>
-              </div>
-              <div className="bd-metric-card">
-                <div className="bd-metric-icon">✍️</div>
-                <div className="bd-metric-value bd-v-accent">{completedEps}</div>
-                <div className="bd-metric-label">已创作集数</div>
-              </div>
-              <div className="bd-metric-card">
-                <div className="bd-metric-icon">📚</div>
-                <div className={`bd-metric-value ${unprocessedCh > 0 ? 'bd-v-warn' : 'bd-v-ok'}`}>
-                  {unprocessedCh}
+              )}
+            </div>
+            <div className="bd-action-stack">
+              <div className="bd-action-group bd-action-group-highlight">
+                <div className="bd-action-group-head">
+                  <div>
+                    <div className="bd-action-group-title">决策推进</div>
+                    <p className="text-secondary">先让系统告诉你当前最合理的下一步，再决定是否全自动连续推进。</p>
+                  </div>
                 </div>
-                <div className="bd-metric-label">待拆解章节</div>
-              </div>
-            </div>
-
-            <div className="bd-suggestion">
-              {getSmartSuggestion()}
-            </div>
-          </div>
-
-          {/* ② 操作中心 — 分组卡片 */}
-          <div className="bd-actions">
-            {/* 拆解组 */}
-            <div className="bd-action-group">
-              <div className="bd-action-group-title">📊 拆解</div>
-              <div className="bd-action-buttons">
-                <button className="btn" disabled={isRunning} onClick={() => handleBreakdown(1)}>
-                  拆解一批 (6章)
-                </button>
-                <button className="btn" disabled={isRunning} onClick={() => handleBreakdown(3)}>
-                  × 3 批量拆解
-                </button>
-                <button className="btn" disabled={isRunning} onClick={handleBreakdownAuto}>
-                  拆解到底
-                </button>
-              </div>
-            </div>
-
-            {/* 创作组 */}
-            <div className="bd-action-group">
-              <div className="bd-action-group-title">✍️ 创作</div>
-              <div className="bd-action-buttons">
-                <button className="btn" disabled={isRunning} onClick={() => handleScript(1)}>
-                  创作一批
-                </button>
-                <button className="btn" disabled={isRunning} onClick={() => handleScript(3)}>
-                  × 3 批量创作
-                </button>
-                <button className="btn" disabled={isRunning} onClick={handleScriptAuto}>
-                  创作到底
-                </button>
-              </div>
-            </div>
-
-            {/* 智能组 */}
-            <div className="bd-action-group bd-action-group-highlight">
-              <div className="bd-action-group-title">⚡ 智能</div>
-              <div className="bd-action-buttons">
-                <button className="btn btn-primary" disabled={isRunning} onClick={handleSmartNext}>
-                  ⏭ 智能下一步
-                </button>
-                <button className="btn btn-primary" disabled={isRunning} onClick={handleAuto}>
-                  🚀 全自动
-                </button>
-                <button className="btn" disabled={isRunning} onClick={handleCheckBreakdown}>
-                  🔍 手动质检
-                </button>
-                {lastLogFail && !isRunning && (
-                  <button className="btn" onClick={handleFix}>
-                    🔧 修正上批次
+                <div className="bd-action-grid bd-action-grid-2">
+                  <button className="btn btn-primary bd-action-button" disabled={isRunning} onClick={handleSmartNext}>
+                    推荐推进
                   </button>
-                )}
-                <button className="btn" disabled={isRunning} onClick={handleEnsurePlan}>
-                  📋 生成改编规划
-                </button>
+                  <button className="btn btn-primary bd-action-button" disabled={isRunning} onClick={handleAuto}>
+                    自动推进到底
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* ④ 质检干预面板 */}
+              <div className="bd-action-dual">
+                <div className="bd-action-group">
+                  <div className="bd-action-group-head">
+                    <div>
+                      <div className="bd-action-group-title">补充剧情库存</div>
+                      <p className="text-secondary">适合库存不足、后面还有章节未拆时使用。</p>
+                    </div>
+                  </div>
+                  <div className="bd-action-grid bd-action-grid-2">
+                    <button className="btn bd-action-button" disabled={isRunning} onClick={() => handleBreakdown(1)}>
+                      补 1 批库存
+                    </button>
+                    <button className="btn bd-action-button" disabled={isRunning} onClick={handleBreakdownAuto}>
+                      一直拆到完
+                    </button>
+                  </div>
+                </div>
+                <div className="bd-action-group">
+                  <div className="bd-action-group-head">
+                    <div>
+                      <div className="bd-action-group-title">转成分集剧本</div>
+                      <p className="text-secondary">库存和规划稳定后，把剧情点继续推进成剧本产出。</p>
+                    </div>
+                  </div>
+                  <div className="bd-action-grid bd-action-grid-2">
+                    <button className="btn bd-action-button" disabled={isRunning} onClick={() => handleScript(1)}>
+                      生成 1 集
+                    </button>
+                    <button className="btn bd-action-button" disabled={isRunning} onClick={handleScriptAuto}>
+                      一直写到完
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <details className="bd-action-advanced">
+                <summary>
+                  <span>高级检查工具</span>
+                  <span className="bd-summary-hint">{advancedToolsSummary[0]}</span>
+                </summary>
+                <div className="bd-advanced-list">
+                  <div className="bd-advanced-row">
+                    <button className="btn btn-sm" disabled={isRunning} onClick={handleCheckBreakdown}>
+                      复查拆解
+                    </button>
+                    <div className="bd-field-inline">
+                      <input
+                        type="number"
+                        className="bd-input"
+                        min={1}
+                        value={reviewEpisode}
+                        onChange={e => {
+                          const val = e.target.value
+                          setReviewEpisode(val === '' ? '' : Math.max(1, parseInt(val, 10) || 1))
+                        }}
+                        placeholder="集数"
+                      />
+                      <button className="btn btn-sm" disabled={isRunning} onClick={handleCheckScript}>
+                        复查剧本
+                      </button>
+                    </div>
+                    {lastLogFail && !isRunning && (
+                      <button className="btn btn-sm btn-danger" onClick={handleFix}>
+                        修正失败批次
+                      </button>
+                    )}
+                  </div>
+                  <div className="bd-advanced-row">
+                    <div className="bd-field-inline">
+                      <input
+                        type="number"
+                        className="bd-input"
+                        min={1}
+                        max={totalCh || 9999}
+                        value={rebuildChapterStart}
+                        onChange={e => {
+                          const val = e.target.value
+                          setRebuildChapterStart(val === '' ? '' : Math.max(1, parseInt(val, 10) || 1))
+                        }}
+                        placeholder="起章"
+                      />
+                      <span className="text-secondary text-xs">-</span>
+                      <input
+                        type="number"
+                        className="bd-input"
+                        min={1}
+                        max={totalCh || 9999}
+                        value={rebuildChapterEnd}
+                        onChange={e => {
+                          const val = e.target.value
+                          setRebuildChapterEnd(val === '' ? '' : Math.max(1, parseInt(val, 10) || 1))
+                        }}
+                        placeholder="止章"
+                      />
+                      <button className="btn btn-sm" disabled={isRunning} onClick={handleRebuildByChapterRange}>
+                        按章节重拆
+                      </button>
+                    </div>
+                  </div>
+                  <div className="bd-advanced-row">
+                    <div className="bd-field-inline">
+                      <input
+                        type="number"
+                        className="bd-input"
+                        min={1}
+                        value={rebuildEpisodeStart}
+                        onChange={e => {
+                          const val = e.target.value
+                          setRebuildEpisodeStart(val === '' ? '' : Math.max(1, parseInt(val, 10) || 1))
+                        }}
+                        placeholder="起集"
+                      />
+                      <span className="text-secondary text-xs">-</span>
+                      <input
+                        type="number"
+                        className="bd-input"
+                        min={1}
+                        value={rebuildEpisodeEnd}
+                        onChange={e => {
+                          const val = e.target.value
+                          setRebuildEpisodeEnd(val === '' ? '' : Math.max(1, parseInt(val, 10) || 1))
+                        }}
+                        placeholder="止集"
+                      />
+                      <button className="btn btn-sm" disabled={isRunning || !breakdownData} onClick={handleRebuildByEpisodeRange}>
+                        按集区间重拆
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </section>
+
           {awaitingUser && reviewFailedData && (
             <div className="bd-intervention-card">
               <div className="bd-intervention-header">
                 <span className="bd-intervention-icon">⚠️</span>
                 <span className="bd-intervention-title">
-                  {reviewFailedData.stage === 'breakdown' ? '拆解' : '剧本'}质检未通过 — 需要您的指导
+                  {reviewFailedData.stage === 'breakdown' ? '拆解' : '剧本'}质检未通过，需要人工指导
                 </span>
               </div>
               <div className="bd-intervention-body">
                 <p className="bd-intervention-desc">
-                  已重试 {reviewFailedData.retryCount} 次仍未通过质检。请查看右侧 LLM 输出中的质检报告，提供修正指导帮助 AI 理解正确方向。
+                  已重试 {reviewFailedData.retryCount} 次仍未通过质检。请结合右侧实时输出里的报告，补充修正方向后再重试。
                 </p>
                 <textarea
                   className="bd-intervention-textarea"
@@ -448,104 +852,152 @@ export default function BreakdownPage() {
                     className="btn btn-primary"
                     disabled={!guidanceText.trim()}
                     onClick={async () => {
-                      await submitGuidance(guidanceText.trim())
+                      const success = await submitGuidance(guidanceText.trim())
+                      if (!success) return
                       setGuidanceText('')
                     }}
                   >
-                    📝 提交指导并重试
+                    提交指导并重试
                   </button>
-                  <button className="btn" onClick={() => {
-                    clearReviewFailed()
-                    abort()
-                  }}>⏹ 中止</button>
+                  <button className="btn" onClick={() => { void handleAbort({ clearIntervention: true }) }}>中止</button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* ⑤ 用户笔记面板 */}
-          <div className="bd-notes-card">
-            <div className="bd-notes-header" onClick={() => setNotesOpen(!notesOpen)}>
-              <span>📝 用户指导笔记</span>
-              <span className="bd-notes-toggle">{notesOpen ? '▾' : '▸'}</span>
+          <div className="bd-support-grid">
+            <div className="bd-notes-card">
+              <div className="bd-notes-header" onClick={() => setNotesOpen(!notesOpen)}>
+                <span>用户指导笔记</span>
+                <span className="bd-notes-toggle">{notesOpen ? '▾' : '▸'}</span>
+              </div>
+              {notesOpen && (
+                <div className="bd-notes-body">
+                  <textarea
+                    className="bd-notes-textarea"
+                    value={notesDraft}
+                    onChange={e => setNotesDraft(e.target.value)}
+                    placeholder={'在这里写下对小说的理解和指导，会注入到每次 LLM 调用中...\n\n例如：\n• 这是穿越+系统流，主角有「怒气值兑换系统」\n• 第4章原文缺失，拆解时跳过\n• 老朱（朱元璋）性格暴戾但护短\n• 重点强化「降维打击」和「打脸」爽感'}
+                    rows={6}
+                  />
+                  <div className="bd-notes-actions">
+                    <button
+                      className="btn btn-sm"
+                      disabled={notesSaving || notesDraft === userNotes}
+                      onClick={async () => {
+                        if (!currentProject) return
+                        setNotesSaving(true)
+                        const success = await saveNotes(currentProject.projectPath, notesDraft)
+                        setNotesSaving(false)
+                        if (!success) return
+                        addToast('success', '用户笔记已保存')
+                      }}
+                    >
+                      {notesSaving ? '保存中...' : '保存笔记'}
+                    </button>
+                    {notesDraft !== userNotes && (
+                      <span className="bd-notes-dirty">有未保存的修改</span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            {notesOpen && (
-              <div className="bd-notes-body">
-                <textarea
-                  className="bd-notes-textarea"
-                  value={notesDraft}
-                  onChange={e => setNotesDraft(e.target.value)}
-                  placeholder={'在这里写下对小说的理解和指导，会注入到每次 LLM 调用中...\n\n例如：\n• 这是穿越+系统流，主角有「怒气值兑换系统」\n• 第4章原文缺失，拆解时跳过\n• 老朱（朱元璋）性格暴戾但护短\n• 重点强化「降维打击」和「打脸」爽感'}
-                  rows={6}
-                />
-                <div className="bd-notes-actions">
-                  <button
-                    className="btn btn-sm"
-                    disabled={notesSaving || notesDraft === userNotes}
-                    onClick={async () => {
-                      if (!currentProject) return
-                      setNotesSaving(true)
-                      await saveNotes(currentProject.projectPath, notesDraft)
-                      setNotesSaving(false)
-                      addToast('success', '用户笔记已保存')
-                    }}
-                  >
-                    {notesSaving ? '保存中...' : '💾 保存笔记'}
-                  </button>
-                  {notesDraft !== userNotes && (
-                    <span className="bd-notes-dirty">● 有未保存的修改</span>
+
+            {lastStageReport && (
+              <div className="bd-report-card">
+                <div className="bd-report-header">
+                  <span className="bd-report-title">
+                    {lastStageReport.stage === 'breakdown' ? '拆解完成' : '创作完成'}
+                  </span>
+                  {lastStageReport.batchNum && (
+                    <span className="badge badge-info">第 {lastStageReport.batchNum} 批</span>
+                  )}
+                </div>
+                <div className="bd-report-body">
+                  {lastStageReport.chapterRange && (
+                    <div className="bd-report-item">
+                      <span className="bd-report-label">章节范围</span>
+                      <span className="bd-report-value">
+                        第{lastStageReport.chapterRange[0]}章 ~ 第{lastStageReport.chapterRange[1]}章
+                      </span>
+                    </div>
+                  )}
+                  {lastStageReport.extractedPlots != null && (
+                    <div className="bd-report-item">
+                      <span className="bd-report-label">提取剧情</span>
+                      <span className="bd-report-value bd-v-ok">{lastStageReport.extractedPlots} 个</span>
+                    </div>
+                  )}
+                  {lastStageReport.episodeRange && (
+                    <div className="bd-report-item">
+                      <span className="bd-report-label">创作集数</span>
+                      <span className="bd-report-value">{lastStageReport.episodeRange}</span>
+                    </div>
+                  )}
+                  {lastStageReport.episodeCount != null && (
+                    <div className="bd-report-item">
+                      <span className="bd-report-label">创作集数</span>
+                      <span className="bd-report-value bd-v-ok">{lastStageReport.episodeCount} 集</span>
+                    </div>
+                  )}
+                  {lastStageReport.summary && (
+                    <div className="bd-report-summary">
+                      <SimpleMarkdown content={lastStageReport.summary} />
+                    </div>
                   )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* ⑥ 阶段完成报告 */}
-          {lastStageReport && (
-            <div className="bd-report-card">
-              <div className="bd-report-header">
-                <span className="bd-report-title">
-                  {lastStageReport.stage === 'breakdown' ? '📊 拆解完成' : '✍️ 创作完成'}
-                </span>
-                {lastStageReport.batchNum && (
-                  <span className="badge badge-info">第 {lastStageReport.batchNum} 批</span>
-                )}
-              </div>
-              <div className="bd-report-body">
-                {lastStageReport.chapterRange && (
-                  <div className="bd-report-item">
-                    <span className="bd-report-label">章节范围</span>
-                    <span className="bd-report-value">
-                      第{lastStageReport.chapterRange[0]}章 ~ 第{lastStageReport.chapterRange[1]}章
-                    </span>
-                  </div>
-                )}
-                {lastStageReport.extractedPlots != null && (
-                  <div className="bd-report-item">
-                    <span className="bd-report-label">提取剧情</span>
-                    <span className="bd-report-value bd-v-ok">{lastStageReport.extractedPlots} 个</span>
-                  </div>
-                )}
-                {lastStageReport.episodeRange && (
-                  <div className="bd-report-item">
-                    <span className="bd-report-label">创作集数</span>
-                    <span className="bd-report-value">{lastStageReport.episodeRange}</span>
-                  </div>
-                )}
-                {lastStageReport.episodeCount != null && (
-                  <div className="bd-report-item">
-                    <span className="bd-report-label">创作集数</span>
-                    <span className="bd-report-value bd-v-ok">{lastStageReport.episodeCount} 集</span>
-                  </div>
-                )}
-                {lastStageReport.summary && (
-                  <div className="bd-report-summary">{lastStageReport.summary}</div>
-                )}
-              </div>
+          {lastReviewResult && (
+            <div className="bd-review-card">
+              {(() => {
+                const r = lastReviewResult as ReviewResult
+                return (
+                  <>
+                    <div className="bd-review-header">
+                      <span className="bd-review-title">
+                        {r.stage === 'breakdown'
+                          ? '拆解质检'
+                          : r.stage === 'script'
+                          ? '剧本质检'
+                          : '质检结果'}
+                      </span>
+                      <span className={`badge ${r.passed ? 'badge-success' : 'badge-danger'}`}>
+                        {r.passed ? 'PASS' : 'FAIL'} · 得分 {r.score.toFixed(1)}
+                      </span>
+                    </div>
+                    <div className="bd-review-body">
+                      <div className="bd-review-feedback">
+                        <SimpleMarkdown content={r.feedback} />
+                      </div>
+                      {r.issues && r.issues.length > 0 && (
+                        <div className="bd-review-issues">
+                          <div className="bd-review-issues-title">问题列表（{r.issues.length}）</div>
+                          <ul>
+                            {r.issues.map((iss, idx) => (
+                              <li key={idx} className={`issue-${iss.severity}`}>
+                                <span className="issue-severity">[{iss.severity.toUpperCase()}]</span>
+                                <span className="issue-desc">{iss.description}</span>
+                                {iss.location && (
+                                  <span className="issue-location"> @ {iss.location}</span>
+                                )}
+                                {iss.suggestion && (
+                                  <span className="issue-suggestion"> · 建议：{iss.suggestion}</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           )}
 
-          {/* ④ 智能建议 / 错误 */}
           {smartResult && (
             <div className="bd-info-card bd-info-accent">
               <p>{smartResult}</p>
@@ -559,13 +1011,11 @@ export default function BreakdownPage() {
           )}
         </div>
 
-        {/* ===== 右栏：输出区 ===== */}
         <div className="bd-right">
-          {/* ⑤ LLM 实时输出 */}
           <div className="bd-output-panel">
             <div className="bd-output-header">
               <span className="bd-output-title">
-                📝 实时输出
+                实时输出
                 {isRunning && <span className="bd-running-dot" />}
               </span>
               {streamOutput && (
@@ -580,11 +1030,10 @@ export default function BreakdownPage() {
             </div>
           </div>
 
-          {/* ⑥ 执行日志 */}
           <div className={`bd-log-panel ${logsCollapsed ? 'collapsed' : ''}`}>
             <div className="bd-log-header" onClick={() => setLogsCollapsed(!logsCollapsed)}>
               <span className="bd-log-title">
-                📋 执行日志
+                执行日志
                 {logs.length > 0 && <span className="bd-log-count">{logs.length}</span>}
               </span>
               <span className="bd-log-toggle">{logsCollapsed ? '▶' : '▼'}</span>
@@ -616,7 +1065,7 @@ export default function BreakdownPage() {
             className={`bd-drawer-tab ${drawerOpen && drawerTab === 'plots' ? 'active' : ''}`}
             onClick={() => openDrawer('plots')}
           >
-            📋 剧情列表
+            📋 剧情库存
             {breakdownData && (
               <span className="bd-drawer-tab-count">{breakdownData.allPlots.length}</span>
             )}
@@ -625,7 +1074,7 @@ export default function BreakdownPage() {
             className={`bd-drawer-tab ${drawerOpen && drawerTab === 'plan' ? 'active' : ''}`}
             onClick={() => openDrawer('plan')}
           >
-            📐 改编规划
+            📐 卷级规划
           </button>
           <div className="bd-drawer-spacer" />
           <button
@@ -646,8 +1095,8 @@ export default function BreakdownPage() {
                 ) : !breakdownData ? (
                   <EmptyState
                     icon="📋"
-                    title="暂无剧情拆解数据"
-                    description="请先在操作中心执行拆解操作"
+                    title="暂无剧情库存"
+                    description="请先在上方推进区执行一轮拆解，系统才会沉淀剧情库存。"
                   />
                 ) : (
                   <>
@@ -672,13 +1121,23 @@ export default function BreakdownPage() {
                           value={plotFilter}
                           onChange={e => setPlotFilter(e.target.value as any)}
                         >
-                          <option value="all">全部</option>
-                          <option value="unused">未用</option>
-                          <option value="used">已用</option>
+                          <option value="all">全部库存</option>
+                          <option value="unused">仅看可用</option>
+                          <option value="used">仅看已消耗</option>
                         </select>
                         <button className="btn btn-sm" onClick={expandAll}>全部展开</button>
                         <button className="btn btn-sm" onClick={collapseAll}>全部折叠</button>
-                        <button className="btn btn-sm" onClick={loadBreakdownData}>🔄 刷新</button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={async () => {
+                            const refreshed = await loadBreakdownData({ preserveOnError: true })
+                            if (!refreshed) {
+                              addToast('warning', '剧情数据刷新失败，已保留当前内容')
+                            }
+                          }}
+                        >
+                          🔄 刷新
+                        </button>
                       </div>
                     </div>
 
@@ -705,6 +1164,16 @@ export default function BreakdownPage() {
                                 <span className="batch-count">{batch.plots.length} 个剧情</span>
                                 {usedCount > 0 && <span className="batch-used-badge">✅ {usedCount}</span>}
                                 {unusedCount > 0 && <span className="batch-unused-badge">⏳ {unusedCount}</span>}
+                                <button
+                                  className="btn btn-sm"
+                                  disabled={isRunning}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void handleRebuildBatch(batch)
+                                  }}
+                                >
+                                  重拆本批
+                                </button>
                               </div>
                             </div>
 
@@ -784,7 +1253,7 @@ function PlanTabContent({ currentProject, adaptPlan, editingPlan, setEditingPlan
   planGenerating: boolean
   setPlanGenerating: (b: boolean) => void
   isRunning: boolean
-  savePlan: (path: string, plan: AdaptPlan) => Promise<void>
+  savePlan: (path: string, plan: AdaptPlan) => Promise<boolean>
   generatePlan: (path: string, vol: VolumePlan, llm: any) => Promise<string>
   getDefaultConfig: (cat: ModelCategory) => any
   addToast: (type: 'success' | 'error' | 'info' | 'warning', msg: string) => void
@@ -810,6 +1279,15 @@ function PlanTabContent({ currentProject, adaptPlan, editingPlan, setEditingPlan
   }
 
   const currentVol = plan?.volumes[activeVolIndex]
+  const currentVolStatus = currentVol?.llmPlan ? '正文已生成' : '待生成正文'
+  const volumeStats = currentVol
+    ? [
+        { label: '章节范围', value: `${currentVol.chapterRange[0]} - ${currentVol.chapterRange[1]}` },
+        { label: '目标集数', value: `${currentVol.targetEpisodes}` },
+        { label: '单集字数', value: `${currentVol.episodeWordCount[0]} - ${currentVol.episodeWordCount[1]}` },
+        { label: '正文状态', value: currentVolStatus }
+      ]
+    : []
 
   const updateVolField = (field: keyof VolumePlan, value: any) => {
     initEditingPlan()
@@ -847,8 +1325,15 @@ function PlanTabContent({ currentProject, adaptPlan, editingPlan, setEditingPlan
 
   const handleSave = async () => {
     if (!currentProject || !editingPlan) return
-    editingPlan.activeVolumeIndex = activeVolIndex
-    await savePlan(currentProject.projectPath, editingPlan)
+    const planToSave: AdaptPlan = {
+      ...editingPlan,
+      activeVolumeIndex: activeVolIndex,
+      updatedAt: new Date().toISOString(),
+      volumes: editingPlan.volumes.map(v => ({ ...v }))
+    }
+    const success = await savePlan(currentProject.projectPath, planToSave)
+    if (!success) return
+    setEditingPlan(planToSave)
     addToast('success', '改编规划已保存')
   }
 
@@ -919,128 +1404,180 @@ function PlanTabContent({ currentProject, adaptPlan, editingPlan, setEditingPlan
 
   return (
     <div className="plan-section">
-      <div className="plan-header">
-        <h2>📐 改编规划</h2>
-        <div className="flex gap-sm">
-          {!adaptPlan && (
-            <button className="btn btn-sm" disabled={isRunning} onClick={() => { initEditingPlan() }}>
-              ➕ 创建规划
-            </button>
-          )}
-          <button className="btn btn-sm" disabled={isRunning} onClick={handleEnsurePlan}>
-            🤖 自动规划（旧版）
-          </button>
-        </div>
-      </div>
-
       {!plan ? (
         <EmptyState
           icon="📋"
-          title="暂无改编规划"
-          description="点击「创建规划」设置改编范围和参数，或点击「自动规划」使用 LLM 快速生成"
-          action={{ label: '创建规划', onClick: initEditingPlan }}
+          title="还没有卷级规划"
+          description="先明确每一卷覆盖哪些章节、计划拆成多少集，再让 LLM 补正文规划。"
+          action={{ label: '新建规划', onClick: initEditingPlan }}
         />
       ) : (
         <>
-          {/* 卷选择器 */}
-          <div className="plan-volume-selector">
-            {plan.volumes.map((vol, i) => (
-              <button
-                key={i}
-                className={`plan-vol-btn ${i === activeVolIndex ? 'active' : ''}`}
-                onClick={() => setActiveVolIndex(i)}
-              >
-                {vol.volumeLabel}
-                {plan.volumes.length > 1 && editingPlan && (
-                  <span className="plan-vol-remove" onClick={(e) => { e.stopPropagation(); removeVolume(i) }}>×</span>
-                )}
-              </button>
-            ))}
-            <button className="plan-vol-btn plan-vol-add" onClick={addVolume}>
-              + 新增卷
-            </button>
-          </div>
-
-          {currentVol && (
-            <div className="plan-form-grid">
-              {/* 左侧：参数表单 */}
-              <div className="plan-form">
-                <h3 className="plan-form-title">📝 改编参数</h3>
-
-                <div className="plan-form-row">
-                  <label className="plan-form-label">卷名称</label>
-                  <input type="text" className="plan-input"
-                    value={currentVol.volumeLabel}
-                    onChange={e => updateVolField('volumeLabel', e.target.value)}
-                  />
-                </div>
-
-                <RangeInput label="章节范围" field="chapterRange" min={1} max={totalChapters || 9999} />
-
-                <div className="plan-form-row">
-                  <label className="plan-form-label">目标集数</label>
-                  <input type="number" className="plan-input plan-input-sm"
-                    value={currentVol.targetEpisodes} min={1}
-                    onChange={e => updateVolField('targetEpisodes', parseInt(e.target.value) || 1)}
-                  />
-                </div>
-
-                <RangeInput label="单集字数" field="episodeWordCount" min={500} />
-                <RangeInput label="剧情点/集" field="plotsPerEpisode" min={1} />
-                <RangeInput label="场景/集" field="scenesPerEpisode" min={1} />
-                <RangeInput label="Seedance/集" field="seedancePerEpisode" min={3} />
-
-                <div className="plan-form-row plan-form-row-full">
-                  <label className="plan-form-label">章集分配原则</label>
-                  <textarea className="plan-textarea"
-                    value={currentVol.chapterAllocation}
-                    onChange={e => updateVolField('chapterAllocation', e.target.value)}
-                    rows={2}
-                  />
-                </div>
-
-                <div className="plan-form-row plan-form-row-full">
-                  <label className="plan-form-label">其他要求</label>
-                  <textarea className="plan-textarea"
-                    value={currentVol.additionalNotes}
-                    onChange={e => updateVolField('additionalNotes', e.target.value)}
-                    rows={2}
-                    placeholder="例如：第20集为付费节点，需要强悬念结尾"
-                  />
-                </div>
-
-                <div className="plan-form-actions">
-                  <button className="btn btn-primary" onClick={handleGenerate}
-                    disabled={planGenerating || isRunning}
-                  >
-                    {planGenerating ? '🤖 生成中...' : '🤖 LLM 辅助规划'}
-                  </button>
-                  <button className="btn btn-primary" onClick={handleSave}
-                    disabled={!editingPlan}
-                  >
-                    💾 保存规划
-                  </button>
-                </div>
+          <section className="plan-hero">
+            <div className="plan-hero-copy">
+              <div className="bd-section-label">卷级规划</div>
+              <h2>先确定卷结构，再写规划正文</h2>
+              <p className="text-secondary">
+                主要操作集中在上方，卷导航固定在左侧，正文编辑独立成主工作区，减少当前页面的信息干扰。
+              </p>
+            </div>
+            <div className="plan-hero-meta">
+              <div className="plan-overview-item">
+                <span className="plan-overview-label">当前卷</span>
+                <strong>{currentVol?.volumeLabel || '—'}</strong>
               </div>
-
-              {/* 右侧：规划预览/编辑 */}
-              <div className="plan-preview">
-                <h3 className="plan-form-title">📝 规划内容（可编辑）</h3>
-                <textarea
-                  className="plan-editor"
-                  value={currentVol.llmPlan}
-                  onChange={e => updateVolField('llmPlan', e.target.value)}
-                  placeholder="点击「LLM 辅助规划」生成，或直接输入你的改编规划..."
-                />
-                {currentVol.llmPlan && (
-                  <div className="plan-preview-rendered">
-                    <h4>预览</h4>
-                    <SimpleMarkdown content={currentVol.llmPlan} />
-                  </div>
-                )}
+              <div className="plan-overview-item">
+                <span className="plan-overview-label">卷数量</span>
+                <strong>{plan.volumes.length}</strong>
+              </div>
+              <div className="plan-overview-item">
+                <span className="plan-overview-label">当前状态</span>
+                <strong>{currentVolStatus}</strong>
               </div>
             </div>
-          )}
+            <div className="plan-hero-actions">
+              {!adaptPlan && (
+                <button className="btn" disabled={isRunning} onClick={() => { initEditingPlan() }}>
+                  新建规划
+                </button>
+              )}
+              <button className="btn" disabled={isRunning} onClick={handleEnsurePlan}>
+                快速自动规划
+              </button>
+              <button className="btn btn-primary" onClick={handleGenerate} disabled={planGenerating || isRunning || !currentVol}>
+                {planGenerating ? '生成中...' : '生成本卷正文'}
+              </button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={!editingPlan}>
+                保存卷规划
+              </button>
+            </div>
+          </section>
+
+          <div className="plan-workspace">
+            <aside className="plan-sidebar">
+              <section className="plan-card">
+                <div className="plan-card-head">
+                  <div>
+                    <div className="plan-card-title">卷导航</div>
+                    <p className="text-secondary">先选中当前要编辑的卷，再处理它的范围和正文。</p>
+                  </div>
+                  <button className="btn btn-sm" onClick={addVolume}>新增卷</button>
+                </div>
+                <div className="plan-volume-list">
+                  {plan.volumes.map((vol, i) => (
+                    <button
+                      key={i}
+                      className={`plan-volume-item ${i === activeVolIndex ? 'active' : ''}`}
+                      onClick={() => setActiveVolIndex(i)}
+                    >
+                      <span className="plan-volume-index">卷 {i + 1}</span>
+                      <strong>{vol.volumeLabel}</strong>
+                      <span className="plan-volume-meta">第 {vol.chapterRange[0]} - {vol.chapterRange[1]} 章 · {vol.targetEpisodes} 集</span>
+                      <span className="plan-volume-state">{vol.llmPlan ? '正文已生成' : '待生成正文'}</span>
+                      {plan.volumes.length > 1 && editingPlan && (
+                        <span className="plan-vol-remove" onClick={(e) => { e.stopPropagation(); removeVolume(i) }}>×</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              {currentVol && (
+                <section className="plan-card">
+                  <div className="plan-card-head">
+                    <div>
+                      <div className="plan-card-title">当前卷摘要</div>
+                      <p className="text-secondary">只保留当前做决策最需要的几个数字。</p>
+                    </div>
+                  </div>
+                  <div className="plan-stats-grid">
+                    {volumeStats.map((item) => (
+                      <div key={item.label} className="plan-stat-item">
+                        <span className="plan-overview-label">{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </aside>
+
+            {currentVol && (
+              <div className="plan-main">
+                <section className="plan-card plan-constraints-card">
+                  <div className="plan-card-head">
+                    <div>
+                      <div className="plan-card-title">本卷约束设置</div>
+                      <p className="text-secondary">约束参数集中在这里，避免和正文编辑混在一起。</p>
+                    </div>
+                  </div>
+                  <div className="plan-constraint-grid">
+                    <div className="plan-form-row">
+                      <label className="plan-form-label">卷名称</label>
+                      <input type="text" className="plan-input"
+                        value={currentVol.volumeLabel}
+                        onChange={e => updateVolField('volumeLabel', e.target.value)}
+                      />
+                    </div>
+
+                    <div className="plan-form-row">
+                      <label className="plan-form-label">目标集数</label>
+                      <input type="number" className="plan-input plan-input-sm"
+                        value={currentVol.targetEpisodes} min={1}
+                        onChange={e => updateVolField('targetEpisodes', parseInt(e.target.value) || 1)}
+                      />
+                    </div>
+
+                    <RangeInput label="章节范围" field="chapterRange" min={1} max={totalChapters || 9999} />
+                    <RangeInput label="单集字数" field="episodeWordCount" min={500} />
+                    <RangeInput label="剧情点/集" field="plotsPerEpisode" min={1} />
+                    <RangeInput label="场景/集" field="scenesPerEpisode" min={1} />
+                    <RangeInput label="Seedance/集" field="seedancePerEpisode" min={3} />
+
+                    <div className="plan-form-row plan-form-row-full">
+                      <label className="plan-form-label">章集分配原则</label>
+                      <textarea className="plan-textarea"
+                        value={currentVol.chapterAllocation}
+                        onChange={e => updateVolField('chapterAllocation', e.target.value)}
+                        rows={2}
+                      />
+                    </div>
+
+                    <div className="plan-form-row plan-form-row-full">
+                      <label className="plan-form-label">其他要求</label>
+                      <textarea className="plan-textarea"
+                        value={currentVol.additionalNotes}
+                        onChange={e => updateVolField('additionalNotes', e.target.value)}
+                        rows={2}
+                        placeholder="例如：第20集是关键付费节点，需要强悬念收尾；本卷重点强化成长和反转。"
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="plan-card plan-editor-card">
+                  <div className="plan-card-head">
+                    <div>
+                      <div className="plan-card-title">规划正文</div>
+                      <p className="text-secondary">主工作区只处理正文内容，方便集中编辑和阅读预览。</p>
+                    </div>
+                  </div>
+                  <textarea
+                    className="plan-editor"
+                    value={currentVol.llmPlan}
+                    onChange={e => updateVolField('llmPlan', e.target.value)}
+                    placeholder="先点击“生成本卷正文”，或者直接手写这一卷的核心节奏、集数安排与人物推进。"
+                  />
+                  {currentVol.llmPlan && (
+                    <div className="plan-preview-rendered">
+                      <h4>阅读预览</h4>
+                      <SimpleMarkdown content={currentVol.llmPlan} />
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>

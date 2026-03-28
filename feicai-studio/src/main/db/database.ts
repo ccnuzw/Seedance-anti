@@ -8,6 +8,7 @@ import { join } from 'path'
 import { mkdirSync } from 'fs'
 
 let db: Database.Database | null = null
+let dbFilePath: string | null = null
 
 const SCHEMA = `
 -- 项目
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS projects (
   phase TEXT DEFAULT 'production',
   visual_style TEXT,
   target_medium TEXT,
-  project_path TEXT NOT NULL,
+  project_path TEXT NOT NULL UNIQUE,
   total_episodes INTEGER DEFAULT 0,
   novel_title TEXT,
   novel_genre TEXT,
@@ -129,6 +130,87 @@ CREATE TABLE IF NOT EXISTS execution_logs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 流水线运行记录
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+  run_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  project_path TEXT NOT NULL,
+  episode_number INTEGER NOT NULL,
+  current_stage TEXT NOT NULL,
+  status TEXT NOT NULL,
+  state TEXT NOT NULL,
+  single_stage BOOLEAN DEFAULT 0,
+  queued_at DATETIME NOT NULL,
+  started_at DATETIME,
+  ended_at DATETIME,
+  last_updated_at DATETIME NOT NULL,
+  queue_position INTEGER,
+  error_message TEXT,
+  payload_json TEXT,
+  batch_id TEXT,
+  batch_label TEXT,
+  priority TEXT DEFAULT 'normal',
+  max_auto_retries INTEGER DEFAULT 0,
+  attempt INTEGER DEFAULT 0,
+  root_run_id TEXT,
+  worker_slot INTEGER,
+  archived_at DATETIME,
+  depends_on_root_run_id TEXT,
+  trigger_condition TEXT DEFAULT 'always',
+  scheduled_at DATETIME,
+  template_id TEXT,
+  template_label TEXT,
+  schedule_id TEXT,
+  schedule_label TEXT,
+  automation_key TEXT
+  ,
+  dead_lettered_at DATETIME,
+  recovery_note TEXT,
+  llm_call_count INTEGER DEFAULT 0,
+  llm_success_count INTEGER DEFAULT 0,
+  llm_failure_count INTEGER DEFAULT 0,
+  llm_input_tokens INTEGER DEFAULT 0,
+  llm_output_tokens INTEGER DEFAULT 0,
+  llm_total_tokens INTEGER DEFAULT 0,
+  llm_estimated_cost_usd REAL DEFAULT 0,
+  llm_total_duration_ms INTEGER DEFAULT 0,
+  llm_last_provider TEXT,
+  llm_last_model TEXT,
+  llm_last_failure_class TEXT,
+  llm_last_called_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_run_logs (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES pipeline_runs(run_id),
+  stage TEXT NOT NULL,
+  level TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  message TEXT NOT NULL,
+  timestamp DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_run_llm_calls (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES pipeline_runs(run_id),
+  stage TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL,
+  stream BOOLEAN DEFAULT 0,
+  started_at DATETIME NOT NULL,
+  ended_at DATETIME,
+  duration_ms INTEGER DEFAULT 0,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  total_tokens INTEGER,
+  token_source TEXT,
+  estimated_cost_usd REAL,
+  failure_class TEXT,
+  error_message TEXT
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_episodes_project ON episodes(project_id);
 CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id);
@@ -136,6 +218,15 @@ CREATE INDEX IF NOT EXISTS idx_scenes_project ON scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_episode ON reviews(episode_id);
 CREATE INDEX IF NOT EXISTS idx_logs_episode ON execution_logs(episode_id);
 CREATE INDEX IF NOT EXISTS idx_refs_episode ON asset_references(episode_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project ON pipeline_runs(project_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project_episode ON pipeline_runs(project_id, episode_number, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status, priority, queue_position, queued_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_strategy_status ON pipeline_runs(status, priority, queue_position, queued_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_archived ON pipeline_runs(archived_at, last_updated_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_orchestration ON pipeline_runs(depends_on_root_run_id, scheduled_at, status);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_automation_key ON pipeline_runs(automation_key);
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_logs_run ON pipeline_run_logs(run_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_llm_calls_run ON pipeline_run_llm_calls(run_id, started_at);
 
 -- 小说信息（编剧管线）
 CREATE TABLE IF NOT EXISTS novels (
@@ -192,6 +283,7 @@ export function initDatabase(): Database.Database {
   const dbDir = join(userDataPath, 'data')
   mkdirSync(dbDir, { recursive: true })
   const dbPath = join(dbDir, 'feicai.db')
+  dbFilePath = dbPath
 
   db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
@@ -233,6 +325,73 @@ export function initDatabase(): Database.Database {
     if (!projColNames.has(col)) db.exec(sql)
   }
 
+  // === 迁移：为无重复数据的旧库补上 project_path 唯一索引 ===
+  const duplicateProjectPaths = db.prepare(`
+    SELECT project_path
+    FROM projects
+    GROUP BY project_path
+    HAVING COUNT(*) > 1
+  `).all() as Array<{ project_path: string }>
+  if (duplicateProjectPaths.length === 0) {
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_path_unique ON projects(project_path)')
+  } else {
+    console.warn('[DB] 检测到重复 project_path，跳过唯一索引迁移:', duplicateProjectPaths.map((row) => row.project_path))
+  }
+
+  // === 迁移：pipeline_runs 增加队列与详情字段 ===
+  const runCols = db.prepare("PRAGMA table_info('pipeline_runs')").all() as { name: string }[]
+  const runColNames = new Set(runCols.map(c => c.name))
+  const runMigrations: [string, string][] = [
+    ['project_path', "ALTER TABLE pipeline_runs ADD COLUMN project_path TEXT DEFAULT ''"],
+    ['queued_at', "ALTER TABLE pipeline_runs ADD COLUMN queued_at DATETIME DEFAULT CURRENT_TIMESTAMP"],
+    ['queue_position', 'ALTER TABLE pipeline_runs ADD COLUMN queue_position INTEGER'],
+    ['error_message', 'ALTER TABLE pipeline_runs ADD COLUMN error_message TEXT'],
+    ['payload_json', 'ALTER TABLE pipeline_runs ADD COLUMN payload_json TEXT'],
+    ['batch_id', 'ALTER TABLE pipeline_runs ADD COLUMN batch_id TEXT'],
+    ['batch_label', 'ALTER TABLE pipeline_runs ADD COLUMN batch_label TEXT'],
+    ['priority', "ALTER TABLE pipeline_runs ADD COLUMN priority TEXT DEFAULT 'normal'"],
+    ['max_auto_retries', 'ALTER TABLE pipeline_runs ADD COLUMN max_auto_retries INTEGER DEFAULT 0'],
+    ['attempt', 'ALTER TABLE pipeline_runs ADD COLUMN attempt INTEGER DEFAULT 0'],
+    ['root_run_id', 'ALTER TABLE pipeline_runs ADD COLUMN root_run_id TEXT'],
+    ['worker_slot', 'ALTER TABLE pipeline_runs ADD COLUMN worker_slot INTEGER'],
+    ['archived_at', 'ALTER TABLE pipeline_runs ADD COLUMN archived_at DATETIME'],
+    ['depends_on_root_run_id', 'ALTER TABLE pipeline_runs ADD COLUMN depends_on_root_run_id TEXT'],
+    ['trigger_condition', "ALTER TABLE pipeline_runs ADD COLUMN trigger_condition TEXT DEFAULT 'always'"],
+    ['scheduled_at', 'ALTER TABLE pipeline_runs ADD COLUMN scheduled_at DATETIME'],
+    ['template_id', 'ALTER TABLE pipeline_runs ADD COLUMN template_id TEXT'],
+    ['template_label', 'ALTER TABLE pipeline_runs ADD COLUMN template_label TEXT'],
+    ['schedule_id', 'ALTER TABLE pipeline_runs ADD COLUMN schedule_id TEXT'],
+    ['schedule_label', 'ALTER TABLE pipeline_runs ADD COLUMN schedule_label TEXT'],
+    ['automation_key', 'ALTER TABLE pipeline_runs ADD COLUMN automation_key TEXT'],
+    ['dead_lettered_at', 'ALTER TABLE pipeline_runs ADD COLUMN dead_lettered_at DATETIME'],
+    ['recovery_note', 'ALTER TABLE pipeline_runs ADD COLUMN recovery_note TEXT'],
+    ['llm_call_count', 'ALTER TABLE pipeline_runs ADD COLUMN llm_call_count INTEGER DEFAULT 0'],
+    ['llm_success_count', 'ALTER TABLE pipeline_runs ADD COLUMN llm_success_count INTEGER DEFAULT 0'],
+    ['llm_failure_count', 'ALTER TABLE pipeline_runs ADD COLUMN llm_failure_count INTEGER DEFAULT 0'],
+    ['llm_input_tokens', 'ALTER TABLE pipeline_runs ADD COLUMN llm_input_tokens INTEGER DEFAULT 0'],
+    ['llm_output_tokens', 'ALTER TABLE pipeline_runs ADD COLUMN llm_output_tokens INTEGER DEFAULT 0'],
+    ['llm_total_tokens', 'ALTER TABLE pipeline_runs ADD COLUMN llm_total_tokens INTEGER DEFAULT 0'],
+    ['llm_estimated_cost_usd', 'ALTER TABLE pipeline_runs ADD COLUMN llm_estimated_cost_usd REAL DEFAULT 0'],
+    ['llm_total_duration_ms', 'ALTER TABLE pipeline_runs ADD COLUMN llm_total_duration_ms INTEGER DEFAULT 0'],
+    ['llm_last_provider', 'ALTER TABLE pipeline_runs ADD COLUMN llm_last_provider TEXT'],
+    ['llm_last_model', 'ALTER TABLE pipeline_runs ADD COLUMN llm_last_model TEXT'],
+    ['llm_last_failure_class', 'ALTER TABLE pipeline_runs ADD COLUMN llm_last_failure_class TEXT'],
+    ['llm_last_called_at', 'ALTER TABLE pipeline_runs ADD COLUMN llm_last_called_at DATETIME']
+  ]
+  for (const [col, sql] of runMigrations) {
+    if (!runColNames.has(col)) db.exec(sql)
+  }
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status, priority, queue_position, queued_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_runs_strategy_status ON pipeline_runs(status, priority, queue_position, queued_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_runs_archived ON pipeline_runs(archived_at, last_updated_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_runs_orchestration ON pipeline_runs(depends_on_root_run_id, scheduled_at, status)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_runs_automation_key ON pipeline_runs(automation_key)')
+  db.exec('CREATE TABLE IF NOT EXISTS pipeline_run_logs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES pipeline_runs(run_id), stage TEXT NOT NULL, level TEXT NOT NULL, event_type TEXT NOT NULL, message TEXT NOT NULL, timestamp DATETIME NOT NULL)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_run_logs_run ON pipeline_run_logs(run_id, timestamp)')
+  db.exec('CREATE TABLE IF NOT EXISTS pipeline_run_llm_calls (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES pipeline_runs(run_id), stage TEXT NOT NULL, phase TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, stream BOOLEAN DEFAULT 0, started_at DATETIME NOT NULL, ended_at DATETIME, duration_ms INTEGER DEFAULT 0, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, token_source TEXT, estimated_cost_usd REAL, failure_class TEXT, error_message TEXT)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pipeline_run_llm_calls_run ON pipeline_run_llm_calls(run_id, started_at)')
+
   return db
 }
 
@@ -254,4 +413,10 @@ export function closeDatabase(): void {
     db.close()
     db = null
   }
+}
+
+export function getDatabaseFilePath(): string {
+  if (dbFilePath) return dbFilePath
+  const userDataPath = app.getPath('userData')
+  return join(userDataPath, 'data', 'feicai.db')
 }

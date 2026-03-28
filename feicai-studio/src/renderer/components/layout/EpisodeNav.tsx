@@ -9,17 +9,17 @@ interface EpisodeNavProps {
   runningEp?: number
   /** 判断是否"已完成"的自定义逻辑，默认按 episode.status === 'complete' */
   isDone?: (episode: Episode) => boolean
+  /** 判断是否"处理中/待补齐"的自定义逻辑 */
+  isPartial?: (episode: Episode) => boolean
 }
 
-export default function EpisodeNav({ episodes, currentEp, onSelect, runningEp, isDone }: EpisodeNavProps) {
+export default function EpisodeNav({ episodes, currentEp, onSelect, runningEp, isDone, isPartial }: EpisodeNavProps) {
   const sorted = [...episodes].sort((a, b) => a.episodeNumber - b.episodeNumber)
 
   const checkDone = isDone ?? ((ep: Episode) => ep.status === 'complete')
 
   /** 部分完成：有导演分析或服化道但无最终提示词 */
-  const checkPartial = (ep: Episode) => {
-    return ep.status === 'director' || ep.status === 'art'
-  }
+  const checkPartial = isPartial ?? ((ep: Episode) => ep.status === 'director' || ep.status === 'art')
 
   return (
     <div className="epnav">

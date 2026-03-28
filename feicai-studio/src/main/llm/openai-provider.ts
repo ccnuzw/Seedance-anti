@@ -6,6 +6,7 @@
 import OpenAI from 'openai'
 import { BaseLLMProvider } from './types'
 import type { AssembledPrompt, GenerateOptions, LLMConfig } from '@shared/types'
+import { buildEstimatedUsage } from './telemetry'
 
 export class OpenAIProvider extends BaseLLMProvider {
   private client: OpenAI
@@ -36,10 +37,19 @@ export class OpenAIProvider extends BaseLLMProvider {
       ],
       max_tokens: this.getMaxTokens(options),
       temperature: this.getTemperature(options)
+    }, {
+      signal: options?.signal
     })
 
     const text = completion.choices[0]?.message?.content || ''
+    const estimated = buildEstimatedUsage(prompt.system, prompt.user, text)
     options?.onChunk?.(text)
+    this.emitTelemetry(options, {
+      inputTokens: completion.usage?.prompt_tokens ?? estimated.inputTokens,
+      outputTokens: completion.usage?.completion_tokens ?? estimated.outputTokens,
+      totalTokens: completion.usage?.total_tokens ?? estimated.totalTokens,
+      tokenSource: completion.usage ? 'actual' : 'estimated'
+    })
     return text
   }
 
@@ -55,16 +65,42 @@ export class OpenAIProvider extends BaseLLMProvider {
       ],
       max_tokens: this.getMaxTokens(options),
       temperature: this.getTemperature(options),
-      stream: true
+      stream: true,
+      stream_options: {
+        include_usage: true
+      }
+    }, {
+      signal: options?.signal
     })
 
+    let output = ''
+    let finalUsage:
+      | {
+          prompt_tokens?: number
+          completion_tokens?: number
+          total_tokens?: number
+        }
+      | undefined
+
     for await (const chunk of stream) {
+      if (chunk.usage) {
+        finalUsage = chunk.usage
+      }
       const text = chunk.choices[0]?.delta?.content
       if (text) {
+        output += text
         options?.onChunk?.(text)
         yield text
       }
     }
+
+    const estimated = buildEstimatedUsage(prompt.system, prompt.user, output)
+    this.emitTelemetry(options, {
+      inputTokens: finalUsage?.prompt_tokens ?? estimated.inputTokens,
+      outputTokens: finalUsage?.completion_tokens ?? estimated.outputTokens,
+      totalTokens: finalUsage?.total_tokens ?? estimated.totalTokens,
+      tokenSource: finalUsage ? 'actual' : 'estimated'
+    })
   }
 
   async testConnection(): Promise<{ success: boolean; message: string; model?: string }> {

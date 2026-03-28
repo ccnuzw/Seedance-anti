@@ -25,13 +25,52 @@ export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
   singlePromptMax: 10
 }
 
+export interface EpisodeOutlineItem {
+  episodeNumber: number
+  title: string
+  summary: string
+}
+
+export interface OriginalContentMetadata {
+  title?: string
+  genre?: string
+  author?: string
+  sourcePath?: string
+  contentPath?: string
+  importedAt?: string
+  contentFormat?: 'text' | 'chapters'
+}
+
 export interface ProjectConfig {
   projectName: string
+  sourceType?: ProjectSourceType
+  phase?: ProjectPhase
+  templateProfileId?: string
+  exportProfileId?: string
   totalEpisodes: number
   visualStyle: string
   targetMedium: string
+  workingDirectory?: string
+  novelTitle?: string
+  novelGenre?: string
+  originalContent?: OriginalContentMetadata
+  episodeOutlines?: EpisodeOutlineItem[]
   createdAt: string
   pipelineSettings?: PipelineSettings
+  /** 小说→改编管线（Adapt）的项目级参数 */
+  adaptSettings?: AdaptSettings
+  /** 通用质检策略（Adapt + Seedance 流水线共享） */
+  reviewPolicy?: ReviewPolicyConfig
+  /** 项目级流程开关与流转策略 */
+  flowConfig?: FlowConfig
+  /** 项目级任务默认策略与编排偏好 */
+  taskDefaults?: ProjectTaskDefaults
+  /** 项目级任务模板 */
+  taskTemplates?: ProjectTaskTemplate[]
+  /** 项目级自动化计划 */
+  taskSchedules?: ProjectTaskSchedule[]
+  /** 项目级自动化告警 */
+  taskAlerts?: ProjectTaskAlertConfig
 }
 
 export interface Project {
@@ -53,6 +92,7 @@ export interface Project {
 // ---------- Episode ----------
 
 export type EpisodeStatus = 'idle' | 'director' | 'art' | 'storyboard' | 'complete'
+export type ProjectEpisodeStageState = 'pending' | 'running' | 'completed' | 'failed'
 
 export interface Episode {
   id: string
@@ -72,6 +112,92 @@ export interface Episode {
   totalPrompts?: number
   createdAt: string
   updatedAt: string
+}
+
+export interface ProjectProgressEpisode {
+  episodeNumber: number
+  title: string
+  status: EpisodeStatus
+  statusLabel: string
+  stageState?: ProjectEpisodeStageState
+  stageStateLabel?: string
+  currentPipelineState?: PipelineState
+  lastError?: string
+  scriptPath?: string
+  directorAnalysisPath?: string
+  artDesignPath?: string
+  seedancePromptsPath?: string
+  hasScript: boolean
+  hasDirectorAnalysis: boolean
+  hasArtDesign: boolean
+  hasSeedancePrompts: boolean
+  hasAssetUpdates: boolean
+  assetUpdateKinds: Array<'character' | 'scene'>
+  totalDurationSeconds?: number
+  totalPrompts?: number
+}
+
+export interface ProjectProgressSummary {
+  totalEpisodes: number
+  counts: Record<EpisodeStatus, number>
+  completedEpisodes: number
+  startedEpisodes: number
+  completionRate: number
+}
+
+export interface ProjectProgress {
+  projectPath: string
+  generatedAt: string
+  episodes: ProjectProgressEpisode[]
+  summary: ProjectProgressSummary
+}
+
+export interface ProjectCommandResult {
+  command: string
+  text: string
+  progress?: ProjectProgress
+  data?: Record<string, unknown>
+}
+
+export interface NovelContentDocument {
+  projectPath: string
+  contentPath: string
+  content: string
+  title?: string
+  genre?: string
+  sourcePath?: string
+  importedAt?: string
+  updatedAt: string
+}
+
+export interface EpisodeOutlineScene {
+  id: string
+  title: string
+  summary: string
+  beats?: string[]
+  sourceChapters?: number[]
+}
+
+export interface EpisodeOutline {
+  episodeNumber: number
+  code: string
+  title: string
+  logline?: string
+  summary: string
+  sourceChapters: number[]
+  scenes: EpisodeOutlineScene[]
+  status: 'draft' | 'reviewed'
+  updatedAt: string
+}
+
+export interface ScriptVersionSummary {
+  artifactId: string
+  version: number
+  createdAt: string
+  createdBy: ArtifactRecord['createdBy']
+  filePath: string
+  snapshotPath: string
+  isCurrent: boolean
 }
 
 // ---------- Assets ----------
@@ -114,6 +240,61 @@ export interface AssetReference {
   referenceTag: string // e.g. '@图片1'
 }
 
+// ---------- Artifacts ----------
+
+export type ArtifactKind =
+  | 'project_config'
+  | 'plot_breakdown'
+  | 'adapt_plan'
+  | 'adapt_notes'
+  | 'script_episode'
+  | 'director_output'
+  | 'art_output'
+  | 'seedance_prompts'
+  | 'character_prompts'
+  | 'scene_prompts'
+  | 'pipeline_state'
+
+export interface ArtifactRecord {
+  id: string
+  projectPath: string
+  kind: ArtifactKind
+  label: string
+  scopeKey: string
+  filePath: string
+  snapshotPath: string
+  episodeNum?: number
+  stage?: PipelineStage | AdaptStage
+  sourceRunId?: string
+  createdBy: 'system' | 'user' | 'rollback'
+  version: number
+  contentType: string
+  sizeBytes: number
+  hash: string
+  isCurrent: boolean
+  createdAt: string
+  metadata?: Record<string, unknown>
+}
+
+export interface ArtifactManifest {
+  version: number
+  projectPath: string
+  artifacts: ArtifactRecord[]
+  updatedAt: string
+}
+
+export interface ArtifactQuery {
+  projectPath: string
+  episodeNum?: number
+  kind?: ArtifactKind
+  currentOnly?: boolean
+}
+
+export interface ArtifactRollbackParams {
+  projectPath: string
+  artifactId: string
+}
+
 // ---------- Pipeline ----------
 
 export type PipelineStage = 'director' | 'art' | 'storyboard'
@@ -134,12 +315,17 @@ export type PipelineState =
   | 'error'
 
 export interface PipelineContext {
+  runId: string
   projectId: string
   projectPath: string
   episodeNum: number
   currentStage: PipelineStage
   state: PipelineState
+  singleStage?: boolean
   retryCount: number
+  runStartedAt?: string
+  runEndedAt?: string
+  lastUpdatedAt?: string
 
   // 执行产物路径
   scriptPath?: string
@@ -163,6 +349,258 @@ export interface PipelineEvent {
   type: 'state_changed' | 'log' | 'stream' | 'stage_complete' | 'review_result' | 'error'
   timestamp: string
   data: unknown
+}
+
+export type PipelineRunStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'aborted' | 'dead_letter'
+export type PipelineRunPriority = 'high' | 'normal' | 'low'
+export type PipelineDependencyCondition = 'always' | 'on_success' | 'on_failure'
+export type PipelineBatchMode = 'independent' | 'sequential_on_success' | 'sequential_always'
+export type PipelineScheduleFrequency = 'once' | 'daily'
+
+export interface PipelineTaskStrategy {
+  batchId?: string
+  batchLabel?: string
+  priority: PipelineRunPriority
+  maxAutoRetries: number
+  attempt: number
+  rootRunId: string
+  templateId?: string
+  templateLabel?: string
+}
+
+export interface PipelineTaskOrchestration {
+  dependsOnRootRunId?: string
+  condition: PipelineDependencyCondition
+  scheduledAt?: string
+  scheduleId?: string
+  scheduleLabel?: string
+  automationKey?: string
+}
+
+export interface PipelineRunRecord {
+  runId: string
+  projectId: string
+  projectName?: string
+  projectPath: string
+  episodeNum: number
+  currentStage: PipelineStage
+  status: PipelineRunStatus
+  state: PipelineState
+  singleStage: boolean
+  queuedAt: string
+  startedAt?: string
+  endedAt?: string
+  lastUpdatedAt: string
+  queuePosition?: number
+  errorMessage?: string
+  batchId?: string
+  batchLabel?: string
+  priority: PipelineRunPriority
+  maxAutoRetries: number
+  attempt: number
+  rootRunId: string
+  workerSlot?: number
+  archivedAt?: string
+  deadLetteredAt?: string
+  recoveryNote?: string
+  dependsOnRootRunId?: string
+  triggerCondition: PipelineDependencyCondition
+  scheduledAt?: string
+  templateId?: string
+  templateLabel?: string
+  scheduleId?: string
+  scheduleLabel?: string
+  automationKey?: string
+  telemetry?: PipelineRunTelemetrySummary
+}
+
+export interface PipelineRunDetail {
+  run: PipelineRunRecord
+  logs: LogEntry[]
+  llmCalls: PipelineLLMCallRecord[]
+}
+
+export type PipelineAlertType = 'run_failed' | 'schedule_triggered'
+
+export interface PipelineAutomationAlert {
+  type: PipelineAlertType
+  projectId: string
+  projectPath: string
+  projectName: string
+  title: string
+  message: string
+  runId?: string
+  rootRunId?: string
+  scheduleId?: string
+  scheduleLabel?: string
+  templateId?: string
+  templateLabel?: string
+  toastNotifications: boolean
+  desktopNotifications: boolean
+  createdAt: string
+}
+
+export interface PipelineRuntimeDiagnostics {
+  generatedAt: string
+  activeRun: PipelineActiveSnapshot | null
+  queue: PipelineQueueSnapshot[]
+  queueSummary: {
+    total: number
+    waitingForSchedule: number
+    waitingForDependency: number
+    deadLetter: number
+  }
+  automation: {
+    projectCount: number
+    enabledScheduleCount: number
+    lastScanAt?: string
+    lastScanError?: string
+    nextQueueWakeAt?: string
+  }
+  recovery: {
+    deadLetterCount: number
+    orphanedRunCount: number
+    lastSweepAt?: string
+    lastSweepError?: string
+  }
+  telemetry: PipelineRuntimeTelemetrySummary
+  issues: PipelineRuntimeIssue[]
+}
+
+export interface PipelineActiveSnapshot {
+  runId: string
+  projectId: string
+  projectPath: string
+  episodeNum: number
+  currentStage: PipelineStage
+  state: PipelineState
+  startedAt?: string
+}
+
+export interface PipelineQueueSnapshot {
+  runId: string
+  rootRunId: string
+  projectId: string
+  projectPath: string
+  episodeNum: number
+  currentStage: PipelineStage
+  priority: PipelineRunPriority
+  queuePosition?: number
+  scheduledAt?: string
+  dependsOnRootRunId?: string
+  scheduleLabel?: string
+  templateLabel?: string
+}
+
+export interface PipelineRuntimeIssue {
+  severity: 'error' | 'warning'
+  projectId: string
+  projectName: string
+  projectPath: string
+  scope: 'template' | 'schedule' | 'alerts' | 'runtime' | 'recovery'
+  field: string
+  message: string
+  id?: string
+}
+
+export interface AppDeliveryIssue {
+  severity: 'error' | 'warning' | 'info'
+  code: string
+  message: string
+}
+
+export interface AppDeliveryStatus {
+  generatedAt: string
+  version: string
+  packaged: boolean
+  platform: string
+  arch: string
+  paths: {
+    userData: string
+    database: string
+    logsDir: string
+    runtimeLog: string
+    reportsDir: string
+  }
+  readiness: {
+    score: number
+    issueCount: number
+    warningCount: number
+    llmConfigCount: number
+    defaultLLMCount: number
+    projectCount: number
+    readyForDelivery: boolean
+  }
+  runtime: {
+    openWindowCount: number
+    activeRunId?: string
+    queuedRunCount: number
+    deadLetterCount: number
+    automationEnabledCount: number
+    telemetryCallCount: number
+  }
+  recentErrors: Array<{
+    timestamp: string
+    scope: 'startup' | 'runtime'
+    message: string
+  }>
+  issues: AppDeliveryIssue[]
+}
+
+export type LLMTelemetryTokenSource = 'actual' | 'estimated'
+export type LLMCallStatus = 'success' | 'failed'
+export type LLMFailureClass = 'timeout' | 'network' | 'rate_limit' | 'provider' | 'auth' | 'validation' | 'unknown'
+export type PipelineLLMCallPhase = 'stage_execution' | 'business_review' | 'compliance_review'
+
+export interface LLMUsageMetrics {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  tokenSource?: LLMTelemetryTokenSource
+}
+
+export interface PipelineLLMCallRecord {
+  id: string
+  runId: string
+  stage: PipelineStage
+  phase: PipelineLLMCallPhase
+  provider: LLMProviderType | string
+  model: string
+  status: LLMCallStatus
+  stream: boolean
+  startedAt: string
+  endedAt?: string
+  durationMs: number
+  usage?: LLMUsageMetrics
+  estimatedCostUsd?: number
+  failureClass?: LLMFailureClass
+  errorMessage?: string
+}
+
+export interface PipelineRunTelemetrySummary {
+  callCount: number
+  successCount: number
+  failureCount: number
+  totalDurationMs: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+  lastProvider?: string
+  lastModel?: string
+  lastFailureClass?: LLMFailureClass
+  lastCalledAt?: string
+}
+
+export interface PipelineRuntimeTelemetrySummary {
+  runCount: number
+  callCount: number
+  successCount: number
+  failureCount: number
+  totalDurationMs: number
+  totalTokens: number
+  estimatedCostUsd: number
+  lastCalledAt?: string
 }
 
 // ---------- Skills ----------
@@ -192,7 +630,7 @@ export interface ReviewIssue {
 }
 
 export interface ReviewResult {
-  stage: PipelineStage
+  stage: PipelineStage | AdaptStage
   reviewType: ReviewType
   result: ReviewResultStatus
   /** 便捷属性：result === 'PASS' */
@@ -230,7 +668,13 @@ export interface AssembledPrompt {
 export interface GenerateOptions {
   maxTokens?: number
   temperature?: number
+  signal?: AbortSignal
   onChunk?: (chunk: string) => void
+  onTelemetry?: (metrics: {
+    provider: LLMProviderType | string
+    model: string
+    usage?: LLMUsageMetrics
+  }) => void
 }
 
 // ---------- Logs ----------
@@ -272,6 +716,11 @@ export interface WaterLevel {
   totalPlots: number
   totalChapters: number
   processedChapters: number
+  assignedEpisodes: number
+  scriptEpisodes: number
+  pendingScriptEpisodes: number
+  fullyUsedEpisodes: number
+  partialUsedEpisodes: number
 }
 
 export interface AdaptContext {
@@ -323,6 +772,13 @@ export interface PlotPoint {
   batch: number
 }
 
+export interface PlotBreakdown {
+  title: string
+  genre: string
+  outlines: EpisodeOutline[]
+  updatedAt: string
+}
+
 export interface AdaptSettings {
   chaptersPerBatch: number
   maxEpisodesPerBatch: number
@@ -339,6 +795,133 @@ export const DEFAULT_ADAPT_SETTINGS: AdaptSettings = {
   scriptMaxRetries: 3,
   breakdownPassScore: 7,
   scriptPassScore: 7
+}
+
+// ---------- 项目级 QA & 流程配置 ----------
+
+export type QAMode = 'strict' | 'lenient' | 'report_only'
+
+export interface ReviewPolicyConfig {
+  /** QA 总模式：严格 / 宽松 / 仅报告 */
+  qaMode: QAMode
+  /** 可选：覆盖 Adapt 拆解阶段通过分数阈值 */
+  adaptBreakdownPassScore?: number
+  /** 可选：覆盖 Adapt 剧本阶段通过分数阈值 */
+  adaptScriptPassScore?: number
+  /** 每批拆解在首轮 FAIL 后，允许自动修正+重检的最大轮数（0 表示不做自动修正，默认 0） */
+  breakdownAutoRepairRounds?: number
+  /** 每批剧本在首轮 FAIL 后，允许自动修正+重检的最大轮数（0 表示不做自动修正，默认 0） */
+  scriptAutoRepairRounds?: number
+}
+
+export interface FlowConfig {
+  /** 是否执行小说→剧情拆解阶段 */
+  enableAdaptBreakdown: boolean
+  /** 是否执行小说→剧本创作阶段 */
+  enableAdaptScript: boolean
+
+  /** 是否在通过审核后自动流转到下一阶段（适用于 Seedance 流水线） */
+  autoContinueOnPass: boolean
+  /** 是否在首个严重 FAIL 时中止整个流程 */
+  stopOnFirstFail: boolean
+
+  /** 是否启用导演阶段（管线 2） */
+  enableDirectorStage: boolean
+  /** 是否启用服化道阶段（管线 2） */
+  enableArtStage: boolean
+  /** 是否启用分镜阶段（管线 2） */
+  enableStoryboardStage: boolean
+  /** 是否启用合规审核（所有阶段共享） */
+  enableComplianceReview: boolean
+}
+
+export interface ProjectTaskDefaults {
+  defaultPriority: PipelineRunPriority
+  defaultMaxAutoRetries: number
+  defaultBatchMode: PipelineBatchMode
+  archiveAfterDays: number
+}
+
+export interface ProjectTaskTemplate {
+  id: string
+  label: string
+  description?: string
+  source?: 'builtin' | 'project'
+  startStage?: PipelineStage
+  singleStage?: boolean
+  priority: PipelineRunPriority
+  maxAutoRetries: number
+  batchMode: PipelineBatchMode
+}
+
+export type ExportProfileAction = 'prompts' | 'scripts' | 'bundle'
+
+export interface ExportProfilePreset {
+  id: string
+  label: string
+  description: string
+  action: ExportProfileAction
+  format?: 'markdown' | 'json' | 'csv'
+  rangeMode: 'all' | 'selected'
+}
+
+export interface ProjectAutomationPreset {
+  id: string
+  label: string
+  description: string
+  pipelineSettings?: Partial<PipelineSettings>
+  reviewPolicy?: Partial<ReviewPolicyConfig>
+  taskDefaults?: Partial<ProjectTaskDefaults>
+  recommendedTemplateIds?: string[]
+  defaultExportProfileId?: string
+}
+
+export interface ProjectTaskSchedule {
+  id: string
+  label: string
+  enabled: boolean
+  templateId?: string
+  episodeNumbers: number[]
+  frequency: PipelineScheduleFrequency
+  timeValue: string
+}
+
+export interface ProjectTaskAlertConfig {
+  notifyOnRunFailed: boolean
+  notifyOnScheduleTriggered: boolean
+  desktopNotifications: boolean
+  toastNotifications: boolean
+}
+
+export const DEFAULT_REVIEW_POLICY: ReviewPolicyConfig = {
+  qaMode: 'strict',
+  breakdownAutoRepairRounds: 3,
+  scriptAutoRepairRounds: 2,
+}
+
+export const DEFAULT_FLOW_CONFIG: FlowConfig = {
+  enableAdaptBreakdown: true,
+  enableAdaptScript: true,
+  autoContinueOnPass: true,
+  stopOnFirstFail: false,
+  enableDirectorStage: true,
+  enableArtStage: true,
+  enableStoryboardStage: true,
+  enableComplianceReview: true,
+}
+
+export const DEFAULT_PROJECT_TASK_DEFAULTS: ProjectTaskDefaults = {
+  defaultPriority: 'normal',
+  defaultMaxAutoRetries: 1,
+  defaultBatchMode: 'independent',
+  archiveAfterDays: 7
+}
+
+export const DEFAULT_PROJECT_TASK_ALERTS: ProjectTaskAlertConfig = {
+  notifyOnRunFailed: true,
+  notifyOnScheduleTriggered: true,
+  desktopNotifications: true,
+  toastNotifications: true
 }
 
 /** 小说类型列表 */

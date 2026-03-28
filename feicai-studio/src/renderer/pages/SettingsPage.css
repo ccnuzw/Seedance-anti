@@ -310,6 +310,7 @@
 .about-row {
   display: flex;
   justify-content: space-between;
+  gap: var(--spacing-md);
   padding: var(--spacing-xs) 0;
   font-size: var(--font-size-sm);
 }
@@ -320,3 +321,15 @@
   margin-top: var(--spacing-xs);
 }
 
+.about-path {
+  max-width: 70%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.about-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-md);
+}

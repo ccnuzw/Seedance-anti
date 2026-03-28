@@ -5,6 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { BaseLLMProvider } from './types'
 import type { AssembledPrompt, GenerateOptions, LLMConfig } from '@shared/types'
+import { buildEstimatedUsage } from './telemetry'
 
 export class AnthropicProvider extends BaseLLMProvider {
   private client: Anthropic
@@ -24,6 +25,8 @@ export class AnthropicProvider extends BaseLLMProvider {
       temperature: this.getTemperature(options),
       system: prompt.system,
       messages: [{ role: 'user', content: prompt.user }]
+    }, {
+      signal: options?.signal
     })
 
     const text = response.content
@@ -32,6 +35,15 @@ export class AnthropicProvider extends BaseLLMProvider {
       .join('')
 
     options?.onChunk?.(text)
+    const estimated = buildEstimatedUsage(prompt.system, prompt.user, text)
+    this.emitTelemetry(options, {
+      inputTokens: response.usage?.input_tokens ?? estimated.inputTokens,
+      outputTokens: response.usage?.output_tokens ?? estimated.outputTokens,
+      totalTokens: response.usage
+        ? (response.usage.input_tokens || 0) + (response.usage.output_tokens || 0)
+        : estimated.totalTokens,
+      tokenSource: response.usage ? 'actual' : 'estimated'
+    })
     return text
   }
 
@@ -45,8 +57,11 @@ export class AnthropicProvider extends BaseLLMProvider {
       temperature: this.getTemperature(options),
       system: prompt.system,
       messages: [{ role: 'user', content: prompt.user }]
+    }, {
+      signal: options?.signal
     })
 
+    let output = ''
     for await (const event of stream) {
       if (
         event.type === 'content_block_delta' &&
@@ -54,11 +69,14 @@ export class AnthropicProvider extends BaseLLMProvider {
       ) {
         const text = event.delta.text
         if (text) {
+          output += text
           options?.onChunk?.(text)
           yield text
         }
       }
     }
+
+    this.emitTelemetry(options, buildEstimatedUsage(prompt.system, prompt.user, output))
   }
 
   async testConnection(): Promise<{ success: boolean; message: string; model?: string }> {
