@@ -1,8 +1,8 @@
 # 项目产出数据（不纳入版本控制）
-assets/
-outputs/
-script/
-project-config.json
+/assets/
+/outputs/
+/script/
+/project-config.json
 
 # 测试项目和资产压缩包
 *.zip
