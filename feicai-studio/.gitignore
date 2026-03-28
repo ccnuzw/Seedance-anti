@@ -27,3 +27,9 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Caches and runtime data
+.native-cache/
+.npm-cache/
+.release-home/
+.web-platform-data/
