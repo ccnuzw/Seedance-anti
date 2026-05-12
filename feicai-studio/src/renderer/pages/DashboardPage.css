@@ -145,6 +145,234 @@
   margin-bottom: var(--spacing-md);
 }
 
+.wizard-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+}
+
+.wizard-subtitle {
+  margin-top: var(--spacing-xs);
+}
+
+.wizard-steps {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.wizard-step-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+}
+
+.wizard-step-chip.active {
+  border-color: var(--color-accent);
+  background: color-mix(
+    in srgb,
+    var(--color-accent) 10%,
+    var(--color-bg-elevated)
+  );
+  color: var(--color-text-primary);
+}
+
+.wizard-step-chip.done {
+  border-color: var(--color-success);
+  color: var(--color-text-primary);
+}
+
+.wizard-step-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+}
+
+.wizard-step-label {
+  font-size: var(--font-size-sm);
+}
+
+.wizard-stage-select {
+  display: grid;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.wizard-entry-card {
+  width: 100%;
+  text-align: left;
+  padding: var(--spacing-md);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.wizard-entry-card:hover {
+  border-color: var(--color-accent);
+  background: var(--color-bg-hover);
+  transform: translateY(-1px);
+}
+
+.wizard-entry-card.active {
+  border-color: var(--color-accent);
+  background: color-mix(
+    in srgb,
+    var(--color-accent) 8%,
+    var(--color-bg-elevated)
+  );
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+.wizard-entry-top {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+}
+
+.wizard-entry-title {
+  font-size: var(--font-size-md);
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--color-text-primary);
+}
+
+.wizard-entry-subtitle {
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.wizard-entry-badge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--color-accent) 12%,
+    var(--color-bg-card)
+  );
+  color: var(--color-accent);
+  border: 1px solid
+    color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+}
+
+.wizard-entry-dirs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.wizard-dir-chip {
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.wizard-entry-card.active .wizard-dir-chip,
+.wizard-entry-card:hover .wizard-dir-chip {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+
+.wizard-selected-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--spacing-md);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  margin-bottom: var(--spacing-md);
+}
+
+.wizard-selected-label,
+.wizard-review-title {
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.wizard-review {
+  display: grid;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.wizard-review-card,
+.wizard-dir-preview {
+  padding: var(--spacing-md);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+}
+
+.wizard-review-value {
+  margin: 6px 0;
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.wizard-review-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-md);
+}
+
+.form-group-wide {
+  grid-column: 1 / -1;
+}
+
+.wizard-field-hint {
+  margin-top: 6px;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.wizard-review-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--spacing-md);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+}
+
+.wizard-selected-entry strong,
+.wizard-review-item strong {
+  color: var(--color-text-primary);
+}
+
 /* form-grid, form-group, form-actions → see global.css */
 
 .dir-select {
@@ -152,9 +380,13 @@
   gap: var(--spacing-xs);
 }
 
-.dir-select .input { flex: 1; }
+.dir-select .input {
+  flex: 1;
+}
 
-.about-card { padding: var(--spacing-md); }
+.about-card {
+  padding: var(--spacing-md);
+}
 .about-row {
   display: flex;
   justify-content: space-between;
@@ -162,3 +394,12 @@
   font-size: var(--font-size-sm);
 }
 
+@media (max-width: 960px) {
+  .wizard-header {
+    flex-direction: column;
+  }
+
+  .wizard-review-grid {
+    grid-template-columns: 1fr;
+  }
+}

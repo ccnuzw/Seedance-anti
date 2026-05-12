@@ -17,7 +17,10 @@ export class AnthropicProvider extends BaseLLMProvider {
     })
   }
 
-  async generate(prompt: AssembledPrompt, options?: GenerateOptions): Promise<string> {
+  async generate(
+    prompt: AssembledPrompt,
+    options?: GenerateOptions
+  ): Promise<string> {
     const response = await this.client.messages.create({
       model: this.config.model,
       max_tokens: this.getMaxTokens(options),
@@ -61,7 +64,11 @@ export class AnthropicProvider extends BaseLLMProvider {
     }
   }
 
-  async testConnection(): Promise<{ success: boolean; message: string; model?: string }> {
+  async testConnection(): Promise<{
+    success: boolean
+    message: string
+    model?: string
+  }> {
     try {
       const response = await this.client.messages.create({
         model: this.config.model,

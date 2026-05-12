@@ -5,6 +5,7 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useShallow } from 'zustand/react/shallow'
 
 /**
  * 在任何包含 /project/:id 路由的页面中调用。
@@ -13,11 +14,20 @@ import { useProjectStore } from '@renderer/stores/projectStore'
  */
 export function useProjectSync(): void {
   const { id } = useParams<{ id: string }>()
-  const { currentProject, loadProject } = useProjectStore()
+  const { currentProject, episodeCount, loadProject } = useProjectStore(
+    useShallow((s) => ({
+      currentProject: s.currentProject,
+      episodeCount: s.episodes.length,
+      loadProject: s.loadProject
+    }))
+  )
 
   useEffect(() => {
-    if (id && (!currentProject || currentProject.id !== id)) {
+    if (
+      id &&
+      (!currentProject || currentProject.id !== id || episodeCount === 0)
+    ) {
       loadProject(id)
     }
-  }, [id, currentProject, loadProject])
+  }, [id, currentProject, episodeCount, loadProject])
 }

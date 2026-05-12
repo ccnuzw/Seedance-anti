@@ -11,17 +11,17 @@
 //
 
 export interface PromptReference {
-  promptIndex: number    // 第几条提示词 (从 1 开始)
-  referenceTag: string   // @图片1, @场景图2
+  promptIndex: number // 第几条提示词 (从 1 开始)
+  referenceTag: string // @图片1, @场景图2
   assetType: 'character' | 'scene'
-  assetName?: string     // 解析出的资产名称（如果能确定）
+  assetName?: string // 解析出的资产名称（如果能确定）
 }
 
 export interface ParsedPrompt {
   index: number
   title: string
   content: string
-  duration: number       // 秒
+  duration: number // 秒
   references: PromptReference[]
 }
 
@@ -30,7 +30,9 @@ export interface ParsedPrompt {
  */
 export function parseSeedanceFile(content: string): ParsedPrompt[] {
   const prompts: ParsedPrompt[] = []
-  const sections = content.split(/(?=^##?\s+(?:P|提示词)\s*\d+)/gm).filter(Boolean)
+  const sections = content
+    .split(/(?=^##?\s+(?:P|提示词)\s*\d+)/gm)
+    .filter(Boolean)
 
   for (const section of sections) {
     const headerMatch = section.match(/^##?\s+(?:P|提示词)\s*(\d+)[^\n]*/)
@@ -56,7 +58,10 @@ export function parseSeedanceFile(content: string): ParsedPrompt[] {
 /**
  * 提取文本中的 @引用
  */
-function extractReferences(text: string, promptIndex: number): PromptReference[] {
+function extractReferences(
+  text: string,
+  promptIndex: number
+): PromptReference[] {
   const refs: PromptReference[] = []
   const seen = new Set<string>()
 
@@ -97,6 +102,7 @@ export function computeStats(prompts: ParsedPrompt[]): {
   return {
     totalCount,
     totalDuration,
-    avgDuration: totalCount > 0 ? Math.round(totalDuration / totalCount * 10) / 10 : 0
+    avgDuration:
+      totalCount > 0 ? Math.round((totalDuration / totalCount) * 10) / 10 : 0
   }
 }

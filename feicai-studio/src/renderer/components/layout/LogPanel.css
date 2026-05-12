@@ -85,8 +85,12 @@
   word-break: break-all;
 }
 
-.log-error .log-message { color: var(--color-error); }
-.log-warn .log-message { color: var(--color-warning); }
+.log-error .log-message {
+  color: var(--color-error);
+}
+.log-warn .log-message {
+  color: var(--color-warning);
+}
 
 .log-stream {
   display: flex;

@@ -33,10 +33,18 @@
   animation: toastSlideOut 0.3s ease forwards;
 }
 
-.toast-success { border-left: 3px solid var(--color-success); }
-.toast-error { border-left: 3px solid var(--color-error); }
-.toast-warning { border-left: 3px solid var(--color-warning); }
-.toast-info { border-left: 3px solid var(--color-accent); }
+.toast-success {
+  border-left: 3px solid var(--color-success);
+}
+.toast-error {
+  border-left: 3px solid var(--color-error);
+}
+.toast-warning {
+  border-left: 3px solid var(--color-warning);
+}
+.toast-info {
+  border-left: 3px solid var(--color-accent);
+}
 
 .toast-icon {
   font-size: var(--font-size-md);
@@ -55,10 +63,18 @@
   margin-bottom: 2px;
   line-height: 1.3;
 }
-.toast-success .toast-title { color: var(--color-success); }
-.toast-error .toast-title { color: var(--color-error); }
-.toast-warning .toast-title { color: var(--color-warning); }
-.toast-info .toast-title { color: var(--color-accent); }
+.toast-success .toast-title {
+  color: var(--color-success);
+}
+.toast-error .toast-title {
+  color: var(--color-error);
+}
+.toast-warning .toast-title {
+  color: var(--color-warning);
+}
+.toast-info .toast-title {
+  color: var(--color-accent);
+}
 
 .toast-message {
   line-height: 1.4;
@@ -94,22 +110,46 @@
   transform-origin: left;
   animation: toastCountdown linear forwards;
 }
-.toast-success .toast-progress { background: var(--color-success); }
-.toast-error .toast-progress { background: var(--color-error); }
-.toast-warning .toast-progress { background: var(--color-warning); }
-.toast-info .toast-progress { background: var(--color-accent); }
+.toast-success .toast-progress {
+  background: var(--color-success);
+}
+.toast-error .toast-progress {
+  background: var(--color-error);
+}
+.toast-warning .toast-progress {
+  background: var(--color-warning);
+}
+.toast-info .toast-progress {
+  background: var(--color-accent);
+}
 
 @keyframes toastSlideIn {
-  from { transform: translateX(100%); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 @keyframes toastSlideOut {
-  from { transform: translateX(0); opacity: 1; }
-  to { transform: translateX(100%); opacity: 0; }
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
 }
 
 @keyframes toastCountdown {
-  from { transform: scaleX(1); }
-  to { transform: scaleX(0); }
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }

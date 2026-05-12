@@ -28,7 +28,10 @@ export default function ToastContainer() {
           </div>
           <button
             className="toast-close"
-            onClick={(e) => { e.stopPropagation(); startExit(toast.id) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              startExit(toast.id)
+            }}
             aria-label="关闭"
           >
             ✕

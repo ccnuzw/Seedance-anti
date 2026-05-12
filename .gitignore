@@ -3,3 +3,17 @@ assets/
 outputs/
 script/
 project-config.json
+
+# 依赖与构建/测试产物
+node_modules/
+coverage/
+dist/
+out/
+*.tsbuildinfo
+
+# 本地系统与工具状态
+.DS_Store
+.bytro
+
+# 本地测试项目数据
+test-xs/

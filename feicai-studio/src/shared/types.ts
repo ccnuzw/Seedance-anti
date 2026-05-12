@@ -5,12 +5,14 @@
 // ---------- Project ----------
 
 export interface PipelineSettings {
-  maxRetries: number          // 最大重试次数 (default: 3)
-  passScore: number           // 审核通过阈值 (default: 7)
-  llmTimeoutSec: number       // LLM 超时秒数 (default: 90)
-  durationMin: number         // 每集最短时长秒 (default: 90)
-  durationMax: number         // 每集最长时长秒 (default: 120)
-  singlePromptMax: number     // 单条提示词最大秒数 (default: 10)
+  maxRetries: number // 最大重试次数 (default: 3)
+  passScore: number // 审核通过阈值 (default: 7)
+  llmTimeoutSec: number // LLM 超时秒数 (default: 90)
+  durationMin: number // 每集最短时长秒 (default: 90)
+  durationMax: number // 每集最长时长秒 (default: 120)
+  singlePromptMax: number // 单条提示词最大秒数 (default: 10)
+  scriptWordCountMin: number // 每集剧本最少字数 (default: 1500)
+  scriptWordCountMax: number // 每集剧本最多字数 (default: 2000)
 }
 
 export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
@@ -19,7 +21,26 @@ export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
   llmTimeoutSec: 90,
   durationMin: 90,
   durationMax: 120,
-  singlePromptMax: 10
+  singlePromptMax: 10,
+  scriptWordCountMin: 1500,
+  scriptWordCountMax: 2000
+}
+
+export type ProjectWorkflowVersion = 1 | 2
+export type ProjectEntryStage = 'novel' | 'story' | 'script'
+export type ProjectWorkflowMode =
+  | 'legacy_shortdrama'
+  | 'novel_to_shortdrama'
+  | 'story_to_shortdrama'
+  | 'script_to_shortdrama'
+
+export interface ProjectDirectories {
+  sourceDir?: string
+  storyDir?: string
+  scriptDir?: string
+  assetsDir?: string
+  outputsDir?: string
+  reviewsDir?: string
 }
 
 export interface ProjectConfig {
@@ -27,8 +48,13 @@ export interface ProjectConfig {
   totalEpisodes: number
   visualStyle: string
   targetMedium: string
+  chaptersPerEpisode?: number
   createdAt: string
-  pipelineSettings?: PipelineSettings
+  workflowVersion?: ProjectWorkflowVersion
+  entryStage?: ProjectEntryStage
+  workflowMode?: ProjectWorkflowMode
+  directories?: ProjectDirectories
+  pipelineSettings?: Partial<PipelineSettings>
 }
 
 export interface Project {
@@ -45,7 +71,21 @@ export interface Project {
 
 // ---------- Episode ----------
 
-export type EpisodeStatus = 'idle' | 'director' | 'art' | 'storyboard' | 'complete'
+export type WorkflowStageId =
+  | 'novel'
+  | 'story'
+  | 'story_review'
+  | 'script'
+  | 'script_review'
+  | 'script_approved'
+  | 'director'
+  | 'character'
+  | 'art'
+  | 'storyboard'
+  | 'storyboard_review'
+  | 'complete'
+
+export type EpisodeStatus = 'idle' | WorkflowStageId
 
 export interface Episode {
   id: string
@@ -53,14 +93,26 @@ export interface Episode {
   episodeNumber: number
   title: string
   status: EpisodeStatus
+  storyBeatPath?: string
+  storyReviewPath?: string
   scriptPath?: string
+  scriptReviewPath?: string
   directorAnalysisPath?: string
+  characterDesignPath?: string
   artDesignPath?: string
+  storyboardPath?: string
   seedancePromptsPath?: string
+  storyboardReviewPath?: string
+  hasStoryBeat: boolean
+  hasStoryReview: boolean
   hasScript: boolean
+  hasScriptReview: boolean
   hasDirectorAnalysis: boolean
+  hasCharacterDesign: boolean
   hasArtDesign: boolean
+  hasStoryboard: boolean
   hasSeedancePrompts: boolean
+  hasStoryboardReview: boolean
   totalDurationSeconds?: number
   totalPrompts?: number
   createdAt: string
@@ -109,18 +161,38 @@ export interface AssetReference {
 
 // ---------- Pipeline ----------
 
-export type PipelineStage = 'director' | 'art' | 'storyboard'
+export type PipelineStage =
+  | 'story'
+  | 'story_review'
+  | 'script'
+  | 'script_review'
+  | 'director'
+  | 'character'
+  | 'art'
+  | 'storyboard'
+  | 'storyboard_review'
+
+export type AutomatedPipelineStage = 'director' | 'art' | 'storyboard'
 
 export type PipelineState =
   | 'idle'
-  | 'script_loaded'
+  | 'story_generating'
+  | 'story_done'
+  | 'story_reviewing'
+  | 'script_generating'
+  | 'script_done'
+  | 'script_reviewing'
+  | 'script_approved'
   | 'director_analyzing'
   | 'director_reviewing'
   | 'director_done'
+  | 'character_designing'
+  | 'character_done'
   | 'art_designing'
   | 'art_reviewing'
   | 'art_done'
   | 'storyboard_writing'
+  | 'storyboard_done'
   | 'storyboard_reviewing'
   | 'episode_complete'
   | 'paused'
@@ -130,9 +202,10 @@ export interface PipelineContext {
   projectId: string
   projectPath: string
   episodeNum: number
-  currentStage: PipelineStage
+  currentStage: AutomatedPipelineStage
   state: PipelineState
   retryCount: number
+  singleStage?: boolean
 
   // 执行产物路径
   scriptPath?: string
@@ -153,7 +226,13 @@ export interface PipelineContext {
 }
 
 export interface PipelineEvent {
-  type: 'state_changed' | 'log' | 'stream' | 'stage_complete' | 'review_result' | 'error'
+  type:
+    | 'state_changed'
+    | 'log'
+    | 'stream'
+    | 'stage_complete'
+    | 'review_result'
+    | 'error'
   timestamp: string
   data: unknown
 }
@@ -176,6 +255,12 @@ export interface Skill {
 
 export type ReviewType = 'business' | 'compliance'
 export type ReviewResultStatus = 'PASS' | 'FAIL'
+export type ReviewStage =
+  | 'story_review'
+  | 'script_review'
+  | 'director'
+  | 'art'
+  | 'storyboard_review'
 
 export interface ReviewIssue {
   severity: 'critical' | 'major' | 'minor'
@@ -185,7 +270,7 @@ export interface ReviewIssue {
 }
 
 export interface ReviewResult {
-  stage: PipelineStage
+  stage: ReviewStage
   reviewType: ReviewType
   result: ReviewResultStatus
   /** 便捷属性：result === 'PASS' */
@@ -196,11 +281,58 @@ export interface ReviewResult {
   createdAt: string
 }
 
+export type EpisodeWorkflowStageStatus =
+  | 'pending'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'skipped'
+
+export interface EpisodeStageSnapshot {
+  stage: PipelineStage
+  status: EpisodeWorkflowStageStatus
+  attempts: number
+  startedAt?: string
+  completedAt?: string
+  updatedAt: string
+  outputPath?: string
+  reviewPath?: string
+  lastError?: string
+  lastReview?: ReviewResult
+}
+
+export interface EpisodePipelineState {
+  episodeNum: number
+  status: EpisodeStatus
+  lastStage: PipelineStage
+  completedStages: PipelineStage[]
+  stageStates: Partial<Record<PipelineStage, EpisodeStageSnapshot>>
+  reviews: ReviewResult[]
+  totalDurationSeconds: number
+  updatedAt: string
+}
+
+export interface ProjectPipelineState {
+  projectId: string
+  episodes: Record<number, EpisodePipelineState>
+  updatedAt: string
+}
+
 // ---------- LLM ----------
 
 export type ModelCategory = 'llm' | 'image' | 'video'
 
-export type LLMProviderType = 'google' | 'anthropic' | 'openai' | 'openai-compatible'
+export type LLMProviderType =
+  | 'google'
+  | 'anthropic'
+  | 'openai'
+  | 'openai-compatible'
+export type OpenAIWireApi = 'chat-completions' | 'responses'
+export type OpenAIReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+export type OpenAIImageSize = 'auto' | '1024x1024' | '1024x1536' | '1536x1024'
+export type OpenAIImageQuality = 'auto' | 'low' | 'medium' | 'high'
+export type OpenAIImageOutputFormat = 'png' | 'jpeg' | 'webp'
+export type OpenAIImageBackground = 'auto' | 'transparent' | 'opaque'
 
 export interface LLMConfig {
   id: string
@@ -209,7 +341,15 @@ export interface LLMConfig {
   provider: LLMProviderType
   baseUrl: string
   apiKey: string
+  hasStoredApiKey?: boolean
+  apiKeyMasked?: string
   model: string
+  wireApi?: OpenAIWireApi
+  reasoningEffort?: OpenAIReasoningEffort
+  imageSize?: OpenAIImageSize
+  imageQuality?: OpenAIImageQuality
+  imageOutputFormat?: OpenAIImageOutputFormat
+  imageBackground?: OpenAIImageBackground
   maxTokens: number
   temperature: number
   isDefault: boolean
@@ -233,7 +373,7 @@ export type LogLevel = 'info' | 'warn' | 'error' | 'debug'
 export interface LogEntry {
   id: string
   episodeId: string
-  stage: PipelineStage
+  stage: AutomatedPipelineStage
   level: LogLevel
   eventType: string
   message: string

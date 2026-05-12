@@ -15,7 +15,10 @@ export class OutputParser {
    * 解析审核结果
    * LLM 审核输出通常包含评分和 PASS/FAIL 结论
    */
-  static parseReview(response: string, passScore = 7): {
+  static parseReview(
+    response: string,
+    passScore = 7
+  ): {
     passed: boolean
     score: number
     issues: ReviewIssue[]
@@ -59,18 +62,25 @@ export class OutputParser {
     let hasExplicitPass = false
     let hasExplicitFail = false
     for (const pattern of passPatterns) {
-      if (pattern.test(text)) { hasExplicitPass = true; break }
+      if (pattern.test(text)) {
+        hasExplicitPass = true
+        break
+      }
     }
     for (const pattern of failPatterns) {
-      if (pattern.test(text)) { hasExplicitFail = true; break }
+      if (pattern.test(text)) {
+        hasExplicitFail = true
+        break
+      }
     }
-    // 明确标记优先于分数判定
-    if (hasExplicitPass && !hasExplicitFail) {
-      passed = true
-    } else if (hasExplicitFail && !hasExplicitPass) {
+    // 明确 FAIL 永远优先；明确 PASS 仍需满足项目阈值，避免模型用
+    // “PASS” 绕过旧版质量门槛。
+    if (hasExplicitFail) {
       passed = false
+    } else if (hasExplicitPass) {
+      passed = score >= passScore
     }
-    // 如果没有明确标记，使用分数阈值（score >= 7）
+    // 如果没有明确标记，使用分数阈值（score >= passScore）
 
     // 提取问题列表
     const issues = this.extractIssues(text)
@@ -83,13 +93,14 @@ export class OutputParser {
    */
   private static extractIssues(text: string): ReviewIssue[] {
     const issues: ReviewIssue[] = []
+    const seen = new Set<string>()
 
     // 匹配常见的问题格式：
     // - ❌ / ⚠️ / 问题1: ...
     // - **问题N**: ...
     const issuePatterns = [
-      /(?:❌|⚠️|🔴|🟡)\s*(.+)/g,
       /(?:问题|issue)\s*\d*[：:]\s*(.+)/gi,
+      /(?:❌|⚠️|🔴|🟡)\s*(.+)/g,
       /\*\*(?:问题|改进建议)\s*\d*\*\*[：:]\s*(.+)/gi
     ]
 
@@ -97,7 +108,9 @@ export class OutputParser {
       let match: RegExpExecArray | null
       while ((match = pattern.exec(text)) !== null) {
         const description = match[1].trim()
-        if (description.length > 5) { // 过滤太短的噪声
+        if (description.length > 5 && !seen.has(description)) {
+          // 过滤太短的噪声
+          seen.add(description)
           const severity = this.classifySeverity(description)
           issues.push({
             severity,
@@ -115,7 +128,15 @@ export class OutputParser {
    * 根据描述文本推断问题严重程度
    */
   private static classifySeverity(desc: string): ReviewIssue['severity'] {
-    const criticalKeywords = ['严重', '缺失', '遗漏', '错误', '违规', '红线', 'critical']
+    const criticalKeywords = [
+      '严重',
+      '缺失',
+      '遗漏',
+      '错误',
+      '违规',
+      '红线',
+      'critical'
+    ]
     const majorKeywords = ['不足', '偏差', '不一致', '问题', 'major']
 
     const lower = desc.toLowerCase()
@@ -166,7 +187,8 @@ export class OutputParser {
       const perPointDuration = /(\d+)\s*[秒s]/g
       while ((match = perPointDuration.exec(text)) !== null) {
         const val = parseInt(match[1])
-        if (val >= 3 && val <= 15) { // 合理的单条时长范围
+        if (val >= 3 && val <= 15) {
+          // 合理的单条时长范围
           totalDuration += val
         }
       }
@@ -186,7 +208,7 @@ export class OutputParser {
     let totalDuration = 0
 
     // 计数提示词 (P01/P02 或 ### 分隔的段落)
-    const promptRegex = /(?:^|\n)(?:###?\s*)?(?:P|提示词)\s*(\d+)/g
+    const promptRegex = /(?:^|\n)\s*(?:###?\s*)?(?:P|提示词)\s*(\d+)/gim
     const promptNumbers = new Set<number>()
     let match: RegExpExecArray | null
     while ((match = promptRegex.exec(text)) !== null) {

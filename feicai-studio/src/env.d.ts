@@ -1,12 +1,12 @@
 /// <reference types="vite/client" />
+import type { FeicaiAPI } from '@shared/ipc-contracts'
+import type { RenderProfilerAPI } from '@renderer/dev/render-profiler'
 
-// Preload 暴露的 API
-interface FeicaiAPI {
-  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
-  on: (channel: string, callback: (...args: unknown[]) => void) => () => void
-  once: (channel: string, callback: (...args: unknown[]) => void) => void
+declare global {
+  interface Window {
+    feicaiAPI: FeicaiAPI
+    __FEICAI_RENDER_PROFILER__?: RenderProfilerAPI
+  }
 }
 
-interface Window {
-  feicaiAPI: FeicaiAPI
-}
+export {}

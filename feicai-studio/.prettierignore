@@ -1,0 +1,7 @@
+coverage
+dist
+node_modules
+out
+package-lock.json
+tsconfig.node.tsbuildinfo
+tsconfig.web.tsbuildinfo

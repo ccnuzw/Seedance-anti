@@ -13,12 +13,25 @@
   animation: spinnerRotate 0.8s linear infinite;
 }
 
-.spinner-sm .spinner-ring { width: 20px; height: 20px; border-width: 2px; }
-.spinner-md .spinner-ring { width: 32px; height: 32px; }
-.spinner-lg .spinner-ring { width: 48px; height: 48px; border-width: 4px; }
+.spinner-sm .spinner-ring {
+  width: 20px;
+  height: 20px;
+  border-width: 2px;
+}
+.spinner-md .spinner-ring {
+  width: 32px;
+  height: 32px;
+}
+.spinner-lg .spinner-ring {
+  width: 48px;
+  height: 48px;
+  border-width: 4px;
+}
 
 @keyframes spinnerRotate {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .spinner-text {

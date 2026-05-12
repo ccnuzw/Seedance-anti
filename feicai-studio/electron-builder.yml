@@ -9,13 +9,13 @@ directories:
 files:
   - out/**/*
   - resources/builtin-skills/**/*
-  - "!**/*.map"
+  - '!**/*.map'
 
 extraResources:
   - from: resources/builtin-skills
     to: builtin-skills
     filter:
-      - "**/*"
+      - '**/*'
 
 mac:
   category: public.app-category.productivity
@@ -26,9 +26,9 @@ mac:
         - x64
   darkModeSupport: true
   hardenedRuntime: true
-  
+
 dmg:
-  artifactName: "${productName}-${version}-${arch}.${ext}"
+  artifactName: '${productName}-${version}-${arch}.${ext}'
   contents:
     - x: 130
       y: 220

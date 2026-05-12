@@ -3,8 +3,16 @@
 // ============================================================
 
 import { create } from 'zustand'
-import { IPC } from '@shared/ipc-channels'
-import type { LLMConfig, LLMProviderType, ModelCategory } from '@shared/types'
+import {
+  addLLMConfig as addLLMConfigRecord,
+  deleteLLMConfig as deleteLLMConfigRecord,
+  listLLMConfigs as listLLMConfigRecords,
+  normalizeConfigCategory,
+  setDefaultLLM as setDefaultLLMRecord,
+  testLLMConnection,
+  updateLLMConfig as updateLLMConfigRecord
+} from '@renderer/services/settings-service'
+import type { LLMConfig, ModelCategory } from '@shared/types'
 
 // ==================== 外观设置 ====================
 
@@ -28,7 +36,9 @@ function loadAppSettings(): AppSettings {
   try {
     const raw = localStorage.getItem('feicai-app-settings')
     if (raw) return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(raw) }
-  } catch { /* */ }
+  } catch {
+    /* */
+  }
   return { ...DEFAULT_APP_SETTINGS }
 }
 
@@ -42,14 +52,23 @@ function applyAppSettings(settings: AppSettings): void {
 
   // 主题
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  const effectiveTheme = settings.theme === 'system' ? (prefersDark ? 'dark' : 'light') : settings.theme
+  const effectiveTheme =
+    settings.theme === 'system'
+      ? prefersDark
+        ? 'dark'
+        : 'light'
+      : settings.theme
   root.setAttribute('data-theme', effectiveTheme)
 
   // 缩放
-  root.style.fontSize = `${parseInt(settings.zoom) / 100 * 14}px`
+  root.style.fontSize = `${(parseInt(settings.zoom) / 100) * 14}px`
 
   // 侧边栏宽度
-  const widthMap: Record<SidebarWidth, string> = { compact: '180px', standard: '220px', wide: '280px' }
+  const widthMap: Record<SidebarWidth, string> = {
+    compact: '180px',
+    standard: '220px',
+    wide: '280px'
+  }
   root.style.setProperty('--sidebar-width', widthMap[settings.sidebarWidth])
 }
 
@@ -62,10 +81,15 @@ interface SettingsStore {
 
   loadLLMConfigs: () => Promise<void>
   addLLMConfig: (data: Omit<LLMConfig, 'id'>) => Promise<LLMConfig>
-  updateLLMConfig: (id: string, data: Partial<Omit<LLMConfig, 'id'>>) => Promise<void>
+  updateLLMConfig: (
+    id: string,
+    data: Partial<Omit<LLMConfig, 'id'>>
+  ) => Promise<void>
   deleteLLMConfig: (id: string) => Promise<void>
   setDefaultLLM: (id: string) => Promise<void>
-  testConnection: (config: LLMConfig) => Promise<{ success: boolean; message: string }>
+  testConnection: (
+    config: LLMConfig
+  ) => Promise<{ success: boolean; message: string }>
 
   updateAppSettings: (patch: Partial<AppSettings>) => void
   resetAppSettings: () => void
@@ -83,38 +107,41 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 
     loadLLMConfigs: async () => {
       set({ loading: true })
-      const raw = await window.feicaiAPI.invoke(IPC.LLM_LIST_CONFIGS) as LLMConfig[]
+      const raw = await listLLMConfigRecords()
       // 兜底：旧数据可能没有 category 字段
-      const configs = raw.map(c => ({ ...c, category: c.category || 'llm' as ModelCategory }))
+      const configs = raw.map((c) => ({
+        ...c,
+        category: normalizeConfigCategory(c.category) as ModelCategory
+      }))
       set({ llmConfigs: configs, loading: false })
     },
 
     addLLMConfig: async (data) => {
-      const config = await window.feicaiAPI.invoke(IPC.LLM_ADD_CONFIG, data) as LLMConfig
+      const config = await addLLMConfigRecord(data)
       await get().loadLLMConfigs()
       return config
     },
 
     deleteLLMConfig: async (id) => {
-      await window.feicaiAPI.invoke(IPC.LLM_DELETE_CONFIG, id)
+      await deleteLLMConfigRecord(id)
       await get().loadLLMConfigs()
     },
 
-    updateLLMConfig: async (id: string, data: Partial<Omit<LLMConfig, 'id'>>) => {
-      await window.feicaiAPI.invoke(IPC.LLM_UPDATE_CONFIG, id, data)
+    updateLLMConfig: async (
+      id: string,
+      data: Partial<Omit<LLMConfig, 'id'>>
+    ) => {
+      await updateLLMConfigRecord(id, data)
       await get().loadLLMConfigs()
     },
 
     setDefaultLLM: async (id) => {
-      await window.feicaiAPI.invoke(IPC.LLM_SET_DEFAULT, id)
+      await setDefaultLLMRecord(id)
       await get().loadLLMConfigs()
     },
 
     testConnection: async (config) => {
-      return await window.feicaiAPI.invoke(IPC.LLM_TEST_CONNECTION, config) as {
-        success: boolean
-        message: string
-      }
+      return await testLLMConnection(config)
     },
 
     updateAppSettings: (patch) => {
@@ -131,4 +158,3 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
     }
   }
 })
-

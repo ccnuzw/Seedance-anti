@@ -1,5 +1,6 @@
-import { useLocation } from 'react-router-dom'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
+import { useShallow } from 'zustand/react/shallow'
+import { DevProfiler } from '@renderer/dev/render-profiler'
 import './Header.css'
 
 const PAGE_TITLES: Record<string, string> = {
@@ -11,10 +12,13 @@ function getTitle(pathname: string): string {
   if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname]
   if (pathname.includes('/pipeline')) return '⚡ 流水线'
   if (pathname.includes('/batch')) return '🚀 批量执行'
+  if (pathname.includes('/source')) return '📚 小说原文'
+  if (pathname.includes('/story')) return '🧩 剧情拆解'
   if (pathname.includes('/assets')) return '🎭 素材库'
   if (pathname.includes('/prompts')) return '📐 提示词'
   if (pathname.includes('/script')) return '📖 剧本'
   if (pathname.includes('/review')) return '📊 审核报告'
+  if (pathname.includes('/health')) return '🧪 项目体检与修复'
   if (pathname.includes('/project/')) return '📋 项目详情'
   return 'FEICAI Studio'
 }
@@ -39,45 +43,54 @@ function getStateLabel(state: string): string {
   return map[state] || state
 }
 
-export default function Header() {
-  const location = useLocation()
-  const title = getTitle(location.pathname)
-  const { state, isRunning, context } = usePipelineStore()
+interface HeaderProps {
+  pathname: string
+}
+
+export default function Header({ pathname }: HeaderProps) {
+  const title = getTitle(pathname)
+  const { state, isRunning, episodeNum } = usePipelineStore(
+    useShallow((s) => ({
+      state: s.state,
+      isRunning: s.isRunning,
+      episodeNum: s.context?.episodeNum
+    }))
+  )
 
   // 构建集数标签
-  const epLabel = context?.episodeNum
-    ? `EP${String(context.episodeNum).padStart(2, '0')}`
-    : ''
+  const epLabel = episodeNum ? `EP${String(episodeNum).padStart(2, '0')}` : ''
 
   return (
-    <header className="header titlebar-drag">
-      <div className="header-title">{title}</div>
-      <div className="header-actions titlebar-no-drag">
-        {/* 运行中 */}
-        {isRunning && (
-          <span className="header-status header-status--running">
-            <span className="status-dot" />
-            {epLabel && <span className="header-ep-label">{epLabel}</span>}
-            <span className="text-secondary">{getStateLabel(state)}</span>
-          </span>
-        )}
-        {/* 完成 */}
-        {!isRunning && state === 'episode_complete' && (
-          <span className="header-status header-status--done">
-            <span className="status-icon">✅</span>
-            {epLabel && <span className="header-ep-label">{epLabel}</span>}
-            <span className="text-secondary">已完成</span>
-          </span>
-        )}
-        {/* 错误 */}
-        {!isRunning && state === 'error' && (
-          <span className="header-status header-status--error">
-            <span className="status-icon">❌</span>
-            {epLabel && <span className="header-ep-label">{epLabel}</span>}
-            <span className="text-secondary">执行出错</span>
-          </span>
-        )}
-      </div>
-    </header>
+    <DevProfiler id="Header">
+      <header className="header titlebar-drag">
+        <div className="header-title">{title}</div>
+        <div className="header-actions titlebar-no-drag">
+          {/* 运行中 */}
+          {isRunning && (
+            <span className="header-status header-status--running">
+              <span className="status-dot" />
+              {epLabel && <span className="header-ep-label">{epLabel}</span>}
+              <span className="text-secondary">{getStateLabel(state)}</span>
+            </span>
+          )}
+          {/* 完成 */}
+          {!isRunning && state === 'episode_complete' && (
+            <span className="header-status header-status--done">
+              <span className="status-icon">✅</span>
+              {epLabel && <span className="header-ep-label">{epLabel}</span>}
+              <span className="text-secondary">已完成</span>
+            </span>
+          )}
+          {/* 错误 */}
+          {!isRunning && state === 'error' && (
+            <span className="header-status header-status--error">
+              <span className="status-icon">❌</span>
+              {epLabel && <span className="header-ep-label">{epLabel}</span>}
+              <span className="text-secondary">执行出错</span>
+            </span>
+          )}
+        </div>
+      </header>
+    </DevProfiler>
   )
 }

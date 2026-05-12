@@ -3,8 +3,6 @@
   margin: 0 auto;
 }
 
-
-
 /* Stats Grid */
 .review-stats-grid {
   display: grid;
@@ -46,8 +44,12 @@
   overflow: hidden;
 }
 
-.record-pass { border-left: 3px solid var(--color-success); }
-.record-fail { border-left: 3px solid var(--color-error); }
+.record-pass {
+  border-left: 3px solid var(--color-success);
+}
+.record-fail {
+  border-left: 3px solid var(--color-error);
+}
 
 .review-record-header {
   display: flex;
@@ -62,13 +64,16 @@
   background: var(--color-bg-hover);
 }
 
-.record-left, .record-right {
+.record-left,
+.record-right {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
 }
 
-.record-stage { font-weight: 500; }
+.record-stage {
+  font-weight: 500;
+}
 
 .record-score {
   font-family: var(--font-mono);
@@ -76,8 +81,12 @@
   color: var(--color-accent);
 }
 
-.record-issues { font-size: var(--font-size-xs); }
-.record-time { font-size: var(--font-size-xs); }
+.record-issues {
+  font-size: var(--font-size-xs);
+}
+.record-time {
+  font-size: var(--font-size-xs);
+}
 
 .record-toggle {
   font-size: var(--font-size-micro);
@@ -93,12 +102,19 @@
 }
 
 @keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Issues */
-.issues-title, .feedback-title {
+.issues-title,
+.feedback-title {
   font-size: var(--font-size-sm);
   font-weight: 600;
   margin-bottom: var(--spacing-sm);
@@ -130,11 +146,22 @@
   flex-shrink: 0;
 }
 
-.severity-critical { background: rgba(239, 68, 68, 0.15); color: var(--color-error); }
-.severity-major { background: rgba(245, 158, 11, 0.15); color: var(--color-warning); }
-.severity-minor { background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
+.severity-critical {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--color-error);
+}
+.severity-major {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-warning);
+}
+.severity-minor {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
 
-.issue-desc { line-height: 1.6; }
+.issue-desc {
+  line-height: 1.6;
+}
 
 .issue-suggestion {
   font-size: var(--font-size-xs);

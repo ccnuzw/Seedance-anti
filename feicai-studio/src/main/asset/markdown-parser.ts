@@ -14,8 +14,8 @@
 export interface ParsedAsset {
   name: string
   promptText: string
-  metadata: Record<string, string>  // 从文本中提取的键值对
-  rawSection: string                // 原始 Markdown 段落
+  metadata: Record<string, string> // 从文本中提取的键值对
+  rawSection: string // 原始 Markdown 段落
   startLine: number
   endLine: number
 }
@@ -97,5 +97,7 @@ function extractMetadata(text: string): Record<string, string> {
  * 将解析后的资产数组重新序列化为 Markdown
  */
 export function serializeAssets(assets: ParsedAsset[]): string {
-  return assets.map((a) => `## ${a.name}\n\n${a.promptText}`).join('\n\n---\n\n')
+  return assets
+    .map((a) => `## ${a.name}\n\n${a.promptText}`)
+    .join('\n\n---\n\n')
 }

@@ -3,11 +3,23 @@
 // ============================================================
 
 import { readFile, writeFile, readdir, copyFile, mkdir } from 'fs/promises'
-import { join, extname, basename } from 'path'
+import { dirname, join, extname } from 'path'
 import { v4 as uuid } from 'uuid'
-import { parseAssetMarkdown, serializeAssets, type ParsedAsset } from './markdown-parser'
-import { parseSeedanceFile, computeStats, type ParsedPrompt } from './reference-tracker'
+import {
+  parseAssetMarkdown,
+  serializeAssets,
+  type ParsedAsset
+} from './markdown-parser'
+import {
+  parseSeedanceFile,
+  computeStats,
+  type ParsedPrompt
+} from './reference-tracker'
 import type { Character, Scene } from '@shared/types'
+import {
+  resolveEpisodeArtifactPath,
+  resolveProjectArtifactPath
+} from '@shared/path-resolver'
 
 export class AssetManager {
   private projectPath: string
@@ -16,10 +28,17 @@ export class AssetManager {
     this.projectPath = projectPath
   }
 
+  getProjectPath(): string {
+    return this.projectPath
+  }
+
   // ==================== 角色素材 ====================
 
   async loadCharacters(): Promise<Character[]> {
-    const filePath = join(this.projectPath, 'assets', 'character-prompts.md')
+    const filePath = resolveProjectArtifactPath(
+      this.projectPath,
+      'characterPrompts'
+    )
     try {
       const content = await readFile(filePath, 'utf-8')
       const parsed = parseAssetMarkdown(content)
@@ -49,7 +68,10 @@ export class AssetManager {
   // ==================== 场景素材 ====================
 
   async loadScenes(): Promise<Scene[]> {
-    const filePath = join(this.projectPath, 'assets', 'scene-prompts.md')
+    const filePath = resolveProjectArtifactPath(
+      this.projectPath,
+      'scenePrompts'
+    )
     try {
       const content = await readFile(filePath, 'utf-8')
       const parsed = parseAssetMarkdown(content)
@@ -83,13 +105,15 @@ export class AssetManager {
     assetName: string,
     newPromptText: string
   ): Promise<{ success: boolean; error?: string }> {
-    const fileName = assetType === 'character' ? 'character-prompts.md' : 'scene-prompts.md'
-    const filePath = join(this.projectPath, 'assets', fileName)
+    const filePath =
+      assetType === 'character'
+        ? resolveProjectArtifactPath(this.projectPath, 'characterPrompts')
+        : resolveProjectArtifactPath(this.projectPath, 'scenePrompts')
 
     try {
       const content = await readFile(filePath, 'utf-8')
       const assets = parseAssetMarkdown(content)
-      const target = assets.find(a => a.name === assetName)
+      const target = assets.find((a) => a.name === assetName)
 
       if (!target) {
         return { success: false, error: `未找到素材: ${assetName}` }
@@ -104,15 +128,21 @@ export class AssetManager {
 
       return { success: true }
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
     }
   }
 
   // ==================== 提示词 ====================
 
   async loadPrompts(episodeNum: number): Promise<ParsedPrompt[]> {
-    const epStr = String(episodeNum).padStart(2, '0')
-    const filePath = join(this.projectPath, 'outputs', `ep${epStr}`, '02-seedance-prompts.md')
+    const filePath = resolveEpisodeArtifactPath(
+      this.projectPath,
+      'seedancePrompts',
+      episodeNum
+    )
     try {
       const content = await readFile(filePath, 'utf-8')
       return parseSeedanceFile(content)
@@ -142,13 +172,17 @@ export class AssetManager {
     return targetPath
   }
 
-  async listReferenceImages(assetType: 'character' | 'scene'): Promise<string[]> {
+  async listReferenceImages(
+    assetType: 'character' | 'scene'
+  ): Promise<string[]> {
     const dir = join(this.projectPath, 'assets', 'images', assetType)
     try {
       const files = await readdir(dir)
       return files
-        .filter(f => ['.jpg', '.jpeg', '.png', '.webp'].includes(extname(f).toLowerCase()))
-        .map(f => join(dir, f))
+        .filter((f) =>
+          ['.jpg', '.jpeg', '.png', '.webp'].includes(extname(f).toLowerCase())
+        )
+        .map((f) => join(dir, f))
     } catch {
       return []
     }
@@ -157,15 +191,22 @@ export class AssetManager {
   // ==================== 剧本 ====================
 
   async loadScript(episodeNum: number): Promise<string> {
-    const epStr = String(episodeNum).padStart(2, '0')
-    const filePath = join(this.projectPath, 'script', `ep${epStr}.md`)
+    const filePath = resolveEpisodeArtifactPath(
+      this.projectPath,
+      'script',
+      episodeNum
+    )
     return readFile(filePath, 'utf-8')
   }
 
   async saveScript(episodeNum: number, content: string): Promise<void> {
-    const epStr = String(episodeNum).padStart(2, '0')
-    const dir = join(this.projectPath, 'script')
+    const filePath = resolveEpisodeArtifactPath(
+      this.projectPath,
+      'script',
+      episodeNum
+    )
+    const dir = dirname(filePath)
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, `ep${epStr}.md`), content, 'utf-8')
+    await writeFile(filePath, content, 'utf-8')
   }
 }

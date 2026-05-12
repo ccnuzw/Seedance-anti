@@ -9,9 +9,17 @@ export const IPC = {
   PROJECT_IMPORT: 'project:import',
   PROJECT_LIST: 'project:list',
   PROJECT_GET: 'project:get',
+  PROJECT_UPDATE: 'project:update',
   PROJECT_DELETE: 'project:delete',
   PROJECT_GET_STATUS: 'project:getStatus',
   PROJECT_SYNC_STATUS: 'project:syncStatus',
+  PROJECT_SYNC_EPISODE_STATUS: 'project:syncEpisodeStatus',
+  PROJECT_DETECT_DIR: 'project:detectDir',
+  PROJECT_INSPECT: 'project:inspect',
+  PROJECT_MIGRATE_LEGACY_NOVEL: 'project:migrateLegacyNovel',
+  PROJECT_REPAIR: 'project:repair',
+  PROJECT_LIST_SOURCE_CHAPTERS: 'project:listSourceChapters',
+  PROJECT_GET_PLOT_BREAKDOWN_SUMMARY: 'project:getPlotBreakdownSummary',
 
   // 流水线控制
   PIPELINE_START: 'pipeline:start',
@@ -22,6 +30,12 @@ export const IPC = {
   PIPELINE_RUN_AND_WAIT: 'pipeline:runAndWait',
   PIPELINE_GET_STATE: 'pipeline:getState',
   PIPELINE_ABORT: 'pipeline:abort',
+  WORKFLOW_RUN_STORY_GENERATION: 'workflow:runStoryGeneration',
+  WORKFLOW_RUN_STORY_REVIEW: 'workflow:runStoryReview',
+  WORKFLOW_RUN_SCRIPT_GENERATION: 'workflow:runScriptGeneration',
+  WORKFLOW_RUN_SCRIPT_REVIEW: 'workflow:runScriptReview',
+  WORKFLOW_RUN_CHARACTER_DESIGN: 'workflow:runCharacterDesign',
+  WORKFLOW_RUN_STORYBOARD_REVIEW: 'workflow:runStoryboardReview',
 
   // 流水线事件 (main → renderer 推送)
   PIPELINE_STATE_CHANGED: 'pipeline:stateChanged',
@@ -34,6 +48,7 @@ export const IPC = {
   // 资产管理
   ASSET_LIST_CHARACTERS: 'asset:listCharacters',
   ASSET_LIST_SCENES: 'asset:listScenes',
+  ASSET_UPDATE_PROMPT: 'asset:update-prompt',
   ASSET_GET_REFERENCES: 'asset:getReferences',
   ASSET_UPLOAD_IMAGE: 'asset:uploadImage',
   ASSET_SYNC: 'asset:sync',
@@ -61,7 +76,7 @@ export const IPC = {
   PROJECT_GET_PIPELINE_STATE: 'project:getPipelineState',
 
   // 应用
-  APP_GET_VERSION: 'app:getVersion',
+  APP_GET_VERSION: 'app:getVersion'
 } as const
 
 export type IPCChannel = (typeof IPC)[keyof typeof IPC]

@@ -2,7 +2,12 @@
 // LLM Provider — 统一接口与类型定义
 // ============================================================
 
-import type { AssembledPrompt, GenerateOptions, LLMConfig, LLMProviderType } from '@shared/types'
+import type {
+  AssembledPrompt,
+  GenerateOptions,
+  LLMConfig,
+  LLMProviderType
+} from '@shared/types'
 
 /**
  * LLM Provider 统一接口
@@ -22,7 +27,11 @@ export interface ILLMProvider {
   ): AsyncGenerator<string, void, unknown>
 
   /** 测试连接 */
-  testConnection(): Promise<{ success: boolean; message: string; model?: string }>
+  testConnection(): Promise<{
+    success: boolean
+    message: string
+    model?: string
+  }>
 }
 
 /**
@@ -39,12 +48,19 @@ export abstract class BaseLLMProvider implements ILLMProvider {
     this.config = config
   }
 
-  abstract generate(prompt: AssembledPrompt, options?: GenerateOptions): Promise<string>
+  abstract generate(
+    prompt: AssembledPrompt,
+    options?: GenerateOptions
+  ): Promise<string>
   abstract generateStream(
     prompt: AssembledPrompt,
     options?: GenerateOptions
   ): AsyncGenerator<string, void, unknown>
-  abstract testConnection(): Promise<{ success: boolean; message: string; model?: string }>
+  abstract testConnection(): Promise<{
+    success: boolean
+    message: string
+    model?: string
+  }>
 
   protected getMaxTokens(options?: GenerateOptions): number {
     return options?.maxTokens ?? this.config.maxTokens ?? 8192

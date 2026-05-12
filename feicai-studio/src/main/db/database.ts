@@ -30,14 +30,26 @@ CREATE TABLE IF NOT EXISTS episodes (
   episode_number INTEGER NOT NULL,
   title TEXT,
   status TEXT DEFAULT 'idle',
+  story_beat_path TEXT,
+  story_review_path TEXT,
   script_path TEXT,
+  script_review_path TEXT,
   director_analysis_path TEXT,
+  character_design_path TEXT,
   art_design_path TEXT,
+  storyboard_path TEXT,
   seedance_prompts_path TEXT,
+  storyboard_review_path TEXT,
+  has_story_beat BOOLEAN DEFAULT 0,
+  has_story_review BOOLEAN DEFAULT 0,
   has_script BOOLEAN DEFAULT 0,
+  has_script_review BOOLEAN DEFAULT 0,
   has_director BOOLEAN DEFAULT 0,
+  has_character BOOLEAN DEFAULT 0,
   has_art BOOLEAN DEFAULT 0,
+  has_storyboard BOOLEAN DEFAULT 0,
   has_prompts BOOLEAN DEFAULT 0,
+  has_storyboard_review BOOLEAN DEFAULT 0,
   total_duration_seconds REAL,
   total_prompts INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -108,6 +120,12 @@ CREATE TABLE IF NOT EXISTS llm_configs (
   base_url TEXT NOT NULL,
   api_key_encrypted TEXT NOT NULL,
   model TEXT NOT NULL,
+  wire_api TEXT DEFAULT 'chat-completions',
+  reasoning_effort TEXT DEFAULT 'medium',
+  image_size TEXT DEFAULT '1024x1024',
+  image_quality TEXT DEFAULT 'auto',
+  image_output_format TEXT DEFAULT 'png',
+  image_background TEXT DEFAULT 'auto',
   max_tokens INTEGER DEFAULT 8192,
   temperature REAL DEFAULT 0.7,
   is_default BOOLEAN DEFAULT 0,
@@ -127,11 +145,14 @@ CREATE TABLE IF NOT EXISTS execution_logs (
 
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_episodes_project ON episodes(project_id);
+CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id);
 CREATE INDEX IF NOT EXISTS idx_scenes_project ON scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_episode ON reviews(episode_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_episode_created ON reviews(episode_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_logs_episode ON execution_logs(episode_id);
 CREATE INDEX IF NOT EXISTS idx_refs_episode ON asset_references(episode_id);
+CREATE INDEX IF NOT EXISTS idx_llm_configs_category_default_name ON llm_configs(category, is_default DESC, name);
 `
 
 /**
@@ -151,25 +172,110 @@ export function initDatabase(): Database.Database {
   db.exec(SCHEMA)
 
   // === 迁移：为已有数据库添加新列 ===
-  const columns = db.prepare("PRAGMA table_info('episodes')").all() as { name: string }[]
-  const colNames = new Set(columns.map(c => c.name))
+  const columns = db.prepare("PRAGMA table_info('episodes')").all() as {
+    name: string
+  }[]
+  const colNames = new Set(columns.map((c) => c.name))
 
   const migrations: [string, string][] = [
+    ['story_beat_path', 'ALTER TABLE episodes ADD COLUMN story_beat_path TEXT'],
+    [
+      'story_review_path',
+      'ALTER TABLE episodes ADD COLUMN story_review_path TEXT'
+    ],
+    [
+      'script_review_path',
+      'ALTER TABLE episodes ADD COLUMN script_review_path TEXT'
+    ],
     ['art_design_path', 'ALTER TABLE episodes ADD COLUMN art_design_path TEXT'],
-    ['has_script', 'ALTER TABLE episodes ADD COLUMN has_script BOOLEAN DEFAULT 0'],
-    ['has_director', 'ALTER TABLE episodes ADD COLUMN has_director BOOLEAN DEFAULT 0'],
+    [
+      'character_design_path',
+      'ALTER TABLE episodes ADD COLUMN character_design_path TEXT'
+    ],
+    ['storyboard_path', 'ALTER TABLE episodes ADD COLUMN storyboard_path TEXT'],
+    [
+      'storyboard_review_path',
+      'ALTER TABLE episodes ADD COLUMN storyboard_review_path TEXT'
+    ],
+    [
+      'has_story_beat',
+      'ALTER TABLE episodes ADD COLUMN has_story_beat BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_story_review',
+      'ALTER TABLE episodes ADD COLUMN has_story_review BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_script',
+      'ALTER TABLE episodes ADD COLUMN has_script BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_script_review',
+      'ALTER TABLE episodes ADD COLUMN has_script_review BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_director',
+      'ALTER TABLE episodes ADD COLUMN has_director BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_character',
+      'ALTER TABLE episodes ADD COLUMN has_character BOOLEAN DEFAULT 0'
+    ],
     ['has_art', 'ALTER TABLE episodes ADD COLUMN has_art BOOLEAN DEFAULT 0'],
-    ['has_prompts', 'ALTER TABLE episodes ADD COLUMN has_prompts BOOLEAN DEFAULT 0'],
+    [
+      'has_storyboard',
+      'ALTER TABLE episodes ADD COLUMN has_storyboard BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_prompts',
+      'ALTER TABLE episodes ADD COLUMN has_prompts BOOLEAN DEFAULT 0'
+    ],
+    [
+      'has_storyboard_review',
+      'ALTER TABLE episodes ADD COLUMN has_storyboard_review BOOLEAN DEFAULT 0'
+    ]
   ]
   for (const [col, sql] of migrations) {
     if (!colNames.has(col)) db.exec(sql)
   }
 
   // === 迁移：llm_configs 增加 category 列 ===
-  const llmCols = db.prepare("PRAGMA table_info('llm_configs')").all() as { name: string }[]
-  const llmColNames = new Set(llmCols.map(c => c.name))
+  const llmCols = db.prepare("PRAGMA table_info('llm_configs')").all() as {
+    name: string
+  }[]
+  const llmColNames = new Set(llmCols.map((c) => c.name))
   if (!llmColNames.has('category')) {
     db.exec("ALTER TABLE llm_configs ADD COLUMN category TEXT DEFAULT 'llm'")
+  }
+  if (!llmColNames.has('wire_api')) {
+    db.exec(
+      "ALTER TABLE llm_configs ADD COLUMN wire_api TEXT DEFAULT 'chat-completions'"
+    )
+  }
+  if (!llmColNames.has('reasoning_effort')) {
+    db.exec(
+      "ALTER TABLE llm_configs ADD COLUMN reasoning_effort TEXT DEFAULT 'medium'"
+    )
+  }
+  if (!llmColNames.has('image_size')) {
+    db.exec(
+      "ALTER TABLE llm_configs ADD COLUMN image_size TEXT DEFAULT '1024x1024'"
+    )
+  }
+  if (!llmColNames.has('image_quality')) {
+    db.exec(
+      "ALTER TABLE llm_configs ADD COLUMN image_quality TEXT DEFAULT 'auto'"
+    )
+  }
+  if (!llmColNames.has('image_output_format')) {
+    db.exec(
+      "ALTER TABLE llm_configs ADD COLUMN image_output_format TEXT DEFAULT 'png'"
+    )
+  }
+  if (!llmColNames.has('image_background')) {
+    db.exec(
+      "ALTER TABLE llm_configs ADD COLUMN image_background TEXT DEFAULT 'auto'"
+    )
   }
 
   return db

@@ -6,10 +6,10 @@ description: Seedance 提示词审核技能。用于审核阶段三分镜师产�
 # Seedance 2.0 提示词审核技能
 
 [技能说明]
-    审核分镜师在阶段三的 Seedance 2.0 提示词产出。导演需要以批判性视角审视分镜师的产出，通过逐条比对导演讲戏本、脑内预演 Seedance 生成效果、逐条评分的方式，确保提示词质量真正达标，能通过 Seedance 2.0 生成符合导演意图的视频。
+审核分镜师在阶段三的 Seedance 2.0 提示词产出。导演需要以批判性视角审视分镜师的产出，通过逐条比对导演讲戏本、脑内预演 Seedance 生成效果、逐条评分的方式，确保提示词质量真正达标，能通过 Seedance 2.0 生成符合导演意图的视频。
 
 [审核对象]
-    outputs/<集数>/02-seedance-prompts.md
+outputs/<集数>/02-seedance-prompts.md
 
 [审核流程]
 

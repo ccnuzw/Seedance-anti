@@ -3,17 +3,26 @@
 // ============================================================
 
 import { create } from 'zustand'
-import { IPC } from '@shared/ipc-channels'
+import { useProjectStore } from '@renderer/stores/projectStore'
+import {
+  abortPipeline,
+  getPipelineState,
+  pausePipeline,
+  pipelineEvents,
+  retryPipeline,
+  skipPipeline,
+  startPipeline
+} from '@renderer/services/pipeline-service'
 import type {
   PipelineState,
-  PipelineStage,
+  AutomatedPipelineStage,
   PipelineContext,
   LogEntry,
   ReviewResult
 } from '@shared/types'
 
 interface StageTiming {
-  stage: PipelineStage
+  stage: AutomatedPipelineStage
   startedAt: number
   endedAt?: number
   elapsed: number // seconds
@@ -31,7 +40,7 @@ interface PipelineStore {
   // 计时
   pipelineStartedAt: number | null
   stageTimings: StageTiming[]
-  currentStageName: PipelineStage | null
+  currentStageName: AutomatedPipelineStage | null
 
   // Actions
   startPipeline: (params: {
@@ -41,12 +50,12 @@ interface PipelineStore {
     projectName: string
     visualStyle: string
     targetMedium: string
-    startStage?: PipelineStage
+    startStage?: AutomatedPipelineStage
     singleStage?: boolean
   }) => Promise<{ error?: string }>
   pausePipeline: () => Promise<void>
   stopPipeline: () => Promise<void>
-  retryPipeline: (stage?: PipelineStage) => Promise<void>
+  retryPipeline: (stage?: AutomatedPipelineStage) => Promise<void>
   skipReviewPipeline: () => Promise<void>
   clearLogs: () => void
   resetDisplay: () => void
@@ -54,7 +63,7 @@ interface PipelineStore {
   setupEventListeners: () => () => void
 }
 
-function detectStage(state: PipelineState): PipelineStage | null {
+function detectStage(state: PipelineState): AutomatedPipelineStage | null {
   const s = state as string
   if (s.startsWith('director')) return 'director'
   if (s.startsWith('art')) return 'art'
@@ -66,24 +75,69 @@ function detectStage(state: PipelineState): PipelineStage | null {
 // 页面切换时避免重复注册/意外取消
 let _listenerRefCount = 0
 let _cleanupFn: (() => void) | null = null
+let _pendingLogs: LogEntry[] = []
+let _pendingStreamChunks: string[] = []
+let _logFlushTimer: ReturnType<typeof setTimeout> | null = null
+let _streamFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+function _flushPendingLogs(set: Function): void {
+  if (_pendingLogs.length === 0) {
+    _logFlushTimer = null
+    return
+  }
+
+  const entries = _pendingLogs
+  _pendingLogs = []
+  _logFlushTimer = null
+  const MAX_LOGS = 500
+
+  set((s: PipelineStore) => {
+    const newLogs = [...s.logs, ...entries]
+    if (newLogs.length > MAX_LOGS) {
+      return { logs: newLogs.slice(newLogs.length - MAX_LOGS) }
+    }
+    return { logs: newLogs }
+  })
+}
+
+function _flushPendingStream(set: Function): void {
+  if (_pendingStreamChunks.length === 0) {
+    _streamFlushTimer = null
+    return
+  }
+
+  const chunk = _pendingStreamChunks.join('')
+  _pendingStreamChunks = []
+  _streamFlushTimer = null
+  set((s: PipelineStore) => ({ streamBuffer: s.streamBuffer + chunk }))
+}
 
 function _registerListeners(set: Function, get: Function): () => void {
   const unsubscribers: Array<() => void> = []
 
   // 状态变更 + 计时
   unsubscribers.push(
-    window.feicaiAPI.on(IPC.PIPELINE_STATE_CHANGED, (data: unknown) => {
-      const { newState, context } = data as { newState: PipelineState; context: PipelineContext }
-      const isTerminal = ['idle', 'paused', 'error', 'episode_complete'].includes(newState)
+    pipelineEvents.onStateChanged((data: unknown) => {
+      const { newState, context } = data as {
+        newState: PipelineState
+        context: PipelineContext
+      }
+      const isTerminal = [
+        'idle',
+        'paused',
+        'error',
+        'episode_complete'
+      ].includes(newState)
       const isRunning = !isTerminal
       const now = Date.now()
       const store = get()
 
       // 新一集开始时（script_loaded）或新阶段执行开始时（*_executing）清空 streamBuffer
-      const isExecuting = (newState as string).endsWith('_analyzing') ||
+      const isExecuting =
+        (newState as string).endsWith('_analyzing') ||
         (newState as string).endsWith('_designing') ||
         (newState as string).endsWith('_writing')
-      const resetStream = newState === 'script_loaded' || isExecuting
+      const resetStream = newState === 'script_done' || isExecuting
 
       // 检测阶段变化
       const newStage = detectStage(newState)
@@ -93,24 +147,37 @@ function _registerListeners(set: Function, get: Function): () => void {
       if (newStage && newStage !== store.currentStageName) {
         // 结束上一个阶段的计时
         if (store.currentStageName) {
-          stageTimings = stageTimings.map(t =>
+          stageTimings = stageTimings.map((t) =>
             t.stage === store.currentStageName && !t.endedAt
-              ? { ...t, endedAt: now, elapsed: Math.round((now - t.startedAt) / 1000) }
+              ? {
+                  ...t,
+                  endedAt: now,
+                  elapsed: Math.round((now - t.startedAt) / 1000)
+                }
               : t
           )
         }
         // 检查是否已有这个阶段的 timing（重试场景）
-        const existing = stageTimings.find(t => t.stage === newStage && !t.endedAt)
+        const existing = stageTimings.find(
+          (t) => t.stage === newStage && !t.endedAt
+        )
         if (!existing) {
           stageTimings.push({ stage: newStage, startedAt: now, elapsed: 0 })
         }
       }
 
       // 如果流程结束
-      if (['episode_complete', 'error'].includes(newState) && store.currentStageName) {
-        stageTimings = stageTimings.map(t =>
+      if (
+        ['episode_complete', 'error'].includes(newState) &&
+        store.currentStageName
+      ) {
+        stageTimings = stageTimings.map((t) =>
           t.stage === store.currentStageName && !t.endedAt
-            ? { ...t, endedAt: now, elapsed: Math.round((now - t.startedAt) / 1000) }
+            ? {
+                ...t,
+                endedAt: now,
+                elapsed: Math.round((now - t.startedAt) / 1000)
+              }
             : t
         )
       }
@@ -126,39 +193,37 @@ function _registerListeners(set: Function, get: Function): () => void {
 
       // Pipeline 完成时自动刷新 episode 状态
       if (newState === 'episode_complete') {
-        // 延迟导入避免循环依赖
-        const { useProjectStore } = require('@renderer/stores/projectStore')
-        useProjectStore.getState().syncEpisodeStatus()
+        const episodeNum = context?.episodeNum
+        if (episodeNum) {
+          useProjectStore.getState().syncSingleEpisodeStatus(episodeNum)
+        } else {
+          useProjectStore.getState().syncEpisodeStatus()
+        }
       }
     })
   )
 
-  // 日志（上限 500 条，防止长期批量运行内存增长）
-  const MAX_LOGS = 500
   unsubscribers.push(
-    window.feicaiAPI.on(IPC.PIPELINE_LOG, (entry: unknown) => {
-      set((s: PipelineStore) => {
-        const newLogs = [...s.logs, entry as LogEntry]
-        // 超出上限时裁剪最早的日志
-        if (newLogs.length > MAX_LOGS) {
-          return { logs: newLogs.slice(newLogs.length - MAX_LOGS) }
-        }
-        return { logs: newLogs }
-      })
+    pipelineEvents.onLog((entry: unknown) => {
+      _pendingLogs.push(entry as LogEntry)
+      if (_logFlushTimer) return
+      _logFlushTimer = setTimeout(() => _flushPendingLogs(set), 80)
     })
   )
 
   // 流式输出
   unsubscribers.push(
-    window.feicaiAPI.on(IPC.PIPELINE_STREAM, (data: unknown) => {
+    pipelineEvents.onStream((data: unknown) => {
       const { chunk } = data as { chunk: string }
-      set((s: PipelineStore) => ({ streamBuffer: s.streamBuffer + chunk }))
+      _pendingStreamChunks.push(chunk)
+      if (_streamFlushTimer) return
+      _streamFlushTimer = setTimeout(() => _flushPendingStream(set), 80)
     })
   )
 
   // 审核结果
   unsubscribers.push(
-    window.feicaiAPI.on(IPC.PIPELINE_REVIEW_RESULT, (data: unknown) => {
+    pipelineEvents.onReviewResult((data: unknown) => {
       const { result } = data as { result: ReviewResult }
       set({ currentReview: result })
     })
@@ -166,12 +231,20 @@ function _registerListeners(set: Function, get: Function): () => void {
 
   // 错误
   unsubscribers.push(
-    window.feicaiAPI.on(IPC.PIPELINE_ERROR, () => {
-      set({ isRunning: false })
+    pipelineEvents.onError(() => {
+      set({ isRunning: false, state: 'error' })
     })
   )
 
   return () => {
+    if (_logFlushTimer) {
+      clearTimeout(_logFlushTimer)
+      _flushPendingLogs(set)
+    }
+    if (_streamFlushTimer) {
+      clearTimeout(_streamFlushTimer)
+      _flushPendingStream(set)
+    }
     for (const unsub of unsubscribers) unsub()
   }
 }
@@ -191,10 +264,15 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
   startPipeline: async (params) => {
     const now = Date.now()
     set({
-      logs: [], streamBuffer: '', isRunning: true, state: 'script_loaded',
-      pipelineStartedAt: now, stageTimings: [], currentStageName: null
+      logs: [],
+      streamBuffer: '',
+      isRunning: true,
+      state: 'script_done',
+      pipelineStartedAt: now,
+      stageTimings: [],
+      currentStageName: null
     })
-    const result = await window.feicaiAPI.invoke(IPC.PIPELINE_START, params) as { error?: string }
+    const result = await startPipeline(params)
     if (result.error) {
       set({ isRunning: false, state: 'idle', pipelineStartedAt: null })
     }
@@ -202,11 +280,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
   },
 
   pausePipeline: async () => {
-    await window.feicaiAPI.invoke(IPC.PIPELINE_PAUSE)
+    await pausePipeline()
   },
 
   stopPipeline: async () => {
-    await window.feicaiAPI.invoke(IPC.PIPELINE_ABORT)
+    await abortPipeline()
     // 立即完整重置 UI 状态，不等后端事件广播，避免闪烁
     set({
       isRunning: false,
@@ -225,33 +303,51 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       currentStageName: null,
       streamBuffer: ''
     })
-    await window.feicaiAPI.invoke(IPC.PIPELINE_RETRY, stage)
+    await retryPipeline(stage)
   },
 
   skipReviewPipeline: async () => {
-    await window.feicaiAPI.invoke(IPC.PIPELINE_SKIP)
+    await skipPipeline()
   },
 
-  clearLogs: () => set({ logs: [], streamBuffer: '' }),
+  clearLogs: () => {
+    _pendingLogs = []
+    _pendingStreamChunks = []
+    if (_logFlushTimer) {
+      clearTimeout(_logFlushTimer)
+      _logFlushTimer = null
+    }
+    if (_streamFlushTimer) {
+      clearTimeout(_streamFlushTimer)
+      _streamFlushTimer = null
+    }
+    set({ logs: [], streamBuffer: '' })
+  },
 
   /** 重置 UI 显示状态（切换集数时使用），不中断后台运行 */
-  resetDisplay: () => set({
-    logs: [],
-    streamBuffer: '',
-    stageTimings: [],
-    currentStageName: null,
-    pipelineStartedAt: null,
-    currentReview: null,
-    state: 'idle',
-    context: null,
-    isRunning: false
-  }),
+  resetDisplay: () =>
+    set({
+      logs: [],
+      streamBuffer: '',
+      stageTimings: [],
+      currentStageName: null,
+      pipelineStartedAt: null,
+      currentReview: null,
+      state: 'idle',
+      context: null,
+      isRunning: false
+    }),
 
   /** 从后端同步当前引擎状态到 store */
   syncFromBackend: async () => {
     try {
-      const ctx = await window.feicaiAPI.invoke(IPC.PIPELINE_GET_STATE) as PipelineContext
-      const isTerminal = ['idle', 'paused', 'error', 'episode_complete'].includes(ctx.state)
+      const ctx = await getPipelineState()
+      const isTerminal = [
+        'idle',
+        'paused',
+        'error',
+        'episode_complete'
+      ].includes(ctx.state)
       set({
         state: ctx.state,
         context: ctx,

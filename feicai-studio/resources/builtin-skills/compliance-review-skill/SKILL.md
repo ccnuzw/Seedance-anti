@@ -6,13 +6,10 @@ description: 合规审核技能。用于检查各阶段产出是否触碰 Seedan
 # 内容合规审核技能
 
 [技能说明]
-    内容合规审核技能，检查各阶段产出是否触碰 Seedance 2.0 和 Gemini / Nano Banana 的平台内容限制。此 skill 在每次导演审核的第二步使用，与阶段专属的业务审核 skill 配合。
+内容合规审核技能，检查各阶段产出是否触碰 Seedance 2.0 和 Gemini / Nano Banana 的平台内容限制。此 skill 在每次导演审核的第二步使用，与阶段专属的业务审核 skill 配合。
 
 [审核对象]
-    根据当前阶段不同：
-    - 阶段一：01-director-analysis.md（导演讲戏本、人物清单、场景清单）
-    - 阶段二：assets/character-prompts.md 和 assets/scene-prompts.md 中本集新增内容
-    - 阶段三：02-seedance-prompts.md（分镜师的 Seedance 2.0 提示词）
+根据当前阶段不同：- 阶段一：01-director-analysis.md（导演讲戏本、人物清单、场景清单）- 阶段二：assets/character-prompts.md 和 assets/scene-prompts.md 中本集新增内容 - 阶段三：02-seedance-prompts.md（分镜师的 Seedance 2.0 提示词）
 
 [审核流程]
 
@@ -88,9 +85,9 @@ description: 合规审核技能。用于检查各阶段产出是否触碰 Seedan
         □ 医学/解剖类场景是否有风险提示？
 
 [输出规范]
-    PASS 格式：
-        ✅ **合规审核：PASS**
-        内容未触碰平台红线。
+PASS 格式：
+✅ **合规审核：PASS**
+内容未触碰平台红线。
 
     FAIL 格式：
         ❌ **合规审核：FAIL**

@@ -14,7 +14,10 @@ export class GeminiProvider extends BaseLLMProvider {
     this.client = new GoogleGenerativeAI(config.apiKey)
   }
 
-  async generate(prompt: AssembledPrompt, options?: GenerateOptions): Promise<string> {
+  async generate(
+    prompt: AssembledPrompt,
+    options?: GenerateOptions
+  ): Promise<string> {
     const model = this.client.getGenerativeModel({
       model: this.config.model,
       systemInstruction: prompt.system
@@ -59,7 +62,11 @@ export class GeminiProvider extends BaseLLMProvider {
     }
   }
 
-  async testConnection(): Promise<{ success: boolean; message: string; model?: string }> {
+  async testConnection(): Promise<{
+    success: boolean
+    message: string
+    model?: string
+  }> {
     try {
       const model = this.client.getGenerativeModel({ model: this.config.model })
       const result = await model.generateContent('Reply with: OK')

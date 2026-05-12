@@ -43,8 +43,14 @@ function StageNode({ data }: NodeProps & { data: StageNodeData }) {
       {data.timeLabel && <div className="stage-time">{data.timeLabel}</div>}
       {status === 'active' && <div className="stage-pulse" />}
       {status === 'done' && <div className="stage-check">✓</div>}
-      {status === 'reviewing' && <div className="stage-reviewing-badge">审核中</div>}
-      <Handle type="source" position={Position.Right} className="stage-handle" />
+      {status === 'reviewing' && (
+        <div className="stage-reviewing-badge">审核中</div>
+      )}
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="stage-handle"
+      />
     </div>
   )
 }

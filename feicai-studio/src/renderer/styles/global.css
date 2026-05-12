@@ -2,15 +2,17 @@
    FEICAI Studio — Global Styles
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   overflow: hidden;
@@ -206,18 +208,40 @@ select.input {
 
 /* ---- Utilities ---- */
 
-.text-secondary { color: var(--color-text-secondary); }
-.text-accent { color: var(--color-accent); }
-.text-success { color: var(--color-success); }
-.text-warning { color: var(--color-warning); }
-.text-error { color: var(--color-error); }
+.text-secondary {
+  color: var(--color-text-secondary);
+}
+.text-accent {
+  color: var(--color-accent);
+}
+.text-success {
+  color: var(--color-success);
+}
+.text-warning {
+  color: var(--color-warning);
+}
+.text-error {
+  color: var(--color-error);
+}
 
-.mt-sm { margin-top: var(--spacing-sm); }
-.mt-md { margin-top: var(--spacing-md); }
-.mt-lg { margin-top: var(--spacing-lg); }
-.mb-md { margin-bottom: var(--spacing-md); }
-.gap-sm { gap: var(--spacing-sm); }
-.gap-md { gap: var(--spacing-md); }
+.mt-sm {
+  margin-top: var(--spacing-sm);
+}
+.mt-md {
+  margin-top: var(--spacing-md);
+}
+.mt-lg {
+  margin-top: var(--spacing-lg);
+}
+.mb-md {
+  margin-bottom: var(--spacing-md);
+}
+.gap-sm {
+  gap: var(--spacing-sm);
+}
+.gap-md {
+  gap: var(--spacing-md);
+}
 
 /* ---- macOS drag region ---- */
 .titlebar-drag {
@@ -237,8 +261,12 @@ select.input {
   margin: 0 auto;
 }
 
-.page-narrow { max-width: var(--page-width-narrow); }
-.page-wide   { max-width: var(--page-width-wide); }
+.page-narrow {
+  max-width: var(--page-width-narrow);
+}
+.page-wide {
+  max-width: var(--page-width-wide);
+}
 
 .page-header {
   display: flex;
@@ -324,7 +352,11 @@ select.input {
 /* ---- Shared Animations ---- */
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
-

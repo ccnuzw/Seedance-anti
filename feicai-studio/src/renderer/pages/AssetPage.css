@@ -28,7 +28,9 @@
   transition: all var(--transition-fast);
 }
 
-.tab-btn:hover { color: var(--color-text-primary); }
+.tab-btn:hover {
+  color: var(--color-text-primary);
+}
 
 .tab-btn.active {
   color: var(--color-accent);
@@ -42,7 +44,9 @@
   font-size: var(--font-size-xs);
 }
 
-.tab-spacer { flex: 1; }
+.tab-spacer {
+  flex: 1;
+}
 
 .asset-search {
   width: 200px;

@@ -89,8 +89,12 @@
   margin: 6px 0;
   padding: 12px;
   border-radius: var(--radius-lg);
-  background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.06), rgba(236, 72, 153, 0.04));
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.08),
+    rgba(139, 92, 246, 0.06),
+    rgba(236, 72, 153, 0.04)
+  );
   border: 1px solid rgba(99, 102, 241, 0.2);
   text-decoration: none;
   color: var(--color-text-primary);
@@ -107,23 +111,39 @@
   inset: 0;
   border-radius: inherit;
   background:
-    radial-gradient(ellipse 120% 80% at 20% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 60%),
-    radial-gradient(ellipse 80% 120% at 90% 100%, rgba(236, 72, 153, 0.08) 0%, transparent 60%);
+    radial-gradient(
+      ellipse 120% 80% at 20% 0%,
+      rgba(99, 102, 241, 0.12) 0%,
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 80% 120% at 90% 100%,
+      rgba(236, 72, 153, 0.08) 0%,
+      transparent 60%
+    );
   pointer-events: none;
 }
 
 .sidebar-project-card:hover {
   border-color: rgba(99, 102, 241, 0.4);
-  background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.1), rgba(236, 72, 153, 0.06));
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.12),
+    rgba(139, 92, 246, 0.1),
+    rgba(236, 72, 153, 0.06)
+  );
   box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);
   transform: translateY(-1px);
 }
 
 .sidebar-project-card.active {
   border-color: rgba(99, 102, 241, 0.5);
-  background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.12), rgba(236, 72, 153, 0.08));
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.16),
+    rgba(139, 92, 246, 0.12),
+    rgba(236, 72, 153, 0.08)
+  );
   box-shadow:
     0 0 0 1px rgba(99, 102, 241, 0.3),
     0 4px 24px rgba(99, 102, 241, 0.2);
@@ -142,7 +162,11 @@
   width: 36px;
   height: 36px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.2));
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.25),
+    rgba(139, 92, 246, 0.2)
+  );
   display: flex;
   align-items: center;
   justify-content: center;

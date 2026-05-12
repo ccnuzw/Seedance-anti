@@ -1,18 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { IPC } from '@shared/ipc-channels'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { getProjectPipelineState } from '@renderer/services/project-service'
 import { useToastStore } from '@renderer/stores/toastStore'
-import { useProjectSync } from '@renderer/hooks/useProjectSync'
-import type { ReviewResult, PipelineStage } from '@shared/types'
+import { buildReviewPageViewModel } from '@renderer/utils/review-page-view'
+import { loadReviewHistoryAction } from '@renderer/utils/editor-workflow-actions'
+import type { ProjectPipelineState, ReviewStage } from '@shared/types'
+import { isEpisodeComplete } from '@shared/episode-status'
+import { useShallow } from 'zustand/react/shallow'
 import '@renderer/components/layout/EpisodeNav.css'
 import './ReviewPage.css'
 
-const STAGE_LABELS: Record<PipelineStage, string> = {
+const STAGE_LABELS: Record<ReviewStage, string> = {
+  story_review: '剧情批次审核',
+  script_review: '📝 剧本审核',
   director: '🎬 导演分析',
   art: '🎨 服化道设计',
-  storyboard: '📐 分镜编写'
+  storyboard_review: '🔍 分镜审核'
 }
 
 const SEVERITY_MAP: Record<string, { label: string; cls: string }> = {
@@ -21,114 +26,58 @@ const SEVERITY_MAP: Record<string, { label: string; cls: string }> = {
   minor: { label: '轻微', cls: 'severity-minor' }
 }
 
-interface EpisodeState {
-  reviews: ReviewResult[]
-  completedStages: string[]
-  status: string
-  updatedAt: string
-}
-
-interface ProjectState {
-  episodes: Record<number, EpisodeState>
-}
-
 export default function ReviewPage() {
-  useProjectSync()
   const [searchParams] = useSearchParams()
   const episodeNum = parseInt(searchParams.get('ep') || '0')
-  const { context } = usePipelineStore()
-  const { currentProject, episodes } = useProjectStore()
+  const { context } = usePipelineStore(
+    useShallow((s) => ({ context: s.context }))
+  )
+  const { currentProject, episodes } = useProjectStore(
+    useShallow((s) => ({
+      currentProject: s.currentProject,
+      episodes: s.episodes
+    }))
+  )
   const { addToast } = useToastStore()
   const [expandedReview, setExpandedReview] = useState<number | null>(null)
-  const [selectedEp, setSelectedEp] = useState<number | 'all'>(episodeNum || 'all')
-  const [historicalState, setHistoricalState] = useState<ProjectState | null>(null)
+  const [selectedEp, setSelectedEp] = useState<number | 'all'>(
+    episodeNum || 'all'
+  )
+  const [historicalState, setHistoricalState] =
+    useState<ProjectPipelineState | null>(null)
   const [loading, setLoading] = useState(false)
 
   // 加载持久化状态
-  const loadHistoricalState = useCallback(async (showToast = false) => {
-    if (!currentProject) return
-    setLoading(true)
-    try {
-      const state = await window.feicaiAPI.invoke(
-        IPC.PROJECT_GET_PIPELINE_STATE,
-        currentProject.projectPath
-      ) as ProjectState | null
+  const loadHistoricalState = useCallback(
+    async (showToast = false) => {
+      if (!currentProject) return
+      setLoading(true)
+      const state = (await loadReviewHistoryAction(
+        currentProject.projectPath,
+        showToast,
+        {
+          getProjectPipelineState,
+          addToast
+        }
+      )) as ProjectPipelineState | null
       setHistoricalState(state)
-      if (showToast) addToast('success', '审核记录已刷新')
-    } catch {
-      setHistoricalState(null)
-      addToast('error', '加载审核历史失败')
-    }
-    setLoading(false)
-  }, [currentProject, addToast])
+      setLoading(false)
+    },
+    [currentProject, addToast]
+  )
 
   useEffect(() => {
     loadHistoricalState()
   }, [loadHistoricalState])
 
   // 合并当前 session 和历史数据
-  const getReviews = (): ReviewResult[] => {
-    const sessionReviews = context?.reviews || []
-
-    if (!historicalState?.episodes) {
-      return sessionReviews
-    }
-
-    if (selectedEp === 'all') {
-      // 所有集的历史审核
-      const historicalReviews: ReviewResult[] = []
-      for (const ep of Object.values(historicalState.episodes)) {
-        if (ep.reviews) {
-          historicalReviews.push(...ep.reviews)
-        }
-      }
-      // 合并并去重（按 createdAt + stage）
-      const allReviews = [...historicalReviews]
-      for (const sr of sessionReviews) {
-        const exists = allReviews.find(
-          r => r.createdAt === sr.createdAt && r.stage === sr.stage
-        )
-        if (!exists) allReviews.push(sr)
-      }
-      return allReviews.sort((a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      )
-    }
-
-    // 特定集数
-    const epState = historicalState.episodes[selectedEp]
-    const historical = epState?.reviews || []
-    const session = sessionReviews.filter(r => {
-      // session reviews don't have episodeNum, use all if selected ep matches context
-      return context?.episodeNum === selectedEp
-    })
-
-    const allReviews = [...historical]
-    for (const sr of session) {
-      const exists = allReviews.find(
-        r => r.createdAt === sr.createdAt && r.stage === sr.stage
-      )
-      if (!exists) allReviews.push(sr)
-    }
-    return allReviews.sort((a, b) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
-  }
-
-  const reviews = getReviews()
-  const epList = episodes.map(e => e.episodeNumber).sort((a, b) => a - b)
-
-  // 汇总统计
-  const totalReviews = reviews.length
-  const passCount = reviews.filter(r => r.result === 'PASS').length
-  const failCount = reviews.filter(r => r.result === 'FAIL').length
-  const avgScore = totalReviews > 0
-    ? Math.round(reviews.reduce((s, r) => s + r.score, 0) / totalReviews * 10) / 10
-    : 0
-  const totalIssues = reviews.reduce((sum, r) => sum + r.issues.length, 0)
-  const criticalCount = reviews.reduce(
-    (sum, r) => sum + r.issues.filter(i => i.severity === 'critical').length, 0
-  )
+  const { reviews, epList, stats } = buildReviewPageViewModel({
+    historicalState,
+    selectedEp,
+    sessionReviews: context?.reviews || [],
+    currentSessionEpisodeNum: context?.episodeNum,
+    episodes
+  })
 
   return (
     <div className="review-page">
@@ -141,9 +90,9 @@ export default function ReviewPage() {
           >
             <span className="epnav-num">全部</span>
           </button>
-          {epList.map(ep => {
-            const epData = episodes.find(e => e.episodeNumber === ep)
-            const done = epData?.status === 'complete'
+          {epList.map((ep) => {
+            const epData = episodes.find((e) => e.episodeNumber === ep)
+            const done = epData ? isEpisodeComplete(epData.status) : false
             return (
               <button
                 key={ep}
@@ -151,7 +100,9 @@ export default function ReviewPage() {
                   'epnav-item',
                   selectedEp === ep && 'epnav-active',
                   done && selectedEp !== ep && 'epnav-done'
-                ].filter(Boolean).join(' ')}
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
                 onClick={() => setSelectedEp(ep)}
                 title={`EP${String(ep).padStart(2, '0')}`}
               >
@@ -160,7 +111,12 @@ export default function ReviewPage() {
               </button>
             )
           })}
-          <button className="epnav-item" onClick={() => loadHistoricalState(true)} disabled={loading} title="刷新">
+          <button
+            className="epnav-item"
+            onClick={() => loadHistoricalState(true)}
+            disabled={loading}
+            title="刷新"
+          >
             <span className="epnav-num">🔄</span>
           </button>
         </div>
@@ -169,26 +125,30 @@ export default function ReviewPage() {
       {/* 统计卡片 */}
       <div className="review-stats-grid">
         <div className="card stat-card">
-          <div className="stat-value">{totalReviews}</div>
+          <div className="stat-value">{stats.totalReviews}</div>
           <div className="stat-label text-secondary">审核次数</div>
         </div>
         <div className="card stat-card">
-          <div className="stat-value text-success">{passCount}</div>
+          <div className="stat-value text-success">{stats.passCount}</div>
           <div className="stat-label text-secondary">通过</div>
         </div>
         <div className="card stat-card">
-          <div className="stat-value text-error">{failCount}</div>
+          <div className="stat-value text-error">{stats.failCount}</div>
           <div className="stat-label text-secondary">未通过</div>
         </div>
         <div className="card stat-card">
-          <div className={`stat-value ${avgScore >= 8 ? 'text-success' : avgScore >= 6 ? 'text-warning' : 'text-error'}`}>
-            {avgScore}
+          <div
+            className={`stat-value ${stats.avgScore >= 8 ? 'text-success' : stats.avgScore >= 6 ? 'text-warning' : 'text-error'}`}
+          >
+            {stats.avgScore}
           </div>
           <div className="stat-label text-secondary">平均分</div>
         </div>
         <div className="card stat-card">
-          <div className={`stat-value ${criticalCount > 0 ? 'text-error' : 'text-success'}`}>
-            {totalIssues}
+          <div
+            className={`stat-value ${stats.criticalCount > 0 ? 'text-error' : 'text-success'}`}
+          >
+            {stats.totalIssues}
           </div>
           <div className="stat-label text-secondary">问题总数</div>
         </div>
@@ -198,11 +158,18 @@ export default function ReviewPage() {
       <div className="review-list">
         <h3 className="section-title">
           审核记录
-          {selectedEp !== 'all' && <span className="text-secondary"> — EP{String(selectedEp).padStart(2, '0')}</span>}
+          {selectedEp !== 'all' && (
+            <span className="text-secondary">
+              {' '}
+              — EP{String(selectedEp).padStart(2, '0')}
+            </span>
+          )}
         </h3>
         {reviews.length === 0 ? (
           <div className="review-empty card text-secondary">
-            {loading ? '加载中...' : '暂无审核记录。请先在流水线中执行阶段任务。'}
+            {loading
+              ? '加载中...'
+              : '暂无审核记录。请先在流水线中执行阶段任务。'}
           </div>
         ) : (
           reviews.map((review, idx) => {
@@ -218,15 +185,15 @@ export default function ReviewPage() {
                   onClick={() => setExpandedReview(isExpanded ? null : idx)}
                 >
                   <div className="record-left">
-                    <span className={`record-result badge ${isPass ? 'badge-success' : 'badge-danger'}`}>
+                    <span
+                      className={`record-result badge ${isPass ? 'badge-success' : 'badge-danger'}`}
+                    >
                       {isPass ? '✅ PASS' : '❌ FAIL'}
                     </span>
                     <span className="record-stage">
                       {STAGE_LABELS[review.stage] || review.stage}
                     </span>
-                    <span className="record-score">
-                      {review.score} 分
-                    </span>
+                    <span className="record-score">{review.score} 分</span>
                   </div>
                   <div className="record-right">
                     {review.issues.length > 0 && (
@@ -237,7 +204,9 @@ export default function ReviewPage() {
                     <span className="record-time text-secondary">
                       {new Date(review.createdAt).toLocaleString('zh-CN')}
                     </span>
-                    <span className="record-toggle">{isExpanded ? '▼' : '▶'}</span>
+                    <span className="record-toggle">
+                      {isExpanded ? '▼' : '▶'}
+                    </span>
                   </div>
                 </div>
 
@@ -248,11 +217,16 @@ export default function ReviewPage() {
                         <h4 className="issues-title">问题列表</h4>
                         <div className="issues-list">
                           {review.issues.map((issue, i) => {
-                            const sev = SEVERITY_MAP[issue.severity] || SEVERITY_MAP.minor
+                            const sev =
+                              SEVERITY_MAP[issue.severity] || SEVERITY_MAP.minor
                             return (
                               <div key={i} className="issue-item">
-                                <span className={`issue-severity ${sev.cls}`}>{sev.label}</span>
-                                <span className="issue-desc">{issue.description}</span>
+                                <span className={`issue-severity ${sev.cls}`}>
+                                  {sev.label}
+                                </span>
+                                <span className="issue-desc">
+                                  {issue.description}
+                                </span>
                                 {issue.suggestion && (
                                   <div className="issue-suggestion text-secondary">
                                     💡 {issue.suggestion}

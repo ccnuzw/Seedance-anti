@@ -1,378 +1,308 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useProjectStore } from '@renderer/stores/projectStore'
-import { useProjectSync } from '@renderer/hooks/useProjectSync'
-import { useToastStore } from '@renderer/stores/toastStore'
-import { IPC } from '@shared/ipc-channels'
-import type { Episode, PipelineSettings } from '@shared/types'
-import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
+import { useProjectPageController } from '@renderer/hooks/useProjectPageController'
+import ProjectIntegrityCard from '@renderer/components/project/ProjectIntegrityCard'
+import ProjectPipelineSettingsPanel from '@renderer/components/project/ProjectPipelineSettingsPanel'
+import ProjectEpisodeCollection from '@renderer/components/project/ProjectEpisodeCollection'
 import './ProjectPage.css'
 
-const STATUS_MAP: Record<string, { label: string; emoji: string; cls: string }> = {
-  idle: { label: '等待', emoji: '⏳', cls: 'badge-info' },
-  director: { label: '导演分析中', emoji: '🎬', cls: 'badge-warning' },
-  art: { label: '服化道中', emoji: '🎨', cls: 'badge-warning' },
-  storyboard: { label: '分镜中', emoji: '📐', cls: 'badge-warning' },
-  complete: { label: '已完成', emoji: '✅', cls: 'badge-success' }
-}
-
 export default function ProjectPage() {
-  useProjectSync()
-  const navigate = useNavigate()
-  const { currentProject, episodes, syncEpisodeStatus } = useProjectStore()
-  const { addToast } = useToastStore()
-  const [importing, setImporting] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
-  const [viewMode, setViewMode] = useState<'card' | 'list'>('card')
-  const [ps, setPs] = useState<PipelineSettings>({ ...DEFAULT_PIPELINE_SETTINGS })
-  const [psLoaded, setPsLoaded] = useState(false)
-  const [psSaving, setPsSaving] = useState(false)
+  const controller = useProjectPageController()
+  const waterline = controller.plotBreakdownSummary
+  const waterlineStatusLabel =
+    waterline?.waterlineStatus === 'ready'
+      ? '库存充足'
+      : waterline?.waterlineStatus === 'low'
+        ? '即将用尽'
+        : waterline?.waterlineStatus === 'empty'
+          ? '需要拆解'
+          : '已完成'
+  const chapterRangeLabel =
+    waterline?.chapterStart && waterline?.chapterEnd
+      ? `第 ${waterline.chapterStart}-${waterline.chapterEnd} 章`
+      : '尚未拆解'
+  const targetRangeLabel = waterline?.targetChapterLimit
+    ? `第 1-${waterline.targetChapterLimit} 章`
+    : '未设置'
+  const nextChapterRangeLabel =
+    waterline?.nextChapterStart && waterline?.nextChapterEnd
+      ? `第 ${waterline.nextChapterStart}-${waterline.nextChapterEnd} 章`
+      : '无待拆批次'
+  const remainingBatchLabel =
+    waterline?.remainingBatchCount != null
+      ? `${waterline.remainingBatchCount} 批`
+      : '未统计'
 
-  useEffect(() => {
-    if (currentProject) {
-      syncEpisodeStatus()
-    }
-  }, [currentProject])
-
-  // 展开设置时加载 project-config.json
-  useEffect(() => {
-    if (!showSettings || !currentProject || psLoaded) return
-    ;(async () => {
-      try {
-        const raw = await window.feicaiAPI.invoke(
-          IPC.FILE_READ,
-          `${currentProject.projectPath}/project-config.json`
-        ) as string
-        const config = JSON.parse(raw)
-        setPs({ ...DEFAULT_PIPELINE_SETTINGS, ...(config.pipelineSettings || {}) })
-      } catch {
-        setPs({ ...DEFAULT_PIPELINE_SETTINGS })
-      }
-      setPsLoaded(true)
-    })()
-  }, [showSettings, currentProject, psLoaded])
-
-  const handleSaveSettings = async () => {
-    if (!currentProject) return
-    setPsSaving(true)
-    try {
-      // 读取现有配置
-      let config: Record<string, unknown> = {}
-      try {
-        const raw = await window.feicaiAPI.invoke(
-          IPC.FILE_READ,
-          `${currentProject.projectPath}/project-config.json`
-        ) as string
-        config = JSON.parse(raw)
-      } catch { /* 文件不存在，创建新的 */ }
-
-      // 写入 pipelineSettings
-      config.pipelineSettings = ps
-      await window.feicaiAPI.invoke(
-        IPC.FILE_WRITE,
-        `${currentProject.projectPath}/project-config.json`,
-        JSON.stringify(config, null, 2)
-      )
-      addToast('success', '流水线参数已保存')
-    } catch {
-      addToast('error', '保存失败')
-    }
-    setPsSaving(false)
-  }
-
-  const handleResetSettings = () => {
-    setPs({ ...DEFAULT_PIPELINE_SETTINGS })
-    addToast('info', '已恢复默认值（需保存生效）')
-  }
-
-  const handleImportProject = async () => {
-    setImporting(true)
-    const dirPath = await window.feicaiAPI.invoke(IPC.FILE_SELECT_DIR) as string | null
-    if (dirPath) {
-      try {
-        const configRaw = await window.feicaiAPI.invoke(IPC.FILE_READ, `${dirPath}/project-config.json`) as string
-        const config = JSON.parse(configRaw)
-        const project = await useProjectStore.getState().createProject({
-          name: config.projectName || '未命名项目',
-          visualStyle: config.visualStyle || '',
-          targetMedium: config.targetMedium || '',
-          projectPath: dirPath,
-          totalEpisodes: config.totalEpisodes || 0,
-          config
-        })
-        useProjectStore.getState().setCurrentProject(project)
-        addToast('success', `项目「${project.name}」导入成功`)
-      } catch {
-        addToast('error', '项目导入失败：请确认目录包含 project-config.json')
-      }
-    }
-    setImporting(false)
-  }
-
-  if (!currentProject) {
+  if (!controller.currentProject) {
     return (
-      <div className="project-empty-state">
-        <div className="empty-icon">📂</div>
-        <h2>选择一个项目</h2>
-        <p className="text-secondary">从仪表盘选择现有项目，或导入新项目</p>
-        <button className="btn btn-primary" onClick={handleImportProject} disabled={importing}>
-          {importing ? '⏳ 导入中...' : '📁 导入 FEICAI 项目'}
-        </button>
-      </div>
+      <>
+        <div className="project-empty-state">
+          <div className="empty-icon">📂</div>
+          <h2>选择一个项目</h2>
+          <p className="text-secondary">从仪表盘选择现有项目，或导入新项目</p>
+          <button
+            className="btn btn-primary"
+            onClick={controller.handleImportProject}
+            disabled={controller.importing}
+          >
+            {controller.importing ? '⏳ 导入中...' : '📁 导入 FEICAI 项目'}
+          </button>
+        </div>
+        {controller.pendingImport?.detected.integrity && (
+          <ProjectIntegrityCard
+            title="🧪 导入前体检"
+            report={controller.pendingImport.detected.integrity}
+            onConfirm={
+              controller.pendingImport.config
+                ? controller.confirmImportProject
+                : undefined
+            }
+            onCancel={() => controller.setPendingImport(null)}
+            confirmLabel="继续导入"
+          />
+        )}
+      </>
     )
   }
 
-  const completedCount = episodes.filter(e => e.status === 'complete').length
-  const progressPct = episodes.length > 0 ? Math.round((completedCount / episodes.length) * 100) : 0
-
   return (
     <div className="project-page">
-      {/* 项目头部 */}
       <div className="project-header">
         <div className="project-info">
-          <h1 className="project-name">🎬 {currentProject.name}</h1>
+          <h1 className="project-name">🎬 {controller.currentProject.name}</h1>
           <div className="project-meta text-secondary">
-            <span>{currentProject.visualStyle}</span>
+            <span>{controller.currentProject.visualStyle}</span>
             <span className="meta-sep">·</span>
-            <span>{currentProject.targetMedium}</span>
+            <span>{controller.currentProject.targetMedium}</span>
             <span className="meta-sep">·</span>
-            <span>{currentProject.totalEpisodes} 集</span>
+            <span>{controller.currentProject.totalEpisodes} 集</span>
           </div>
         </div>
         <div className="project-actions">
           <button
-            className={`btn ${showSettings ? 'btn-active' : ''}`}
-            onClick={() => { setShowSettings(!showSettings); setPsLoaded(false) }}
+            className="btn"
+            onClick={() => void controller.handleRefreshStatus()}
           >
-            ⚙️ 设置
+            ↻ 刷新状态
           </button>
-          <button className="btn btn-primary" onClick={() => navigate(`/project/${currentProject.id}/pipeline`)}>
+          <button
+            className="btn btn-primary"
+            onClick={() =>
+              controller.navigate(
+                `/project/${controller.currentProject?.id}/pipeline`
+              )
+            }
+          >
             ▶ 流水线
           </button>
         </div>
       </div>
 
-      {/* 流水线参数设置面板 */}
-      {showSettings && (
-        <div className="card pipeline-settings-panel">
-          <div className="pipeline-settings-header">
-            <h3>⚙️ 流水线参数</h3>
-            <span className="text-secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
-              调整后需点击「保存」生效，参数将写入 project-config.json
-            </span>
-          </div>
-          <div className="pipeline-settings-grid">
-            <div className="ps-item">
-              <label>最大重试次数</label>
-              <span className="ps-desc text-secondary">审核不通过时的自动重试上限</span>
-              <input
-                type="number" className="input input-sm" min={1} max={10}
-                value={ps.maxRetries}
-                onChange={e => setPs({ ...ps, maxRetries: Number(e.target.value) })}
-              />
-            </div>
-            <div className="ps-item">
-              <label>审核通过阈值</label>
-              <span className="ps-desc text-secondary">评分 ≥ 此值即 PASS（1-10 分）</span>
-              <input
-                type="number" className="input input-sm" min={1} max={10}
-                value={ps.passScore}
-                onChange={e => setPs({ ...ps, passScore: Number(e.target.value) })}
-              />
-            </div>
-            <div className="ps-item">
-              <label>LLM 超时 (秒)</label>
-              <span className="ps-desc text-secondary">无新数据超过此时间则中断</span>
-              <input
-                type="number" className="input input-sm" min={30} max={300}
-                value={ps.llmTimeoutSec}
-                onChange={e => setPs({ ...ps, llmTimeoutSec: Number(e.target.value) })}
-              />
-            </div>
-            <div className="ps-item">
-              <label>每集最短时长 (秒)</label>
-              <span className="ps-desc text-secondary">生成提示词的最短总时长约束</span>
-              <input
-                type="number" className="input input-sm" min={30} max={600}
-                value={ps.durationMin}
-                onChange={e => setPs({ ...ps, durationMin: Number(e.target.value) })}
-              />
-            </div>
-            <div className="ps-item">
-              <label>每集最长时长 (秒)</label>
-              <span className="ps-desc text-secondary">生成提示词的最长总时长约束</span>
-              <input
-                type="number" className="input input-sm" min={30} max={600}
-                value={ps.durationMax}
-                onChange={e => setPs({ ...ps, durationMax: Number(e.target.value) })}
-              />
-            </div>
-            <div className="ps-item">
-              <label>单条提示词上限 (秒)</label>
-              <span className="ps-desc text-secondary">每条 Seedance 提示词的时长上限</span>
-              <input
-                type="number" className="input input-sm" min={4} max={15}
-                value={ps.singlePromptMax}
-                onChange={e => setPs({ ...ps, singlePromptMax: Number(e.target.value) })}
-              />
-            </div>
-          </div>
-          <div className="pipeline-settings-actions">
-            <button className="btn btn-sm" onClick={handleResetSettings}>🔄 恢复默认</button>
-            <button className="btn btn-sm btn-primary" onClick={handleSaveSettings} disabled={psSaving}>
-              {psSaving ? '⏳ 保存中...' : '💾 保存'}
-            </button>
-          </div>
-        </div>
-      )}
+      <ProjectPipelineSettingsPanel
+        entryLabel={controller.entryLabel}
+        showSettings={controller.showSettings}
+        setShowSettings={controller.setShowSettings}
+        setPsLoaded={controller.setPsLoaded}
+        ps={controller.ps}
+        setPs={controller.setPs}
+        projectDraft={controller.projectDraft}
+        setProjectDraft={controller.setProjectDraft}
+        visualStyles={controller.visualStyles}
+        targetMediums={controller.targetMediums}
+        psSaving={controller.psSaving}
+        onReset={controller.handleResetSettings}
+        onSave={() => {
+          void controller.handleSaveSettings()
+        }}
+      />
 
-      {/* 进度概览 */}
-      <div className="progress-section">
-        <div className="progress-bar-bg">
-          <div className="progress-bar-fill" style={{ width: `${progressPct}%` }} />
+      <div className="card plot-breakdown-waterline">
+        <div className="pipeline-settings-header">
+          <div>
+            <h3>剧情库存水位</h3>
+            <p className="waterline-subtitle">
+              {waterline?.exists
+                ? waterline.nextActionLabel
+                : '尚未创建库存，先执行剧情拆解生成 plot-breakdown.md'}
+            </p>
+          </div>
+          <span
+            className={`waterline-status waterline-status--${waterline?.waterlineStatus || 'empty'}`}
+          >
+            {waterlineStatusLabel}
+          </span>
         </div>
-        <div className="progress-text text-secondary">
-          {completedCount} / {episodes.length} 集已完成 ({progressPct}%)
+        <div className="waterline-actions">
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() =>
+              controller.navigate(
+                `/project/${controller.currentProject?.id}/batch?mode=smart_next`
+              )
+            }
+            disabled={!waterline || waterline.nextActionMode === 'done'}
+          >
+            🧭 智能下一步
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={() =>
+              controller.navigate(
+                `/project/${controller.currentProject?.id}/batch?mode=story_until_ready`
+              )
+            }
+            disabled={!waterline || waterline.unprocessedChapterCount === 0}
+          >
+            📚 拆到库存充足
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={() =>
+              controller.navigate(
+                `/project/${controller.currentProject?.id}/batch?mode=script_until_empty`
+              )
+            }
+            disabled={!waterline || waterline.unusedEntries === 0}
+          >
+            📖 生成到库存用完
+          </button>
+        </div>
+        <div className="plot-breakdown-stats">
+          <div className="project-health-stat">
+            <span className="text-secondary">剧情点总数</span>
+            <strong>{waterline?.totalEntries ?? 0}</strong>
+          </div>
+          <div className="project-health-stat">
+            <span className="text-secondary">未用剧情点</span>
+            <strong>{waterline?.unusedEntries ?? 0}</strong>
+          </div>
+          <div className="project-health-stat">
+            <span className="text-secondary">已用剧情点</span>
+            <strong>{waterline?.usedEntries ?? 0}</strong>
+          </div>
+          <div className="project-health-stat">
+            <span className="text-secondary">可生成剧本</span>
+            <strong>{waterline?.readyEpisodeCount ?? 0} 集</strong>
+          </div>
+        </div>
+        <div className="status-dashboard-grid">
+          <div className="status-dashboard-item">
+            <div className="status-dashboard-label">拆解进度</div>
+            <strong>{waterline?.breakdownProgressPct ?? 0}%</strong>
+            <div className="status-progress-bar">
+              <span
+                style={{ width: `${waterline?.breakdownProgressPct ?? 0}%` }}
+              />
+            </div>
+          </div>
+          <div className="status-dashboard-item">
+            <div className="status-dashboard-label">剧本消耗进度</div>
+            <strong>{waterline?.scriptProgressPct ?? 0}%</strong>
+            <div className="status-progress-bar">
+              <span style={{ width: `${waterline?.scriptProgressPct ?? 0}%` }} />
+            </div>
+          </div>
+          <div className="status-dashboard-item">
+            <div className="status-dashboard-label">剩余批次</div>
+            <strong>{remainingBatchLabel}</strong>
+            <p>{nextChapterRangeLabel}</p>
+          </div>
+          <div className="status-dashboard-item">
+            <div className="status-dashboard-label">建议动作</div>
+            <strong>{waterlineStatusLabel}</strong>
+            <p>{waterline?.nextActionLabel || '暂无建议'}</p>
+          </div>
+        </div>
+        <div className="waterline-detail-grid">
+          <div className="waterline-detail">
+            <span>已拆章节</span>
+            <strong>{chapterRangeLabel}</strong>
+          </div>
+          <div className="waterline-detail">
+            <span>目标范围</span>
+            <strong>{targetRangeLabel}</strong>
+          </div>
+          <div className="waterline-detail">
+            <span>未拆章节</span>
+            <strong>
+              {waterline?.unprocessedChapterCount == null
+                ? '未统计'
+                : `${waterline.unprocessedChapterCount} 章`}
+            </strong>
+          </div>
+          <div className="waterline-detail">
+            <span>下一批次</span>
+            <strong>第 {waterline?.nextBatchNumber ?? 1} 批</strong>
+          </div>
+          <div className="waterline-detail">
+            <span>源章节总数</span>
+            <strong>{waterline?.totalSourceChapters ?? 0} 章</strong>
+          </div>
+          <div className="waterline-detail">
+            <span>超出目标</span>
+            <strong>{waterline?.overflowChapterCount ?? 0} 章</strong>
+          </div>
         </div>
       </div>
 
-      {/* 视图切换 */}
-      <div className="view-toggle">
-        <button
-          className={`view-toggle-btn ${viewMode === 'card' ? 'active' : ''}`}
-          onClick={() => setViewMode('card')}
-          title="卡片视图"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <rect x="1" y="1" width="6" height="6" rx="1" />
-            <rect x="9" y="1" width="6" height="6" rx="1" />
-            <rect x="1" y="9" width="6" height="6" rx="1" />
-            <rect x="9" y="9" width="6" height="6" rx="1" />
-          </svg>
-        </button>
-        <button
-          className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
-          onClick={() => setViewMode('list')}
-          title="列表视图"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <rect x="1" y="2" width="14" height="2" rx="0.5" />
-            <rect x="1" y="7" width="14" height="2" rx="0.5" />
-            <rect x="1" y="12" width="14" height="2" rx="0.5" />
-          </svg>
-        </button>
+      <div className="card chapter-scan-panel">
+        <div className="pipeline-settings-header">
+          <div>
+            <h3>章节扫描</h3>
+            <p className="waterline-subtitle">
+              对齐旧版 /scan：确认目标范围、下一批章节和超出目标章节。
+            </p>
+          </div>
+          <button
+            className="btn btn-sm"
+            onClick={() => void controller.handleRefreshStatus()}
+          >
+            ↻ 重新扫描
+          </button>
+        </div>
+        <div className="chapter-scan-grid">
+          <div className="chapter-scan-row">
+            <span>源章节总数</span>
+            <strong>{waterline?.totalSourceChapters ?? 0} 章</strong>
+          </div>
+          <div className="chapter-scan-row">
+            <span>目标处理范围</span>
+            <strong>{targetRangeLabel}</strong>
+          </div>
+          <div className="chapter-scan-row">
+            <span>已拆章节范围</span>
+            <strong>{chapterRangeLabel}</strong>
+          </div>
+          <div className="chapter-scan-row">
+            <span>下一批章节</span>
+            <strong>{nextChapterRangeLabel}</strong>
+          </div>
+          <div className="chapter-scan-row">
+            <span>目标内剩余</span>
+            <strong>
+              {waterline?.unprocessedChapterCount == null
+                ? '未统计'
+                : `${waterline.unprocessedChapterCount} 章`}
+            </strong>
+          </div>
+          <div className="chapter-scan-row">
+            <span>超出目标</span>
+            <strong>{waterline?.overflowChapterCount ?? 0} 章</strong>
+          </div>
+        </div>
       </div>
 
-      {/* 集数展示 */}
-      {episodes.length === 0 ? (
-        <div className="episode-empty text-secondary">
-          暂无集数数据。点击「流水线」开始处理。
-        </div>
-      ) : viewMode === 'card' ? (
-        /* 卡片视图 */
-        <div className="episode-grid">
-          {episodes.map((ep) => {
-            const status = STATUS_MAP[ep.status] || STATUS_MAP.idle
-            const isComplete = ep.status === 'complete'
-            return (
-              <div
-                key={ep.id}
-                className={`ep-card ${isComplete ? 'ep-card--done' : ''}`}
-                onClick={() => navigate(`/project/${currentProject.id}/pipeline?ep=${ep.episodeNumber}`)}
-              >
-                {/* 左侧色条 */}
-                <div className={`ep-card-stripe ${isComplete ? 'stripe--done' : ''}`} />
-
-                {/* 内容区 */}
-                <div className="ep-card-body">
-                  {/* 第一行：大编号 + 标题 */}
-                  <div className="ep-card-hero">
-                    <span className="ep-num">{String(ep.episodeNumber).padStart(2, '0')}</span>
-                    <div className="ep-card-hero-right">
-                      <h3 className="ep-title">{ep.title || `第${ep.episodeNumber}集`}</h3>
-                      <span className={`ep-status ${status.cls}`}>
-                        {status.emoji} {status.label}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 产物指示器 */}
-                  <div className="ep-artifacts-row">
-                    <span className={`ep-artifact ${ep.hasScript ? 'on' : ''}`} title="剧本">📖 剧本</span>
-                    <span className={`ep-artifact ${ep.hasDirectorAnalysis ? 'on' : ''}`} title="导演">🎬 导演</span>
-                    <span className={`ep-artifact ${ep.hasArtDesign ? 'on' : ''}`} title="服化道">🎨 服化道</span>
-                    <span className={`ep-artifact ${ep.hasSeedancePrompts ? 'on' : ''}`} title="提示词">📐 提示词</span>
-                  </div>
-
-                  {/* 底栏：统计 + 启动 */}
-                  <div className="ep-card-footer">
-                    <span className="ep-meta">
-                      {ep.totalPrompts != null ? `${ep.totalPrompts} 条提示词` : '—'}
-                      <span className="ep-meta-dot">·</span>
-                      {ep.totalDurationSeconds ? `${ep.totalDurationSeconds}s` : '—'}
-                    </span>
-                    <span className="ep-launch">启动 →</span>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      ) : (
-        /* 列表视图 */
-        <div className="episode-table-wrapper">
-          <table className="episode-table">
-            <thead>
-              <tr>
-                <th>集数</th>
-                <th>标题</th>
-                <th>产物</th>
-                <th>状态</th>
-                <th>提示词数</th>
-                <th>总时长</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {episodes.map((ep) => {
-                const status = STATUS_MAP[ep.status] || STATUS_MAP.idle
-                return (
-                  <tr key={ep.id} className="episode-row">
-                    <td className="ep-number">EP{String(ep.episodeNumber).padStart(2, '0')}</td>
-                    <td className="ep-title">{ep.title || '-'}</td>
-                    <td>
-                      <span className={`badge ${status.cls}`}>
-                        {status.emoji} {status.label}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="file-indicators">
-                        <span className={`fi-dot ${ep.hasScript ? 'fi-script' : 'fi-missing'}`} title="剧本">📖</span>
-                        <span className={`fi-dot ${ep.hasDirectorAnalysis ? 'fi-director' : 'fi-missing'}`} title="导演分析">🎬</span>
-                        <span className={`fi-dot ${ep.hasArtDesign ? 'fi-art' : 'fi-missing'}`} title="服化道">🎨</span>
-                        <span className={`fi-dot ${ep.hasSeedancePrompts ? 'fi-prompt' : 'fi-missing'}`} title="提示词">📐</span>
-                      </div>
-                    </td>
-                    <td className="text-secondary">{ep.totalPrompts ?? '-'}</td>
-                    <td className="text-secondary">
-                      {ep.totalDurationSeconds ? `${ep.totalDurationSeconds}s` : '-'}
-                    </td>
-                    <td>
-                      <button
-                        className="btn btn-sm"
-                        onClick={() => navigate(`/project/${currentProject.id}/pipeline?ep=${ep.episodeNumber}`)}
-                      >
-                        ▶
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <ProjectEpisodeCollection
+        currentProject={controller.currentProject}
+        episodes={controller.episodes}
+        viewMode={controller.viewMode}
+        setViewMode={controller.setViewMode}
+        progressPct={controller.progress.progressPct}
+        completedCount={controller.progress.completedCount}
+        navigateToPipeline={(episodeNumber) =>
+          controller.navigate(
+            `/project/${controller.currentProject?.id}/pipeline${episodeNumber ? `?ep=${episodeNumber}` : ''}`
+          )
+        }
+      />
     </div>
   )
 }
-

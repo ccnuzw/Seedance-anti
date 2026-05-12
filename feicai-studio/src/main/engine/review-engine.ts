@@ -13,18 +13,40 @@
 //
 
 import { readFile } from 'fs/promises'
-import { join } from 'path'
 import { SkillLoader } from './skill-loader'
 import { PromptAssembler } from './prompt-assembler'
 import { OutputParser } from './output-parser'
-import { REVIEW_SKILL_MAP, ANTIBIAS_PROMPT, STAGE_OUTPUT_FILES } from '@shared/constants'
-import type { PipelineStage, ReviewResult, ReviewIssue } from '@shared/types'
+import { REVIEW_SKILL_MAP, ANTIBIAS_PROMPT } from '@shared/constants'
+import type {
+  AutomatedPipelineStage,
+  ReviewResult,
+  ReviewIssue,
+  ReviewStage,
+  ProjectConfig
+} from '@shared/types'
 import type { ILLMProvider } from '../llm/types'
+import {
+  resolveEpisodeArtifactPath,
+  resolveProjectArtifactPath
+} from '@shared/path-resolver'
+import { parsePlotBreakdownMarkdown } from '@shared/plot-breakdown'
+import { formatPlotBreakdownEntriesMarkdown } from '@shared/plot-breakdown'
+import { getPlotBreakdownEntriesForEpisode } from '@shared/plot-breakdown'
 
 interface ReviewContext {
   projectPath: string
   episodeNum: number
   scriptPath?: string
+  projectConfig?: Partial<ProjectConfig> | null
+}
+
+interface ReviewContentParams {
+  stage: ReviewStage
+  reviewSkillName: string
+  outputToReview: string
+  originalScript?: string
+  directorAnalysis?: string
+  plotBreakdown?: string
 }
 
 export class ReviewEngine {
@@ -49,42 +71,75 @@ export class ReviewEngine {
   /**
    * 执行完整的两步审核
    */
-  async review(stage: PipelineStage, ctx: ReviewContext): Promise<ReviewResult> {
+  async review(
+    stage: AutomatedPipelineStage,
+    ctx: ReviewContext
+  ): Promise<ReviewResult> {
     if (!this.llmProvider) throw new Error('LLM Provider 未设置')
 
     // ===== 第一层：断点清洗 =====
     // 从文件系统重新读取产出，不依赖上下文缓存
     const freshOutput = await this.readFreshOutput(stage, ctx)
-    const freshScript = ctx.scriptPath ? await readFile(ctx.scriptPath, 'utf-8') : undefined
+    const freshScript = ctx.scriptPath
+      ? await readFile(ctx.scriptPath, 'utf-8')
+      : undefined
 
     // 读取导演分析（art 和 storyboard 审核时作为对照）
     let directorAnalysis: string | undefined
     if (stage === 'art' || stage === 'storyboard') {
-      const epStr = String(ctx.episodeNum).padStart(2, '0')
-      const analysisPath = join(ctx.projectPath, 'outputs', `ep${epStr}`, '01-director-analysis.md')
-      try { directorAnalysis = await readFile(analysisPath, 'utf-8') } catch { /* */ }
+      const analysisPath = resolveEpisodeArtifactPath(
+        ctx.projectPath,
+        'directorAnalysis',
+        ctx.episodeNum,
+        ctx.projectConfig
+      )
+      try {
+        directorAnalysis = await readFile(analysisPath, 'utf-8')
+      } catch {
+        /* */
+      }
     }
 
     // ===== Step 1: 业务审核 =====
+    return this.reviewContent({
+      stage: stage === 'storyboard' ? 'storyboard_review' : stage,
+      reviewSkillName: REVIEW_SKILL_MAP[stage],
+      outputToReview: freshOutput,
+      originalScript: freshScript,
+      directorAnalysis,
+      plotBreakdown:
+        stage === 'director' || stage === 'storyboard'
+          ? undefined
+          : await this.readPlotBreakdownForReview(ctx)
+    })
+  }
+
+  /**
+   * 对任意内容执行两步审核
+   */
+  async reviewContent(params: ReviewContentParams): Promise<ReviewResult> {
+    if (!this.llmProvider) throw new Error('LLM Provider 未设置')
+
     const businessResult = await this.executeBusinessReview(
-      stage, freshOutput, freshScript, directorAnalysis
+      params.reviewSkillName,
+      params.outputToReview,
+      params.originalScript,
+      params.directorAnalysis,
+      params.plotBreakdown
     )
 
-    // ===== Step 2: 合规审核 =====
-    const complianceResult = await this.executeComplianceReview(freshOutput)
+    const complianceResult = await this.executeComplianceReview(
+      params.outputToReview
+    )
 
-    // ===== 汇总 =====
-    const allIssues = [
-      ...businessResult.issues,
-      ...complianceResult.issues
-    ]
+    const allIssues = [...businessResult.issues, ...complianceResult.issues]
 
     const passed = businessResult.passed && complianceResult.passed
-    const score = businessResult.score // 业务审核的评分为主
+    const score = businessResult.score
 
     return {
-      stage,
-      reviewType: 'business', // 综合审核
+      stage: params.stage,
+      reviewType: 'business',
       result: passed ? 'PASS' : 'FAIL',
       passed,
       score,
@@ -98,13 +153,18 @@ export class ReviewEngine {
    * 业务审核
    */
   private async executeBusinessReview(
-    stage: PipelineStage,
+    reviewSkillName: string,
     output: string,
     script?: string,
-    directorAnalysis?: string
-  ): Promise<{ passed: boolean; score: number; issues: ReviewIssue[]; feedback: string }> {
+    directorAnalysis?: string,
+    plotBreakdown?: string
+  ): Promise<{
+    passed: boolean
+    score: number
+    issues: ReviewIssue[]
+    feedback: string
+  }> {
     // 加载审核 Skill
-    const reviewSkillName = REVIEW_SKILL_MAP[stage]
     const reviewSkill = await this.skillLoader.load(reviewSkillName)
 
     // ===== 第二层 + 第三层：对抗性立场 + 评分锚定 =====
@@ -113,7 +173,8 @@ export class ReviewEngine {
       ANTIBIAS_PROMPT,
       output,
       script,
-      directorAnalysis
+      directorAnalysis,
+      plotBreakdown
     )
 
     const response = await this.llmProvider!.generate(prompt)
@@ -123,10 +184,15 @@ export class ReviewEngine {
   /**
    * 合规审核
    */
-  private async executeComplianceReview(
-    output: string
-  ): Promise<{ passed: boolean; score: number; issues: ReviewIssue[]; feedback: string }> {
-    const complianceSkill = await this.skillLoader.load('compliance-review-skill')
+  private async executeComplianceReview(output: string): Promise<{
+    passed: boolean
+    score: number
+    issues: ReviewIssue[]
+    feedback: string
+  }> {
+    const complianceSkill = await this.skillLoader.load(
+      'compliance-review-skill'
+    )
 
     const prompt = this.promptAssembler.assembleReview(
       complianceSkill,
@@ -141,18 +207,66 @@ export class ReviewEngine {
   /**
    * 从文件系统重新读取产出（断点清洗）
    */
-  private async readFreshOutput(stage: PipelineStage, ctx: ReviewContext): Promise<string> {
-    const epStr = String(ctx.episodeNum).padStart(2, '0')
-    const outputDir = join(ctx.projectPath, 'outputs', `ep${epStr}`)
-
+  private async readFreshOutput(
+    stage: AutomatedPipelineStage,
+    ctx: ReviewContext
+  ): Promise<string> {
     if (stage === 'art') {
       // 服化道的产出在临时文件
-      return readFile(join(outputDir, '01.5-art-design-output.md'), 'utf-8')
+      return readFile(
+        resolveEpisodeArtifactPath(
+          ctx.projectPath,
+          'artDesign',
+          ctx.episodeNum,
+          ctx.projectConfig
+        ),
+        'utf-8'
+      )
     }
 
-    const fileName = STAGE_OUTPUT_FILES[stage]
-    if (!fileName) throw new Error(`未知阶段: ${stage}`)
-    return readFile(join(outputDir, fileName), 'utf-8')
+    if (stage === 'director') {
+      return readFile(
+        resolveEpisodeArtifactPath(
+          ctx.projectPath,
+          'directorAnalysis',
+          ctx.episodeNum,
+          ctx.projectConfig
+        ),
+        'utf-8'
+      )
+    }
+    if (stage === 'storyboard') {
+      return readFile(
+        resolveEpisodeArtifactPath(
+          ctx.projectPath,
+          'seedancePrompts',
+          ctx.episodeNum,
+          ctx.projectConfig
+        ),
+        'utf-8'
+      )
+    }
+    throw new Error(`未知阶段: ${stage}`)
+  }
+
+  private async readPlotBreakdownForReview(
+    ctx: ReviewContext
+  ): Promise<string | undefined> {
+    const filePath = resolveProjectArtifactPath(
+      ctx.projectPath,
+      'plotBreakdown',
+      ctx.projectConfig
+    )
+    try {
+      const raw = await readFile(filePath, 'utf-8')
+      const entries = getPlotBreakdownEntriesForEpisode(
+        parsePlotBreakdownMarkdown(raw),
+        ctx.episodeNum
+      )
+      return formatPlotBreakdownEntriesMarkdown(entries)
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -163,7 +277,9 @@ export class ReviewEngine {
     compliance: { passed: boolean; feedback: string }
   ): string {
     const lines: string[] = []
-    lines.push(`## 业务审核: ${business.passed ? '✅ PASS' : '❌ FAIL'} (${business.score}分)`)
+    lines.push(
+      `## 业务审核: ${business.passed ? '✅ PASS' : '❌ FAIL'} (${business.score}分)`
+    )
     lines.push(business.feedback)
     lines.push('')
     lines.push(`## 合规审核: ${compliance.passed ? '✅ PASS' : '❌ FAIL'}`)

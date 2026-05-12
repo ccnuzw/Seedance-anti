@@ -1,7 +1,16 @@
 import { useState } from 'react'
-import { IPC } from '@shared/ipc-channels'
+import {
+  exportAllArtifacts,
+  exportPrompts
+} from '@renderer/services/export-service'
+import {
+  getExceptionMessage,
+  getServiceFailureToast,
+  isServiceSuccess
+} from '@renderer/services/service-contracts'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useToastStore } from '@renderer/stores/toastStore'
+import { useShallow } from 'zustand/react/shallow'
 import './ExportModal.css'
 
 type ExportFormat = 'markdown' | 'json' | 'csv'
@@ -11,19 +20,28 @@ interface ExportModalProps {
   onClose: () => void
 }
 
-const FORMAT_OPTIONS: Array<{ value: ExportFormat; label: string; desc: string }> = [
+const FORMAT_OPTIONS: Array<{
+  value: ExportFormat
+  label: string
+  desc: string
+}> = [
   { value: 'markdown', label: '📄 Markdown', desc: '完整 Markdown 文档' },
   { value: 'json', label: '📋 JSON', desc: '结构化数据（便于程序处理）' },
   { value: 'csv', label: '📊 CSV', desc: '表格格式（便于 Excel 打开）' }
 ]
 
 export default function ExportModal({ open, onClose }: ExportModalProps) {
-  const { currentProject, episodes } = useProjectStore()
-  const addToast = useToastStore(s => s.addToast)
+  const { currentProject, episodeCount } = useProjectStore(
+    useShallow((s) => ({
+      currentProject: s.currentProject,
+      episodeCount: s.episodes.length
+    }))
+  )
+  const addToast = useToastStore((s) => s.addToast)
 
   const [format, setFormat] = useState<ExportFormat>('markdown')
   const [epStart, setEpStart] = useState(1)
-  const [epEnd, setEpEnd] = useState(episodes.length || 30)
+  const [epEnd, setEpEnd] = useState(episodeCount || 30)
   const [exporting, setExporting] = useState(false)
 
   if (!open) return null
@@ -35,23 +53,24 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
       const range: number[] = []
       for (let i = epStart; i <= epEnd; i++) range.push(i)
 
-      const result = await window.feicaiAPI.invoke(IPC.EXPORT_PROMPTS, {
+      const result = await exportPrompts({
         projectPath: currentProject.projectPath,
         projectName: currentProject.name,
         episodeRange: range,
         format
-      }) as { success?: boolean; canceled?: boolean; path?: string; error?: string }
+      })
 
       if (result.canceled) {
         // 用户取消
-      } else if (result.success) {
+      } else if (isServiceSuccess(result)) {
         addToast('success', `提示词已导出到 ${result.path}`)
         onClose()
       } else {
-        addToast('error', result.error || '导出失败')
+        const toast = getServiceFailureToast(result, '导出失败')
+        addToast(toast.type, toast.message)
       }
-    } catch {
-      addToast('error', '导出失败')
+    } catch (error) {
+      addToast('error', getExceptionMessage(error, '导出失败'))
     }
     setExporting(false)
   }
@@ -60,31 +79,37 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
     if (!currentProject) return
     setExporting(true)
     try {
-      const result = await window.feicaiAPI.invoke(IPC.EXPORT_ALL, {
+      const result = await exportAllArtifacts({
         projectPath: currentProject.projectPath,
         projectName: currentProject.name
-      }) as { success?: boolean; canceled?: boolean; path?: string; error?: string }
+      })
 
       if (result.canceled) {
         // 用户取消
-      } else if (result.success) {
+      } else if (isServiceSuccess(result)) {
         addToast('success', `全部产出已导出到 ${result.path}`)
         onClose()
       } else {
-        addToast('error', result.error || '导出失败')
+        const toast = getServiceFailureToast(result, '导出失败')
+        addToast(toast.type, toast.message)
       }
-    } catch {
-      addToast('error', '导出失败')
+    } catch (error) {
+      addToast('error', getExceptionMessage(error, '导出失败'))
     }
     setExporting(false)
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content export-modal" onClick={e => e.stopPropagation()}>
+      <div
+        className="modal-content export-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <h2>📦 导出</h2>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <button className="modal-close" onClick={onClose}>
+            ✕
+          </button>
         </div>
 
         <div className="modal-body">
@@ -99,18 +124,18 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
                   type="number"
                   className="input input-sm"
                   min={1}
-                  max={episodes.length || 30}
+                  max={episodeCount || 30}
                   value={epStart}
-                  onChange={e => setEpStart(parseInt(e.target.value) || 1)}
+                  onChange={(e) => setEpStart(parseInt(e.target.value) || 1)}
                 />
                 <span className="text-secondary">~</span>
                 <input
                   type="number"
                   className="input input-sm"
                   min={1}
-                  max={episodes.length || 30}
+                  max={episodeCount || 30}
                   value={epEnd}
-                  onChange={e => setEpEnd(parseInt(e.target.value) || 30)}
+                  onChange={(e) => setEpEnd(parseInt(e.target.value) || 30)}
                 />
               </div>
             </div>
@@ -118,7 +143,7 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
             <div className="export-row">
               <label className="text-secondary">格式</label>
               <div className="export-formats">
-                {FORMAT_OPTIONS.map(opt => (
+                {FORMAT_OPTIONS.map((opt) => (
                   <button
                     key={opt.value}
                     className={`btn btn-sm ${format === opt.value ? 'btn-primary' : ''}`}

@@ -69,8 +69,15 @@
 }
 
 @keyframes nodePulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.4); opacity: 0.5; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.5;
+  }
 }
 
 .stage-check {
@@ -116,4 +123,3 @@
 .stage-done .stage-time {
   color: var(--color-success);
 }
-

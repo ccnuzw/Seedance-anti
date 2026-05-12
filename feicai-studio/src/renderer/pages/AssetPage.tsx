@@ -1,17 +1,27 @@
 import { useState, useEffect, useCallback } from 'react'
-import { IPC } from '@shared/ipc-channels'
+import {
+  listCharacters,
+  listScenes,
+  updateAssetPrompt
+} from '@renderer/services/asset-service'
+import {
+  getExceptionMessage,
+  getServiceFailureToast,
+  isServiceSuccess
+} from '@renderer/services/service-contracts'
 import { useProjectStore } from '@renderer/stores/projectStore'
-import { useProjectSync } from '@renderer/hooks/useProjectSync'
 import { useToastStore } from '@renderer/stores/toastStore'
 import type { Character, Scene } from '@shared/types'
+import { useShallow } from 'zustand/react/shallow'
 import './AssetPage.css'
 
 type AssetTab = 'characters' | 'scenes'
 
 export default function AssetPage() {
-  useProjectSync()
-  const { currentProject } = useProjectStore()
-  const addToast = useToastStore(s => s.addToast)
+  const { currentProject } = useProjectStore(
+    useShallow((s) => ({ currentProject: s.currentProject }))
+  )
+  const addToast = useToastStore((s) => s.addToast)
   const [tab, setTab] = useState<AssetTab>('characters')
   const [characters, setCharacters] = useState<Character[]>([])
   const [scenes, setScenes] = useState<Scene[]>([])
@@ -26,27 +36,30 @@ export default function AssetPage() {
 
   const loadAssets = async () => {
     if (!currentProject) return
-    const chars = await window.feicaiAPI.invoke(IPC.ASSET_LIST_CHARACTERS, currentProject.projectPath) as Character[]
-    const scns = await window.feicaiAPI.invoke(IPC.ASSET_LIST_SCENES, currentProject.projectPath) as Scene[]
+    const chars = await listCharacters(currentProject.projectPath)
+    const scns = await listScenes(currentProject.projectPath)
     setCharacters(chars)
     setScenes(scns)
   }
 
-  const filteredCharacters = characters.filter(c =>
+  const filteredCharacters = characters.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
-  const filteredScenes = scenes.filter(s =>
+  const filteredScenes = scenes.filter((s) =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const handleCopy = useCallback((text: string, name: string) => {
-    navigator.clipboard.writeText(text)
-    addToast('success', `已复制 ${name} 提示词`)
-  }, [addToast])
+  const handleCopy = useCallback(
+    (text: string, name: string) => {
+      navigator.clipboard.writeText(text)
+      addToast('success', `已复制 ${name} 提示词`)
+    },
+    [addToast]
+  )
 
   const toggleExpand = (id: string) => {
     if (editingId) return // 编辑中不允许切换
-    setExpandedId(prev => prev === id ? null : id)
+    setExpandedId((prev) => (prev === id ? null : id))
   }
 
   const startEdit = (id: string, currentText: string) => {
@@ -60,45 +73,78 @@ export default function AssetPage() {
     setEditText('')
   }
 
-  const handleSave = useCallback(async (assetType: 'character' | 'scene', assetName: string) => {
-    if (!currentProject) return
-    try {
-      const result = await window.feicaiAPI.invoke('asset:update-prompt', {
-        projectPath: currentProject.projectPath,
-        assetType,
-        assetName,
-        newPromptText: editText
-      }) as { success: boolean; error?: string }
+  const handleSave = useCallback(
+    async (assetType: 'character' | 'scene', assetName: string) => {
+      if (!currentProject) return
+      try {
+        const result = await updateAssetPrompt({
+          projectPath: currentProject.projectPath,
+          assetType,
+          assetName,
+          newPromptText: editText
+        })
 
-      if (result.success) {
-        addToast('success', `${assetName} 提示词已保存`)
-        setEditingId(null)
-        setEditText('')
-        await loadAssets() // 重新加载
-      } else {
-        addToast('error', result.error || '保存失败')
+        if (isServiceSuccess(result)) {
+          addToast('success', `${assetName} 提示词已保存`)
+          setEditingId(null)
+          setEditText('')
+          await loadAssets() // 重新加载
+        } else {
+          const toast = getServiceFailureToast(result, '保存失败')
+          addToast(toast.type, toast.message)
+        }
+      } catch (error) {
+        addToast('error', getExceptionMessage(error, '保存失败'))
       }
-    } catch {
-      addToast('error', '保存失败')
-    }
-  }, [currentProject, editText, addToast])
+    },
+    [currentProject, editText, addToast]
+  )
 
-  const renderCardActions = (id: string, name: string, promptText: string, assetType: 'character' | 'scene') => (
+  const renderCardActions = (
+    id: string,
+    name: string,
+    promptText: string,
+    assetType: 'character' | 'scene'
+  ) => (
     <div className="asset-card-actions">
-      <button className="btn btn-sm asset-copy-btn" onClick={(e) => { e.stopPropagation(); handleCopy(promptText, name) }}>
+      <button
+        className="btn btn-sm asset-copy-btn"
+        onClick={(e) => {
+          e.stopPropagation()
+          handleCopy(promptText, name)
+        }}
+      >
         📋
       </button>
       {editingId === id ? (
         <>
-          <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); handleSave(assetType, name) }}>
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleSave(assetType, name)
+            }}
+          >
             💾
           </button>
-          <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); cancelEdit() }}>
+          <button
+            className="btn btn-sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              cancelEdit()
+            }}
+          >
             ✕
           </button>
         </>
       ) : (
-        <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); startEdit(id, promptText) }}>
+        <button
+          className="btn btn-sm"
+          onClick={(e) => {
+            e.stopPropagation()
+            startEdit(id, promptText)
+          }}
+        >
           ✏️
         </button>
       )}
@@ -112,8 +158,8 @@ export default function AssetPage() {
           <textarea
             className="asset-edit-textarea"
             value={editText}
-            onChange={e => setEditText(e.target.value)}
-            onClick={e => e.stopPropagation()}
+            onChange={(e) => setEditText(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
             spellCheck={false}
           />
         </div>
@@ -122,7 +168,9 @@ export default function AssetPage() {
     return (
       <div className="asset-card-body">
         <p className="asset-prompt-preview">
-          {expandedId === id ? promptText : promptText.substring(0, 120) + '...'}
+          {expandedId === id
+            ? promptText
+            : promptText.substring(0, 120) + '...'}
         </p>
       </div>
     )
@@ -155,26 +203,45 @@ export default function AssetPage() {
       {tab === 'characters' && (
         <div className="asset-grid">
           {filteredCharacters.length === 0 ? (
-            <div className="asset-empty text-secondary">暂无角色素材。请确认 assets/character-prompts.md 存在。</div>
+            <div className="asset-empty text-secondary">
+              暂无角色素材。请确认 assets/character-prompts.md 存在。
+            </div>
           ) : (
             filteredCharacters.map((char) => (
-              <div key={char.id} className={`card asset-card character-card ${expandedId === char.id ? 'expanded' : ''}`}
-                onClick={() => toggleExpand(char.id)}>
+              <div
+                key={char.id}
+                className={`card asset-card character-card ${expandedId === char.id ? 'expanded' : ''}`}
+                onClick={() => toggleExpand(char.id)}
+              >
                 <div className="asset-card-header">
                   <div className="asset-avatar character-avatar">
                     {char.name.charAt(0)}
                   </div>
                   <div className="asset-card-info">
                     <h3 className="asset-name">{char.name}</h3>
-                    {char.alias && <span className="asset-alias text-secondary">{char.alias}</span>}
+                    {char.alias && (
+                      <span className="asset-alias text-secondary">
+                        {char.alias}
+                      </span>
+                    )}
                   </div>
-                  {char.isVariant && <span className="badge badge-warning">变体</span>}
-                  {renderCardActions(char.id, char.name, char.promptText, 'character')}
+                  {char.isVariant && (
+                    <span className="badge badge-warning">变体</span>
+                  )}
+                  {renderCardActions(
+                    char.id,
+                    char.name,
+                    char.promptText,
+                    'character'
+                  )}
                 </div>
                 {renderCardBody(char.id, char.promptText)}
                 {char.referenceImagePath && (
                   <div className="asset-card-image">
-                    <img src={`file://${char.referenceImagePath}`} alt={char.name} />
+                    <img
+                      src={`file://${char.referenceImagePath}`}
+                      alt={char.name}
+                    />
                   </div>
                 )}
                 <div className="asset-card-meta text-secondary">
@@ -189,11 +256,16 @@ export default function AssetPage() {
       {tab === 'scenes' && (
         <div className="asset-grid">
           {filteredScenes.length === 0 ? (
-            <div className="asset-empty text-secondary">暂无场景素材。请确认 assets/scene-prompts.md 存在。</div>
+            <div className="asset-empty text-secondary">
+              暂无场景素材。请确认 assets/scene-prompts.md 存在。
+            </div>
           ) : (
             filteredScenes.map((scene) => (
-              <div key={scene.id} className={`card asset-card scene-card ${expandedId === scene.id ? 'expanded' : ''}`}
-                onClick={() => toggleExpand(scene.id)}>
+              <div
+                key={scene.id}
+                className={`card asset-card scene-card ${expandedId === scene.id ? 'expanded' : ''}`}
+                onClick={() => toggleExpand(scene.id)}
+              >
                 <div className="asset-card-header">
                   <div className="asset-avatar scene-avatar">
                     {scene.name.charAt(0)}
@@ -201,15 +273,25 @@ export default function AssetPage() {
                   <div className="asset-card-info">
                     <h3 className="asset-name">{scene.name}</h3>
                     {scene.timeOfDay && (
-                      <span className="asset-alias text-secondary">{scene.timeOfDay}</span>
+                      <span className="asset-alias text-secondary">
+                        {scene.timeOfDay}
+                      </span>
                     )}
                   </div>
-                  {renderCardActions(scene.id, scene.name, scene.promptText, 'scene')}
+                  {renderCardActions(
+                    scene.id,
+                    scene.name,
+                    scene.promptText,
+                    'scene'
+                  )}
                 </div>
                 {renderCardBody(scene.id, scene.promptText)}
                 {scene.referenceImagePath && (
                   <div className="asset-card-image">
-                    <img src={`file://${scene.referenceImagePath}`} alt={scene.name} />
+                    <img
+                      src={`file://${scene.referenceImagePath}`}
+                      alt={scene.name}
+                    />
                   </div>
                 )}
                 <div className="asset-card-meta text-secondary">

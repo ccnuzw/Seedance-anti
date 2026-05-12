@@ -34,7 +34,11 @@ function ReviewNode({ data }: NodeProps & { data: ReviewNodeData }) {
       <Handle type="target" position={Position.Top} className="review-handle" />
       <div className="review-display">{display}</div>
       <div className="review-label">{data.label}</div>
-      <Handle type="source" position={Position.Bottom} className="review-handle" />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className="review-handle"
+      />
     </div>
   )
 }

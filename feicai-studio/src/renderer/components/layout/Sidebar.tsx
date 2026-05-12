@@ -1,37 +1,81 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
-import ExportModal from '@renderer/components/ExportModal'
+import { countCompletedEpisodes } from '@shared/episode-status'
+import { useShallow } from 'zustand/react/shallow'
 import './Sidebar.css'
 
+const ExportModal = lazy(() => import('@renderer/components/ExportModal'))
+
 export default function Sidebar() {
-  const { currentProject, episodes } = useProjectStore()
-  const { context: pipelineContext } = usePipelineStore()
+  const { currentProject, episodes } = useProjectStore(
+    useShallow((s) => ({
+      currentProject: s.currentProject,
+      episodes: s.episodes
+    }))
+  )
+  const pipelineEpisodeNum = usePipelineStore((s) => s.context?.episodeNum)
   const [showExport, setShowExport] = useState(false)
 
   // 计算进度
-  const completedCount = episodes.filter(e => e.status === 'complete').length
-  const progressPct = episodes.length > 0 ? Math.round((completedCount / episodes.length) * 100) : 0
+  const completedCount = countCompletedEpisodes(episodes)
+  const progressPct =
+    episodes.length > 0
+      ? Math.round((completedCount / episodes.length) * 100)
+      : 0
 
   // 流水线链接自动带上当前运行/上次运行的集数
-  const pipelineEp = pipelineContext?.episodeNum
+  const pipelineEp = pipelineEpisodeNum
   const pipelinePath = currentProject
     ? `/project/${currentProject.id}/pipeline${pipelineEp ? `?ep=${pipelineEp}` : ''}`
     : ''
 
-  const NAV_ITEMS_BEFORE = [
-    { path: '/', icon: '🏠', label: '仪表盘' },
-  ]
+  const NAV_ITEMS_BEFORE = [{ path: '/', icon: '🏠', label: '仪表盘' }]
 
   const NAV_ITEMS_AFTER = currentProject
     ? [
         { path: pipelinePath, icon: '⚡', label: '流水线' },
-        { path: `/project/${currentProject.id}/batch`, icon: '🚀', label: '批量执行' },
-        { path: `/project/${currentProject.id}/assets`, icon: '🎭', label: '素材库' },
-        { path: `/project/${currentProject.id}/prompts`, icon: '📐', label: '提示词' },
-        { path: `/project/${currentProject.id}/script`, icon: '📖', label: '剧本' },
-        { path: `/project/${currentProject.id}/review`, icon: '📊', label: '审核报告' },
+        {
+          path: `/project/${currentProject.id}/batch`,
+          icon: '🚀',
+          label: '批量执行'
+        },
+        {
+          path: `/project/${currentProject.id}/source`,
+          icon: '📚',
+          label: '小说原文'
+        },
+        {
+          path: `/project/${currentProject.id}/story`,
+          icon: '🧩',
+          label: '剧情拆解'
+        },
+        {
+          path: `/project/${currentProject.id}/script`,
+          icon: '📖',
+          label: '剧本'
+        },
+        {
+          path: `/project/${currentProject.id}/assets`,
+          icon: '🎭',
+          label: '素材库'
+        },
+        {
+          path: `/project/${currentProject.id}/prompts`,
+          icon: '📐',
+          label: '提示词'
+        },
+        {
+          path: `/project/${currentProject.id}/review`,
+          icon: '📊',
+          label: '审核报告'
+        },
+        {
+          path: `/project/${currentProject.id}/health`,
+          icon: '🧪',
+          label: '项目体检'
+        }
       ]
     : []
 
@@ -75,13 +119,17 @@ export default function Sidebar() {
               </div>
               <div className="spc-title-group">
                 <span className="spc-name">{currentProject.name}</span>
-                <span className="spc-style">{currentProject.visualStyle || '未设定风格'}</span>
+                <span className="spc-style">
+                  {currentProject.visualStyle || '未设定风格'}
+                </span>
               </div>
             </div>
 
             <div className="spc-meta">
               <div className="spc-meta-item">
-                <span className="spc-meta-value">{currentProject.totalEpisodes}</span>
+                <span className="spc-meta-value">
+                  {currentProject.totalEpisodes}
+                </span>
                 <span className="spc-meta-label">集数</span>
               </div>
               <div className="spc-meta-divider" />
@@ -133,7 +181,10 @@ export default function Sidebar() {
         </NavLink>
 
         {currentProject && (
-          <button className="sidebar-nav-item sidebar-export-btn" onClick={() => setShowExport(true)}>
+          <button
+            className="sidebar-nav-item sidebar-export-btn"
+            onClick={() => setShowExport(true)}
+          >
             <span className="nav-icon">📦</span>
             <span className="nav-label">导出</span>
           </button>
@@ -144,7 +195,11 @@ export default function Sidebar() {
         <div className="sidebar-version text-secondary">v0.1.0</div>
       </div>
 
-      <ExportModal open={showExport} onClose={() => setShowExport(false)} />
+      {showExport && (
+        <Suspense fallback={null}>
+          <ExportModal open={showExport} onClose={() => setShowExport(false)} />
+        </Suspense>
+      )}
     </aside>
   )
 }

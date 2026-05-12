@@ -33,13 +33,9 @@ export class SkillLoader {
     const templates = await this.loadSubDir(join(skillDir, 'templates'))
     const examples = await this.loadSubDir(join(skillDir, 'examples'))
 
-    // 加载可选的方法论和指南文件
-    const methodology = await this.loadOptionalFile(skillDir, 'seedance-prompt-methodology.md')
-    const guides: Record<string, string> = {}
-    const guideContent = await this.loadOptionalFile(skillDir, 'gemini-image-prompt-guide.md')
-    if (guideContent) {
-      guides['gemini-image-prompt-guide'] = guideContent
-    }
+    // 加载根目录下的可选方法论和指南文件。旧版 webtoon-skill
+    // 使用 adapt-method.md / output-style.md，这里保持通用加载。
+    const rootSupportingFiles = await this.loadRootSupportingFiles(skillDir)
 
     // 扫描所有文件
     const fileManifest = await this.listAllFiles(skillDir)
@@ -48,10 +44,13 @@ export class SkillLoader {
       name: (frontmatter.name as string) || skillName,
       description: (frontmatter.description as string) || '',
       systemPrompt: body.trim(),
-      methodology: methodology || undefined,
+      methodology: rootSupportingFiles.methodology || undefined,
       templates,
       examples,
-      guides: Object.keys(guides).length > 0 ? guides : undefined,
+      guides:
+        Object.keys(rootSupportingFiles.guides).length > 0
+          ? rootSupportingFiles.guides
+          : undefined,
       skillPath: skillDir,
       fileManifest
     }
@@ -83,14 +82,49 @@ export class SkillLoader {
     return result
   }
 
-  /**
-   * 可选文件加载
-   */
-  private async loadOptionalFile(dir: string, filename: string): Promise<string | null> {
+  private async loadRootSupportingFiles(dirPath: string): Promise<{
+    methodology: string
+    guides: Record<string, string>
+  }> {
+    const methodologyParts: string[] = []
+    const guides: Record<string, string> = {}
+    const preferredOrder = [
+      'adapt-method.md',
+      'output-style.md',
+      'seedance-prompt-methodology.md'
+    ]
+
     try {
-      return await readFile(join(dir, filename), 'utf-8')
+      const files = (await readdir(dirPath))
+        .filter((file) => file.endsWith('.md') && file !== 'SKILL.md')
+        .sort((a, b) => {
+          const aIndex = preferredOrder.indexOf(a)
+          const bIndex = preferredOrder.indexOf(b)
+          if (aIndex >= 0 || bIndex >= 0) {
+            return (
+              (aIndex >= 0 ? aIndex : preferredOrder.length) -
+              (bIndex >= 0 ? bIndex : preferredOrder.length)
+            )
+          }
+          return a.localeCompare(b)
+        })
+
+      for (const file of files) {
+        const content = await readFile(join(dirPath, file), 'utf-8')
+        const key = basename(file, '.md')
+        if (/guide/i.test(file)) {
+          guides[key] = content
+          continue
+        }
+        methodologyParts.push(`# ${key}\n\n${content}`)
+      }
     } catch {
-      return null
+      // 根目录不存在或不可读，返回空资源。
+    }
+
+    return {
+      methodology: methodologyParts.join('\n\n---\n\n'),
+      guides
     }
   }
 
@@ -104,7 +138,10 @@ export class SkillLoader {
       for (const entry of entries) {
         const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
         if (entry.isDirectory()) {
-          const subFiles = await this.listAllFiles(join(dir, entry.name), relativePath)
+          const subFiles = await this.listAllFiles(
+            join(dir, entry.name),
+            relativePath
+          )
           result.push(...subFiles)
         } else {
           result.push(relativePath)

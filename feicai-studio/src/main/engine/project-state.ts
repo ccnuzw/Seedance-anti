@@ -1,35 +1,54 @@
 // ============================================================
 // Project State Persistence — 项目状态持久化
 // ============================================================
-// 将流水线进度和审核记录写入 outputs/pipeline-state.json，
-// 重启应用后可恢复进度。
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
-import { join, dirname } from 'path'
-import type { PipelineStage, ReviewResult, EpisodeStatus } from '@shared/types'
+import { dirname } from 'path'
+import type {
+  EpisodePipelineState,
+  EpisodeStatus,
+  EpisodeStageSnapshot,
+  PipelineStage,
+  ProjectConfig,
+  ProjectPipelineState,
+  ReviewResult
+} from '@shared/types'
+import { resolveProjectArtifactPath } from '@shared/path-resolver'
 
-export interface EpisodeState {
-  episodeNum: number
-  status: EpisodeStatus
-  lastStage: PipelineStage
-  completedStages: PipelineStage[]
-  reviews: ReviewResult[]
-  totalDurationSeconds: number
-  updatedAt: string
+type StageSnapshotUpdate = Partial<
+  Omit<EpisodeStageSnapshot, 'stage' | 'updatedAt'>
+> & {
+  status?: EpisodeStageSnapshot['status']
 }
 
-export interface ProjectState {
-  projectId: string
-  episodes: Record<number, EpisodeState>
-  updatedAt: string
+function createEmptyEpisodeState(episodeNum: number): EpisodePipelineState {
+  const now = new Date().toISOString()
+  return {
+    episodeNum,
+    status: 'idle' as EpisodeStatus,
+    lastStage: 'director' as PipelineStage,
+    completedStages: [],
+    stageStates: {},
+    reviews: [],
+    totalDurationSeconds: 0,
+    updatedAt: now
+  }
 }
 
 export class ProjectStatePersistence {
   private filePath: string
-  private state: ProjectState
+  private state: ProjectPipelineState
 
-  constructor(projectPath: string, projectId: string) {
-    this.filePath = join(projectPath, 'outputs', 'pipeline-state.json')
+  constructor(
+    projectPath: string,
+    projectId: string,
+    config?: Partial<ProjectConfig> | null
+  ) {
+    this.filePath = resolveProjectArtifactPath(
+      projectPath,
+      'pipelineState',
+      config
+    )
     this.state = {
       projectId,
       episodes: {},
@@ -37,81 +56,185 @@ export class ProjectStatePersistence {
     }
   }
 
-  /** 从磁盘加载（不存在则返回空状态） */
-  async load(): Promise<ProjectState> {
+  async load(): Promise<ProjectPipelineState> {
     try {
       const raw = await readFile(this.filePath, 'utf-8')
-      this.state = JSON.parse(raw) as ProjectState
+      this.state = JSON.parse(raw) as ProjectPipelineState
     } catch {
-      // 文件不存在，保持默认空状态
+      // ignore missing state file
     }
     return this.state
   }
 
-  /** 保存到磁盘 */
   async save(): Promise<void> {
     this.state.updatedAt = new Date().toISOString()
     await mkdir(dirname(this.filePath), { recursive: true })
     await writeFile(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8')
   }
 
-  /** 更新单集状态 */
+  getEpisode(episodeNum: number): EpisodePipelineState | undefined {
+    return this.state.episodes[episodeNum]
+  }
+
+  getState(): ProjectPipelineState {
+    return this.state
+  }
+
   async updateEpisode(
     episodeNum: number,
-    update: Partial<EpisodeState>
+    update: Partial<EpisodePipelineState>
   ): Promise<void> {
-    const existing = this.state.episodes[episodeNum] || {
-      episodeNum,
-      status: 'idle' as EpisodeStatus,
-      lastStage: 'director' as PipelineStage,
-      completedStages: [],
-      reviews: [],
-      totalDurationSeconds: 0,
-      updatedAt: new Date().toISOString()
-    }
-
+    const existing =
+      this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
     this.state.episodes[episodeNum] = {
       ...existing,
       ...update,
       updatedAt: new Date().toISOString()
     }
-
     await this.save()
   }
 
-  /** 标记阶段完成 */
-  async markStageComplete(
+  async markStageRunning(
     episodeNum: number,
     stage: PipelineStage,
-    reviews: ReviewResult[]
+    extra: { outputPath?: string } = {}
   ): Promise<void> {
-    const existing = this.state.episodes[episodeNum]
-    const completedStages = existing?.completedStages || []
-    if (!completedStages.includes(stage)) {
-      completedStages.push(stage)
-    }
+    await this.updateStageSnapshot(
+      episodeNum,
+      stage,
+      {
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        outputPath: extra.outputPath,
+        lastError: undefined
+      },
+      {
+        lastStage: stage
+      }
+    )
+  }
 
-    const statusMap: Record<PipelineStage, EpisodeStatus> = {
-      director: 'director',
-      art: 'art',
-      storyboard: 'complete'
-    }
+  async markStageReviewResult(
+    episodeNum: number,
+    stage: PipelineStage,
+    review: ReviewResult,
+    extra: { reviewPath?: string; outputPath?: string } = {}
+  ): Promise<void> {
+    const existing =
+      this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
+    const reviews = [...existing.reviews]
+    reviews.push(review)
 
+    await this.updateStageSnapshot(
+      episodeNum,
+      stage,
+      {
+        status: review.passed ? 'passed' : 'failed',
+        completedAt: review.createdAt,
+        reviewPath: extra.reviewPath,
+        outputPath: extra.outputPath,
+        lastReview: review,
+        lastError: review.passed ? undefined : review.feedback
+      },
+      {
+        lastStage: stage,
+        reviews,
+        completedStages: review.passed
+          ? Array.from(new Set([...(existing.completedStages || []), stage]))
+          : existing.completedStages
+      }
+    )
+  }
+
+  async markStageSkipped(
+    episodeNum: number,
+    stage: PipelineStage
+  ): Promise<void> {
+    await this.updateStageSnapshot(
+      episodeNum,
+      stage,
+      {
+        status: 'skipped',
+        completedAt: new Date().toISOString(),
+        lastError: undefined
+      },
+      {
+        lastStage: stage,
+        completedStages: Array.from(
+          new Set([
+            ...(this.getEpisode(episodeNum)?.completedStages || []),
+            stage
+          ])
+        )
+      }
+    )
+  }
+
+  async markStageError(
+    episodeNum: number,
+    stage: PipelineStage,
+    error: string
+  ): Promise<void> {
+    await this.updateStageSnapshot(
+      episodeNum,
+      stage,
+      {
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        lastError: error
+      },
+      {
+        lastStage: stage
+      }
+    )
+  }
+
+  async updateEpisodeStatus(
+    episodeNum: number,
+    status: EpisodeStatus,
+    extra: { totalDurationSeconds?: number } = {}
+  ): Promise<void> {
     await this.updateEpisode(episodeNum, {
-      lastStage: stage,
-      completedStages,
-      reviews: [...(existing?.reviews || []), ...reviews],
-      status: statusMap[stage]
+      status,
+      ...(extra.totalDurationSeconds !== undefined
+        ? { totalDurationSeconds: extra.totalDurationSeconds }
+        : {})
     })
   }
 
-  /** 获取单集状态 */
-  getEpisode(episodeNum: number): EpisodeState | undefined {
-    return this.state.episodes[episodeNum]
-  }
+  private async updateStageSnapshot(
+    episodeNum: number,
+    stage: PipelineStage,
+    update: StageSnapshotUpdate,
+    episodeUpdate: Partial<EpisodePipelineState> = {}
+  ): Promise<void> {
+    const existing =
+      this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
+    const current = existing.stageStates[stage]
+    const attempts =
+      update.status === 'running'
+        ? (current?.attempts || 0) + 1
+        : current?.attempts || 0
 
-  /** 获取全部状态 */
-  getState(): ProjectState {
-    return this.state
+    const snapshot: EpisodeStageSnapshot = {
+      stage,
+      status: update.status || current?.status || 'pending',
+      attempts,
+      startedAt: update.startedAt ?? current?.startedAt,
+      completedAt: update.completedAt ?? current?.completedAt,
+      updatedAt: new Date().toISOString(),
+      outputPath: update.outputPath ?? current?.outputPath,
+      reviewPath: update.reviewPath ?? current?.reviewPath,
+      lastError: update.lastError ?? current?.lastError,
+      lastReview: update.lastReview ?? current?.lastReview
+    }
+
+    await this.updateEpisode(episodeNum, {
+      ...episodeUpdate,
+      stageStates: {
+        ...existing.stageStates,
+        [stage]: snapshot
+      }
+    })
   }
 }

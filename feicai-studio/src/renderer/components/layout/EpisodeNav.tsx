@@ -1,4 +1,7 @@
+import { memo, useMemo } from 'react'
 import type { Episode } from '@shared/types'
+import { isEpisodeComplete, isEpisodePartial } from '@shared/episode-status'
+import { DevProfiler } from '@renderer/dev/render-profiler'
 import './EpisodeNav.css'
 
 interface EpisodeNavProps {
@@ -11,45 +14,62 @@ interface EpisodeNavProps {
   isDone?: (episode: Episode) => boolean
 }
 
-export default function EpisodeNav({ episodes, currentEp, onSelect, runningEp, isDone }: EpisodeNavProps) {
-  const sorted = [...episodes].sort((a, b) => a.episodeNumber - b.episodeNumber)
+function EpisodeNav({
+  episodes,
+  currentEp,
+  onSelect,
+  runningEp,
+  isDone
+}: EpisodeNavProps) {
+  const sorted = useMemo(
+    () => [...episodes].sort((a, b) => a.episodeNumber - b.episodeNumber),
+    [episodes]
+  )
 
-  const checkDone = isDone ?? ((ep: Episode) => ep.status === 'complete')
+  const checkDone = isDone ?? ((ep: Episode) => isEpisodeComplete(ep.status))
 
   /** 部分完成：有导演分析或服化道但无最终提示词 */
   const checkPartial = (ep: Episode) => {
-    return ep.status === 'director' || ep.status === 'art'
+    return isEpisodePartial(ep.status)
   }
 
   return (
-    <div className="epnav">
-      <div className="epnav-track">
-        {sorted.map((ep) => {
-          const num = ep.episodeNumber
-          const isActive = num === currentEp
-          const done = checkDone(ep)
-          const partial = !done && checkPartial(ep)
-          const isRunningEp = runningEp === num
-          return (
-            <button
-              key={num}
-              className={[
-                'epnav-item',
-                isActive && 'epnav-active',
-                done && !isActive && 'epnav-done',
-                partial && !isActive && 'epnav-partial',
-                isRunningEp && 'epnav-running'
-              ].filter(Boolean).join(' ')}
-              onClick={() => onSelect(num)}
-              title={`EP${String(num).padStart(2, '0')}${isRunningEp ? ' (运行中)' : ''}`}
-            >
-              <span className="epnav-num">{String(num).padStart(2, '0')}</span>
-              {isRunningEp && <span className="epnav-pulse">▶</span>}
-              {done && !isRunningEp && <span className="epnav-check">✓</span>}
-            </button>
-          )
-        })}
+    <DevProfiler id="EpisodeNav">
+      <div className="epnav">
+        <div className="epnav-track">
+          {sorted.map((ep) => {
+            const num = ep.episodeNumber
+            const isActive = num === currentEp
+            const done = checkDone(ep)
+            const partial = !done && checkPartial(ep)
+            const isRunningEp = runningEp === num
+            return (
+              <button
+                key={num}
+                className={[
+                  'epnav-item',
+                  isActive && 'epnav-active',
+                  done && !isActive && 'epnav-done',
+                  partial && !isActive && 'epnav-partial',
+                  isRunningEp && 'epnav-running'
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => onSelect(num)}
+                title={`EP${String(num).padStart(2, '0')}${isRunningEp ? ' (运行中)' : ''}`}
+              >
+                <span className="epnav-num">
+                  {String(num).padStart(2, '0')}
+                </span>
+                {isRunningEp && <span className="epnav-pulse">▶</span>}
+                {done && !isRunningEp && <span className="epnav-check">✓</span>}
+              </button>
+            )
+          })}
+        </div>
       </div>
-    </div>
+    </DevProfiler>
   )
 }
+
+export default memo(EpisodeNav)

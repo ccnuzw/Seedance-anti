@@ -19,7 +19,11 @@ interface ToastOptions {
 
 interface ToastStore {
   toasts: Toast[]
-  addToast: (type: ToastType, message: string, options?: number | ToastOptions) => void
+  addToast: (
+    type: ToastType,
+    message: string,
+    options?: number | ToastOptions
+  ) => void
   removeToast: (id: string) => void
   startExit: (id: string) => void
 }
@@ -45,7 +49,10 @@ export const useToastStore = create<ToastStore>((set, get) => ({
     }
 
     set((s) => ({
-      toasts: [...s.toasts, { id, type, title, message, duration, createdAt: now }]
+      toasts: [
+        ...s.toasts,
+        { id, type, title, message, duration, createdAt: now }
+      ]
     }))
 
     if (duration > 0) {
@@ -55,13 +62,13 @@ export const useToastStore = create<ToastStore>((set, get) => ({
 
   startExit: (id) => {
     set((s) => ({
-      toasts: s.toasts.map(t => t.id === id ? { ...t, exiting: true } : t)
+      toasts: s.toasts.map((t) => (t.id === id ? { ...t, exiting: true } : t))
     }))
     // 等待渐出动画完成后移除
     setTimeout(() => get().removeToast(id), EXIT_ANIMATION_MS)
   },
 
   removeToast: (id) => {
-    set((s) => ({ toasts: s.toasts.filter(t => t.id !== id) }))
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
   }
 }))

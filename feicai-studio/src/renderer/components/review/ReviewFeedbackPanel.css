@@ -1,0 +1,127 @@
+.review-feedback-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  background: var(--color-bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.review-feedback-panel.is-pass {
+  border-color: color-mix(
+    in srgb,
+    var(--color-success) 45%,
+    var(--color-border)
+  );
+}
+
+.review-feedback-panel.is-fail {
+  border-color: color-mix(
+    in srgb,
+    var(--color-danger) 35%,
+    var(--color-border)
+  );
+  background: color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-card));
+}
+
+.review-feedback-header {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  align-items: stretch;
+}
+
+.review-feedback-title {
+  font-size: var(--font-size-md);
+  font-weight: 700;
+}
+
+.review-feedback-meta {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.review-feedback-result {
+  font-weight: 700;
+}
+
+.review-feedback-result.is-pass {
+  color: var(--color-success);
+}
+
+.review-feedback-result.is-fail {
+  color: var(--color-danger);
+}
+
+.review-feedback-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.review-feedback-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-feedback-issue {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: flex-start;
+  font-size: var(--font-size-sm);
+}
+
+.review-feedback-severity {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  min-width: 48px;
+  text-align: center;
+}
+
+.review-feedback-severity.severity-critical {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-danger);
+}
+
+.review-feedback-severity.severity-major {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--color-warning);
+}
+
+.review-feedback-severity.severity-minor {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--color-accent);
+}
+
+.review-feedback-description,
+.review-feedback-ok {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.review-feedback-details summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.review-feedback-details pre {
+  margin-top: 12px;
+  padding: var(--spacing-md);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}

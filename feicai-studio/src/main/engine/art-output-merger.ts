@@ -3,7 +3,7 @@
 // ============================================================
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
-import { join, dirname } from 'path'
+import { join } from 'path'
 
 export class ArtOutputMerger {
   /**
@@ -31,7 +31,11 @@ export class ArtOutputMerger {
     if (characterSection.trim()) {
       const header = `\n\n<!-- ${epTag} 新增 -->\n`
       const existing = await this.safeRead(charPath)
-      await writeFile(charPath, existing + header + characterSection.trim() + '\n', 'utf-8')
+      await writeFile(
+        charPath,
+        existing + header + characterSection.trim() + '\n',
+        'utf-8'
+      )
       charCount = (characterSection.match(/^##\s/gm) || []).length
     }
 
@@ -39,7 +43,11 @@ export class ArtOutputMerger {
     if (sceneSection.trim()) {
       const header = `\n\n<!-- ${epTag} 新增 -->\n`
       const existing = await this.safeRead(scenePath)
-      await writeFile(scenePath, existing + header + sceneSection.trim() + '\n', 'utf-8')
+      await writeFile(
+        scenePath,
+        existing + header + sceneSection.trim() + '\n',
+        'utf-8'
+      )
       sceneCount = (sceneSection.match(/^##\s/gm) || []).length
     }
 
@@ -58,11 +66,11 @@ export class ArtOutputMerger {
     const charPatterns = [
       /^#\s*人物(?:提示词|设定|素材)/m,
       /^#\s*角色(?:提示词|设定|素材)/m,
-      /^#\s*Character/mi
+      /^#\s*Character/im
     ]
     const scenePatterns = [
       /^#\s*场景(?:道具|环境)?(?:提示词|设定|素材)/m,
-      /^#\s*Scene/mi
+      /^#\s*Scene/im
     ]
 
     let charStart = -1
@@ -70,11 +78,17 @@ export class ArtOutputMerger {
 
     for (const p of charPatterns) {
       const m = output.match(p)
-      if (m && m.index !== undefined) { charStart = m.index; break }
+      if (m && m.index !== undefined) {
+        charStart = m.index
+        break
+      }
     }
     for (const p of scenePatterns) {
       const m = output.match(p)
-      if (m && m.index !== undefined) { sceneStart = m.index; break }
+      if (m && m.index !== undefined) {
+        sceneStart = m.index
+        break
+      }
     }
 
     let characterSection = ''
