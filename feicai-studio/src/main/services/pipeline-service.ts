@@ -35,6 +35,7 @@ import {
 
 type LaunchSnapshot = {
   params: PipelineLaunchParams
+  operationId?: string
   settings: Readonly<PipelineSettings>
   provider: Readonly<LLMConfig>
   projectConfig: ReturnType<typeof resolveProjectConfig>
@@ -284,6 +285,8 @@ export function configurePipelineEngine(
 }
 
 export function getPipelineContext(engine: PipelineStateMachine) {
+  if (currentTask?.snapshot.kind === 'workflow')
+    throw new Error('当前任务为独立工作流，请查询任务状态')
   if (currentTask?.snapshot.context)
     return structuredClone(currentTask.snapshot.context)
   if (currentTask?.engine)
@@ -338,10 +341,16 @@ export async function retryPipeline(
     engine,
     {
       ...task.launch.params,
-      startStage: stage || task.snapshot.context?.currentStage,
-      singleStage: false
+      startStage:
+        stage ??
+        task.snapshot.context?.currentStage ??
+        task.launch.params.startStage
     },
-    { waitForCompletion: true, retryTask: task }
+    {
+      waitForCompletion: true,
+      retryTask: task,
+      operationId: task.launch.operationId
+    }
   )
   return { success: result.success === true }
 }
@@ -400,6 +409,7 @@ export async function launchPipeline(
     )
     const launch: LaunchSnapshot = {
       params: Object.freeze({ ...params }),
+      operationId: options.operationId,
       settings: pipelineSettings,
       provider: Object.freeze(structuredClone(provider)),
       projectConfig
@@ -450,7 +460,7 @@ export async function launchPipeline(
       singleStage: params.singleStage,
       signal: lease.signal,
       runId: identity.runId,
-      operationId: options.operationId,
+      operationId: launch.operationId,
       waitUntilResumed: () => lease.checkpoint()
     }
 

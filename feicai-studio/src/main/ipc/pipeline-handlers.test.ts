@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   skip: vi.fn(),
   list: vi.fn(),
   task: vi.fn(),
+  context: vi.fn(),
   abort: vi.fn()
 }))
 vi.mock('../security/safe-ipc', () => ({
@@ -48,7 +49,7 @@ vi.mock('../services/pipeline-service', () => ({
   skipPipelineReview: mocks.skip,
   listPipelineTasks: mocks.list,
   getPipelineTask: mocks.task,
-  getPipelineContext: vi.fn()
+  getPipelineContext: mocks.context
 }))
 vi.mock('../services/pipeline-runtime-service', () => ({
   getPipelineRuntime: () => mocks.engine,
@@ -87,6 +88,17 @@ describe('safe runtime IPC boundaries', () => {
       expect(mocks.workflow).not.toHaveBeenCalled()
     }
   )
+  it('propagates an independent workflow context rejection without returning an idle pipeline', async () => {
+    mocks.context.mockImplementationOnce(() => {
+      throw new Error('当前任务为独立工作流，请查询任务状态')
+    })
+    const query = mocks.handlers.get(IPC.PIPELINE_GET_STATE)!
+    await expect(Promise.resolve().then(() => query({}))).rejects.toThrow(
+      '独立工作流'
+    )
+    expect(mocks.context).toHaveBeenCalledWith(mocks.engine)
+  })
+
   it('passes only transport data and validates production-stage enums', async () => {
     mocks.launch.mockResolvedValue({ success: true })
     await mocks.handlers.get(IPC.PIPELINE_START)!(

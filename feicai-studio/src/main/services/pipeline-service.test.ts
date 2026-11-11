@@ -253,6 +253,12 @@ describe('pipeline runtime admission and settling', () => {
     mocks.read.mockReturnValue('{"pipelineSettings":{"passScore":6}}')
     const retried = engine()
     await retryPipeline(retried as never, 'art', firstResult.identity!)
+    expect(retried.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationId: 'recovery-step',
+        startStage: 'art'
+      })
+    )
     expect(retried.setProvider.mock.calls[0]![0]).toMatchObject({
       model: 'first-model'
     })
@@ -278,6 +284,52 @@ describe('pipeline runtime admission and settling', () => {
       /apiKey|private-first|changed-secret/
     )
   })
+
+  it.each([true, false])(
+    'preserves operationId and launch scope across repeated retries (singleStage=%s)',
+    async (singleStage) => {
+      const first = engine()
+      const launched = await launchPipeline(
+        first as never,
+        { ...params, startStage: 'director', singleStage },
+        {
+          waitForCompletion: true,
+          operationId: 'durable-stage-operation'
+        }
+      )
+      const second = engine()
+      await retryPipeline(second as never, undefined, launched.identity!)
+      const secondIdentity = listPipelineTasks()[0]!.identity
+      expect(second.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operationId: 'durable-stage-operation',
+          startStage: 'director',
+          singleStage,
+          runId: secondIdentity.runId
+        })
+      )
+      const third = engine()
+      await retryPipeline(third as never, 'art', secondIdentity)
+      const thirdIdentity = listPipelineTasks()[0]!.identity
+      expect(third.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operationId: 'durable-stage-operation',
+          startStage: 'art',
+          singleStage,
+          runId: thirdIdentity.runId
+        })
+      )
+      expect(secondIdentity.taskId).toBe(launched.identity!.taskId)
+      expect(thirdIdentity.taskId).toBe(launched.identity!.taskId)
+      expect(
+        new Set([
+          launched.identity!.runId,
+          secondIdentity.runId,
+          thirdIdentity.runId
+        ]).size
+      ).toBe(3)
+    }
+  )
 
   it('fences every targeted control before touching the current engine or lease', async () => {
     const first = engine()
@@ -417,6 +469,41 @@ describe('pipeline runtime admission and settling', () => {
     await execution
     expect(listPipelineTasks()[0]!.status).toBe('completed')
     expect(sink).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects automatic pipeline context queries during an independent workflow instead of projecting a new idle engine', async () => {
+    const gate = Promise.withResolvers<{ success: boolean }>()
+    const runner = {
+      setProvider: vi.fn(),
+      runScriptReview: vi.fn().mockReturnValue(gate.promise)
+    }
+    const execution = runWorkflowAction(
+      runner as never,
+      'runScriptReview',
+      params
+    )
+    await Promise.resolve()
+    // No pipeline has been launched; this is the unrelated idle instance that
+    // a legacy getPipelineRuntime() query would create.
+    const idle = engine()
+    const idleContext = { ...idle.getContext(), state: 'idle' as const }
+    const readIdleContext = vi
+      .spyOn(idle, 'getContext')
+      .mockReturnValue(idleContext)
+    const workflow = listPipelineTasks()[0]!
+    try {
+      expect(workflow).toMatchObject({
+        kind: 'workflow',
+        status: 'running',
+        identity: { projectId: 'p', stage: 'script_review' }
+      })
+      expect(() => getPipelineContext(idle as never)).toThrow('独立工作流')
+      expect(readIdleContext).not.toHaveBeenCalled()
+      expect(getPipelineTask(workflow.identity.taskId)).toEqual(workflow)
+    } finally {
+      gate.resolve({ success: true })
+      await execution
+    }
   })
 
   it('records rejected execution as failed and releases listeners and its lease', async () => {

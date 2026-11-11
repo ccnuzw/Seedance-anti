@@ -291,6 +291,32 @@ describe('usePipelineStore', async () => {
     cleanup()
   })
 
+  it('keeps workflow context query rejection from creating an idle automatic pipeline', async () => {
+    const cleanup = usePipelineStore.getState().setupEventListeners()
+    currentProject = { id: 'project-1' }
+    for (const cb of listeners.taskChanged)
+      cb({
+        kind: 'workflow',
+        status: 'running',
+        identity: {
+          projectId: 'project-1',
+          taskId: 'workflow-task',
+          runId: 'workflow-run',
+          stage: 'script_review'
+        }
+      })
+    expect(getPipelineState).not.toHaveBeenCalled()
+    const before = usePipelineStore.getState()
+    getPipelineState.mockRejectedValueOnce(
+      new Error('当前任务为独立工作流，请查询任务状态')
+    )
+    await before.syncFromBackend()
+    expect(usePipelineStore.getState()).toBe(before)
+    expect(usePipelineStore.getState().context).toBeNull()
+    expect(usePipelineStore.getState().runIdentity).toBeNull()
+    cleanup()
+  })
+
   it('错误事件会停止运行态，reviewing 结束时会封口当前阶段计时', () => {
     const cleanup = usePipelineStore.getState().setupEventListeners()
 
