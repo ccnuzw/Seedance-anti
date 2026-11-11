@@ -60,6 +60,79 @@ describe('pipeline runtime admission and settling', () => {
     if (lease) releaseExecutionLease(lease)
   })
 
+  it.each([
+    '{bad',
+    'null',
+    '[]',
+    '{"pipelineSettings":null}',
+    '{"pipelineSettings":{"maxRetries":-1}}',
+    '{"pipelineSettings":{"durationMin":200}}'
+  ])(
+    'blocks invalid disk config %s before starting either runtime',
+    async (raw) => {
+      mocks.read.mockReturnValue(raw)
+      const first = engine()
+      await expect(
+        launchPipeline(first as never, params, { waitForCompletion: true })
+      ).rejects.toThrow('读取流水线配置失败')
+      expect(first.start).not.toHaveBeenCalled()
+      expect(getExecutionLease()).toBeNull()
+      const runner = { setProvider: vi.fn(), runScriptReview: vi.fn() }
+      await expect(
+        runWorkflowAction(runner as never, 'runScriptReview', params)
+      ).rejects.toThrow('读取流水线配置失败')
+      expect(runner.runScriptReview).not.toHaveBeenCalled()
+      expect(getExecutionLease()).toBeNull()
+    }
+  )
+
+  it('defaults only for a missing file; permission failures remain visible', async () => {
+    mocks.read.mockImplementation(() => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    })
+    const first = engine()
+    await launchPipeline(first as never, params, { waitForCompletion: true })
+    expect(first.setPipelineSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ passScore: 7 })
+    )
+    mocks.read.mockImplementation(() => {
+      throw Object.assign(new Error('denied'), { code: 'EACCES' })
+    })
+    await expect(
+      launchPipeline(engine() as never, params, { waitForCompletion: true })
+    ).rejects.toThrow('denied')
+  })
+
+  it('gives workflow generation and credentials the same effective disk settings', async () => {
+    mocks.read.mockReturnValue(
+      '{"pipelineSettings":{"durationMin":200,"durationMax":300,"passScore":9}}'
+    )
+    mocks.project.mockReturnValue({
+      pipelineSettings: { durationMin: 20, passScore: 2 }
+    })
+    const runner = {
+      setProvider: vi.fn(),
+      runScriptReview: vi.fn().mockResolvedValue({})
+    }
+    await runWorkflowAction(runner as never, 'runScriptReview', params)
+    expect(runner.runScriptReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectConfig: expect.objectContaining({
+          pipelineSettings: expect.objectContaining({
+            durationMin: 200,
+            durationMax: 300,
+            passScore: 9,
+            maxRetries: 3
+          })
+        }),
+        projectContext: expect.objectContaining({
+          durationMin: 200,
+          durationMax: 300
+        })
+      })
+    )
+  })
+
   it('holds a synchronous shared lease before provider configuration/async execution', async () => {
     const gate = Promise.withResolvers<void>()
     const first = engine()

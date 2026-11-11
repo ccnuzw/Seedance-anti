@@ -81,6 +81,10 @@ afterEach(() => rmSync(projectPath, { recursive: true, force: true }))
 describe('artifact provenance', () => {
   it('缺省、空设置、显式默认值和不同字段顺序具有相同指纹，真实设置变化失效', () => {
     const review = boundReview('script_review')
+    // Frozen a7dbc26 default fingerprint: valid existing credentials stay current.
+    expect(review.inputHashes!.reviewConfig).toBe(
+      'a7ff43b2f4c4f9f1c77ca9a14caa281dd0f9fe45156f45c2fa4f02f88a5566c5'
+    )
     for (const pipelineSettings of [
       undefined,
       {},
@@ -114,6 +118,24 @@ describe('artifact provenance', () => {
       ).toBe(false)
     }
   })
+
+  it.each([
+    null,
+    { passScore: NaN },
+    { passScore: 11 },
+    { durationMin: 200 },
+    { extra: 1 }
+  ])(
+    'invalid settings cannot produce or authorize credentials: %j',
+    (pipelineSettings) => {
+      const review = boundReview('script_review')
+      const invalid = { ...config, pipelineSettings } as Partial<ProjectConfig>
+      expect(() =>
+        captureReviewProvenance(projectPath, 'script_review', 1, invalid)
+      ).toThrow()
+      expect(isReviewCurrent(review, projectPath, 1, invalid)).toBe(false)
+    }
+  )
 
   it('依赖schema升级后旧凭据即使正文未变也保守失效', () => {
     const review = boundReview('art')

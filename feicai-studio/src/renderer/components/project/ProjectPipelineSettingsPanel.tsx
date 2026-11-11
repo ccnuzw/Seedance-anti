@@ -1,4 +1,11 @@
-import type { PipelineSettings } from '@shared/types'
+import {
+  PIPELINE_SETTING_FIELDS,
+  PIPELINE_SETTING_KEYS
+} from '@shared/pipeline-settings'
+import {
+  validatePipelineSettingsDraft,
+  type PipelineSettingsDraft
+} from './pipeline-settings-draft'
 
 interface ProjectSettingsDraft {
   name: string
@@ -13,8 +20,8 @@ interface Props {
   showSettings: boolean
   setShowSettings: (value: boolean) => void
   setPsLoaded: (value: boolean) => void
-  ps: PipelineSettings
-  setPs: (value: PipelineSettings) => void
+  ps: PipelineSettingsDraft
+  setPs: (value: PipelineSettingsDraft) => void
   projectDraft: ProjectSettingsDraft
   setProjectDraft: (value: ProjectSettingsDraft) => void
   visualStyles: readonly string[]
@@ -40,6 +47,8 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
     onReset,
     onSave
   } = props
+
+  const validation = validatePipelineSettingsDraft(ps)
 
   return (
     <>
@@ -204,141 +213,50 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
               </span>
             </div>
             <div className="pipeline-settings-grid">
-              <div className="ps-item">
-                <label>最大重试次数</label>
-                <span className="ps-desc text-secondary">
-                  审核不通过时的自动重试上限
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={1}
-                  max={10}
-                  value={ps.maxRetries}
-                  onChange={(e) =>
-                    setPs({ ...ps, maxRetries: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>审核通过阈值</label>
-                <span className="ps-desc text-secondary">
-                  评分 ≥ 此值即 PASS（1-10 分）
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={1}
-                  max={10}
-                  value={ps.passScore}
-                  onChange={(e) =>
-                    setPs({ ...ps, passScore: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>LLM 超时 (秒)</label>
-                <span className="ps-desc text-secondary">
-                  无新数据超过此时间则中断
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={30}
-                  max={300}
-                  value={ps.llmTimeoutSec}
-                  onChange={(e) =>
-                    setPs({ ...ps, llmTimeoutSec: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>每集最短时长 (秒)</label>
-                <span className="ps-desc text-secondary">
-                  生成提示词的最短总时长约束
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={30}
-                  max={600}
-                  value={ps.durationMin}
-                  onChange={(e) =>
-                    setPs({ ...ps, durationMin: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>每集最长时长 (秒)</label>
-                <span className="ps-desc text-secondary">
-                  生成提示词的最长总时长约束
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={30}
-                  max={600}
-                  value={ps.durationMax}
-                  onChange={(e) =>
-                    setPs({ ...ps, durationMax: Number(e.target.value) })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>剧本最少字数</label>
-                <span className="ps-desc text-secondary">
-                  小说到剧本阶段的单集正文下限，默认沿用旧版 1500 字
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={300}
-                  max={10000}
-                  value={ps.scriptWordCountMin}
-                  onChange={(e) =>
-                    setPs({
-                      ...ps,
-                      scriptWordCountMin: Number(e.target.value)
-                    })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>剧本最多字数</label>
-                <span className="ps-desc text-secondary">
-                  小说到剧本阶段的单集正文上限，默认沿用旧版 2000 字
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={300}
-                  max={12000}
-                  value={ps.scriptWordCountMax}
-                  onChange={(e) =>
-                    setPs({
-                      ...ps,
-                      scriptWordCountMax: Number(e.target.value)
-                    })
-                  }
-                />
-              </div>
-              <div className="ps-item">
-                <label>单条提示词上限 (秒)</label>
-                <span className="ps-desc text-secondary">
-                  每条 Seedance 提示词的时长上限
-                </span>
-                <input
-                  type="number"
-                  className="input input-sm"
-                  min={4}
-                  max={15}
-                  value={ps.singlePromptMax}
-                  onChange={(e) =>
-                    setPs({ ...ps, singlePromptMax: Number(e.target.value) })
-                  }
-                />
-              </div>
+              {PIPELINE_SETTING_KEYS.map((key) => {
+                const field = PIPELINE_SETTING_FIELDS[key]
+                const error = validation.issues.find(
+                  (issue) => issue.field === key
+                )
+                return (
+                  <div className="ps-item" key={key}>
+                    <label htmlFor={`pipeline-${key}`}>
+                      {field.label}（{field.unit}）
+                    </label>
+                    <span
+                      id={`pipeline-${key}-hint`}
+                      className="ps-desc text-secondary"
+                    >
+                      {field.description}；默认 {field.defaultValue}{' '}
+                      {field.unit}
+                    </span>
+                    <input
+                      id={`pipeline-${key}`}
+                      type="text"
+                      inputMode={field.integer ? 'numeric' : 'decimal'}
+                      className="input input-sm"
+                      value={ps[key]}
+                      aria-invalid={!!error}
+                      aria-describedby={`pipeline-${key}-hint${error ? ` pipeline-${key}-error` : ''}`}
+                      onChange={(e) => setPs({ ...ps, [key]: e.target.value })}
+                    />
+                    {error && (
+                      <span id={`pipeline-${key}-error`} role="alert">
+                        {error.message}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
             </div>
+            {validation.issues
+              .filter((issue) => issue.field === '_config')
+              .map((issue) => (
+                <p role="alert" key={issue.message}>
+                  {issue.message}
+                  。请修复配置文件中的结构或类型错误；恢复默认值需保存后生效。
+                </p>
+              ))}
           </div>
           <div className="pipeline-settings-actions">
             <button className="btn btn-sm" onClick={onReset}>
@@ -347,7 +265,7 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
             <button
               className="btn btn-sm btn-primary"
               onClick={onSave}
-              disabled={psSaving}
+              disabled={psSaving || validation.issues.length > 0}
             >
               {psSaving ? '⏳ 保存中...' : '💾 保存'}
             </button>

@@ -67,6 +67,16 @@ vi.mock('../services/project-service', () => ({
   syncRegisteredProjectStatus: mocks.sync,
   syncRegisteredProjectEpisodeStatus: mocks.syncEpisode
 }))
+vi.mock('../db/episode-sync-worker', () => ({ runProjectSyncWorker: vi.fn() }))
+vi.mock('../db/project-repository', () => ({
+  getProject: (id: string) =>
+    mocks.projects.find((project) => project.id === id) || null,
+  updateProjectRecord: (data: { id: string; configJson: string }) => {
+    const project = mocks.projects.find((project) => project.id === data.id)!
+    project.config = JSON.parse(data.configJson)
+  }
+}))
+
 vi.mock('../services/llm-service', () => ({
   listLLMConfigs: vi.fn(() => []),
   addLLMConfig: vi.fn(),
@@ -148,6 +158,86 @@ afterEach(async () => {
   await flushPendingWrites()
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true })
+})
+
+describe('pipeline configuration write contract', () => {
+  it('routes partial updates through real queries, preserves existing bounds, and rejects invalid merges without writes', async () => {
+    const root = temporary()
+    const current = project(root)
+    current.config.pipelineSettings = { durationMin: 100, durationMax: 300 }
+    mocks.projects.push(current)
+    const path = join(root, 'project-config.json')
+    writeFileSync(path, JSON.stringify(current.config))
+    mocks.updateProject.mockImplementation(async (id, data) => {
+      const queries = await import('../db/queries')
+      return queries.updateProject({ id, ...data })
+    })
+    await invoke(IPC.PROJECT_UPDATE, current.id, {
+      config: { pipelineSettings: { durationMin: 200 } }
+    })
+    expect(current.config.pipelineSettings).toMatchObject({
+      durationMin: 200,
+      durationMax: 300
+    })
+    const disk = readFileSync(path, 'utf8')
+    const database = JSON.stringify(current)
+    await expect(
+      invoke(IPC.PROJECT_UPDATE, current.id, {
+        config: { pipelineSettings: { durationMax: 150 } }
+      })
+    ).rejects.toThrow('不能大于')
+    expect(readFileSync(path, 'utf8')).toBe(disk)
+    expect(JSON.stringify(current)).toBe(database)
+    mocks.updateProject.mockClear()
+    await expect(
+      invoke(IPC.PROJECT_UPDATE, current.id, {
+        config: {
+          directories: { sourceDir: '../escape' },
+          pipelineSettings: { durationMin: 200 }
+        }
+      })
+    ).rejects.toThrow()
+    expect(mocks.updateProject).not.toHaveBeenCalled()
+    mocks.updateProject.mockReset()
+  })
+
+  it('validates only registered root config writes, keeps CAS, and treats whole files as complete configs', async () => {
+    const root = temporary()
+    mocks.projects.push(project(root))
+    registerProjectRoot(root)
+    const path = join(root, 'project-config.json')
+    const old = JSON.stringify({
+      pipelineSettings: { durationMin: 100, durationMax: 300 }
+    })
+    writeFileSync(path, old)
+    for (const content of [
+      '{',
+      '',
+      'null',
+      '[]',
+      '{"pipelineSettings":{"durationMin":200}}',
+      '{"pipelineSettings":{"maxRetries":-1}}'
+    ]) {
+      await expect(invoke(IPC.FILE_WRITE, path, content)).rejects.toThrow()
+      expect(readFileSync(path, 'utf8')).toBe(old)
+    }
+    expect(await invoke(IPC.FILE_WRITE, path, '{}', 'stale')).toEqual({
+      success: false,
+      error: 'FILE_CONFLICT'
+    })
+    expect(readFileSync(path, 'utf8')).toBe(old)
+    expect(await invoke(IPC.FILE_WRITE, path, '{}', old)).toEqual({
+      success: true
+    })
+    expect(readFileSync(path, 'utf8')).toBe('{}')
+    expect(
+      await invoke(
+        IPC.FILE_WRITE,
+        join(root, 'nested', 'project-config.json'),
+        'ordinary text'
+      )
+    ).toEqual({ success: true })
+  })
 })
 
 describe('IPC真实文件能力边界', () => {

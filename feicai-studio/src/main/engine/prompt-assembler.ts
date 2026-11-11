@@ -19,6 +19,7 @@
 //  10. 执行指令
 //
 
+import { parsePipelineSettings } from '@shared/pipeline-settings'
 import type { Skill, AssembledPrompt, ProjectEntryStage } from '@shared/types'
 
 function entryScope(entry: ProjectEntryStage, stage?: string): string {
@@ -90,6 +91,21 @@ export class PromptAssembler {
     reviewFeedback?: string,
     entryStage: ProjectEntryStage = 'novel'
   ): AssembledPrompt {
+    const settings = parsePipelineSettings(
+      Object.fromEntries(
+        (
+          [
+            'durationMin',
+            'durationMax',
+            'singlePromptMax',
+            'scriptWordCountMin',
+            'scriptWordCountMax'
+          ] as const
+        )
+          .filter((key) => projectContext[key] !== undefined)
+          .map((key) => [key, projectContext[key]])
+      )
+    )
     const systemParts: string[] = []
     const userParts: string[] = []
 
@@ -156,20 +172,18 @@ export class PromptAssembler {
     }
     if (projectContext.durationMin || projectContext.durationMax) {
       projectInfo.push(
-        `- 每集总时长：${projectContext.durationMin || 90}-${projectContext.durationMax || 120} 秒`
+        `- 每集总时长：${settings.durationMin}-${settings.durationMax} 秒`
       )
     }
     if (projectContext.singlePromptMax) {
-      projectInfo.push(
-        `- 单条提示词时长上限：${projectContext.singlePromptMax} 秒`
-      )
+      projectInfo.push(`- 单条提示词时长上限：${settings.singlePromptMax} 秒`)
     }
     if (
       projectContext.scriptWordCountMin ||
       projectContext.scriptWordCountMax
     ) {
       projectInfo.push(
-        `- 每集剧本字数：${projectContext.scriptWordCountMin || 1500}-${projectContext.scriptWordCountMax || 2000} 字`
+        `- 每集剧本字数：${settings.scriptWordCountMin}-${settings.scriptWordCountMax} 字`
       )
     }
     userParts.push(projectInfo.join('\n'))
@@ -234,12 +248,12 @@ export class PromptAssembler {
 
     // 10. 执行指令（根据阶段区分）
     if (stage === 'story') {
-      const scriptWordCountRange = `${projectContext.scriptWordCountMin || 1500}-${projectContext.scriptWordCountMax || 2000}`
+      const scriptWordCountRange = `${settings.scriptWordCountMin}-${settings.scriptWordCountMax}`
       userParts.push(
         `\n---\n\n请根据以上上游材料，输出当前 6 章批次的剧情拆解结果。\n\n硬性要求：\n1. 必须先参考“完整剧情库存”中已有最大剧情编号、已有批次和分集规划，新的剧情点编号必须连续递增，不得从【剧情1】重新开始，不得重复已有编号。\n2. 只提取 7 分以上的核心冲突和情绪钩子；低强度过渡、环境描写、心理铺垫、无关支线不得作为独立剧情点。\n3. 输出必须包含可追加到剧情库存的剧情点行，格式必须为：【剧情n】[场景]，[角色A]对[角色B][做了什么]，[情绪钩子类型]，第X集，状态：未用。\n4. 拆解时直接标注分集，每集通常 3-4 个剧情点，可按爆点密度灵活调整，但必须能支撑每集 ${scriptWordCountRange} 字剧本。\n5. 必须覆盖当前批次的核心冲突、关键转折和结尾钩子，不能只输出摘要、分析过程或章节梗概。\n6. 不得改编超出项目信息中“小说处理上限”的章节内容。`
       )
     } else if (stage === 'script_generation') {
-      const scriptWordCountRange = `${projectContext.scriptWordCountMin || 1500}-${projectContext.scriptWordCountMax || 2000}`
+      const scriptWordCountRange = `${settings.scriptWordCountMin}-${settings.scriptWordCountMax}`
       const source = inputs.plotBreakdown
         ? '以上本集剧情库存及提供的上游材料'
         : inputs.storyBeat

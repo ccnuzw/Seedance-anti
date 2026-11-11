@@ -1,3 +1,7 @@
+import {
+  parsePipelineSettings,
+  parsePipelineSettingsPatch
+} from '@shared/pipeline-settings'
 import { isAbsolute } from 'path'
 import type { LLMConfig, ProjectConfig } from '@shared/types'
 import { assertNonEmptyString } from './access-control'
@@ -34,7 +38,8 @@ function assertPlanningCount(value: unknown): asserts value is number {
 }
 
 export function assertProjectConfig(
-  value: unknown
+  value: unknown,
+  patch = false
 ): asserts value is Partial<ProjectConfig> {
   assertRecord(value, '项目配置')
   assertAllowedKeys(value, [
@@ -99,25 +104,8 @@ export function assertProjectConfig(
     }
   }
   if (value.pipelineSettings !== undefined) {
-    assertRecord(value.pipelineSettings, '流水线配置')
-    assertAllowedKeys(value.pipelineSettings, [
-      'maxRetries',
-      'passScore',
-      'llmTimeoutSec',
-      'durationMin',
-      'durationMax',
-      'singlePromptMax',
-      'scriptWordCountMin',
-      'scriptWordCountMax'
-    ])
-    for (const setting of Object.values(value.pipelineSettings)) {
-      if (
-        typeof setting !== 'number' ||
-        !Number.isFinite(setting) ||
-        setting < 0
-      )
-        throw new Error('流水线数值配置无效')
-    }
+    if (patch) parsePipelineSettingsPatch(value.pipelineSettings)
+    else parsePipelineSettings(value.pipelineSettings)
   }
 }
 
@@ -147,7 +135,7 @@ export function parseProjectInput(value: unknown): ProjectInput {
   assertNonEmptyString(value.targetMedium, '目标媒介')
   assertNonEmptyString(value.projectPath, '项目路径')
   assertPlanningCount(value.totalEpisodes)
-  assertProjectConfig(value.config)
+  assertProjectConfig(value.config, true)
   if (value.sourceNovelFilePath !== undefined)
     assertNonEmptyString(value.sourceNovelFilePath, '原文路径')
   return {
@@ -176,7 +164,7 @@ export function parseProjectUpdate(
     if (value[key] !== undefined) assertNonEmptyString(value[key], key)
   if (value.totalEpisodes !== undefined)
     assertPlanningCount(value.totalEpisodes)
-  if (value.config !== undefined) assertProjectConfig(value.config)
+  if (value.config !== undefined) assertProjectConfig(value.config, true)
   // All allowed fields were checked above; no identity/path fields survive.
   return value as Partial<
     Omit<ProjectInput, 'projectPath' | 'sourceNovelFilePath'>

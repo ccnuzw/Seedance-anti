@@ -194,6 +194,37 @@ afterEach(() => {
 })
 
 describe('workflow-engine behavior', () => {
+  it.each([
+    { passScore: Infinity },
+    { llmTimeoutSec: 0 },
+    { durationMin: 200 },
+    { maxRetries: 0.5 }
+  ])(
+    'blocks invalid settings before generation and review %j',
+    async (settings) => {
+      config.pipelineSettings = settings
+      await expect(engine.generateStage('story', ctx)).rejects.toThrow()
+      await expect(engine.reviewStage('script_review', ctx)).rejects.toThrow()
+      expect(generate).not.toHaveBeenCalled()
+      expect(reviewContent).not.toHaveBeenCalled()
+      expect(loadSkill).not.toHaveBeenCalled()
+    }
+  )
+
+  it('uses project settings in prompts even if a caller supplies conflicting prompt context', async () => {
+    config.pipelineSettings = {
+      ...config.pipelineSettings,
+      durationMin: 80.5,
+      durationMax: 130.5
+    }
+    ctx.projectContext.durationMin = 999
+    ctx.projectContext.durationMax = 1000
+    generate.mockResolvedValue('【剧情2】林舟反击，第1集，状态：未用')
+    await engine.generateStage('story', ctx)
+    expect(generate.mock.calls[0][0].user).toContain('80.5-130.5 秒')
+    expect(generate.mock.calls[0][0].user).not.toContain('999-1000')
+  })
+
   it('空白生成不覆盖旧产物，也不会发布全局素材', async () => {
     put(episode('script'), '旧剧本')
     generate.mockResolvedValue(' \n ')

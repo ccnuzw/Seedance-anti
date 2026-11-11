@@ -1,3 +1,4 @@
+import { parsePipelineSettings } from './pipeline-settings'
 import type { PipelineSettings, ReviewIssue } from './types'
 
 export interface ScriptHardValidationResult {
@@ -17,8 +18,9 @@ export function validateScriptHardRules(
     .filter(Boolean)
   const lastLine = nonEmptyLines[nonEmptyLines.length - 1] || ''
   const wordCount = countCjkAwareWords(normalized)
-  const minWords = Math.max(0, Number(settings.scriptWordCountMin) || 1500)
-  const maxWords = Math.max(0, Number(settings.scriptWordCountMax) || 2000)
+  const effectiveSettings = parsePipelineSettings(settings)
+  const minWords = effectiveSettings.scriptWordCountMin
+  const maxWords = effectiveSettings.scriptWordCountMax
   const sceneCount = countMatches(normalized, /^※/gm)
   const actionCount = countMatches(normalized, /△/g)
   const dialogueCount = countDialogueLines(normalized)

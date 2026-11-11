@@ -1,6 +1,6 @@
 import { app, dialog } from 'electron'
 import { readdir } from 'fs/promises'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import { IPC } from '@shared/ipc-channels'
 import { resolveProjectLayout } from '@shared/path-resolver'
 import type { ProjectConfig } from '@shared/types'
@@ -82,10 +82,15 @@ function registeredProject(id: unknown, projectPath?: unknown) {
 
 function assertLayoutPaths(
   root: string,
-  config?: Partial<ProjectConfig>
+  config?: Partial<ProjectConfig>,
+  patch = false
 ): void {
-  if (config) assertProjectConfig(config)
-  for (const directory of Object.values(resolveProjectLayout(config))) {
+  if (config) assertProjectConfig(config, patch)
+  // Layout resolution must not fill defaults into a settings patch before DB merge.
+  const layoutConfig = patch
+    ? { ...config, pipelineSettings: undefined }
+    : config
+  for (const directory of Object.values(resolveProjectLayout(layoutConfig))) {
     assertPathWithinProject(root, join(root, directory))
   }
   assertPathWithinProject(root, join(root, 'project-config.json'))
@@ -228,7 +233,7 @@ export function registerAllHandlers(): void {
       )
     )
       throw new Error('该目录已关联其他项目')
-    assertLayoutPaths(root, data.config)
+    assertLayoutPaths(root, data.config, true)
     const sourceNovelFilePath =
       data.sourceNovelFilePath === undefined
         ? undefined
@@ -246,7 +251,7 @@ export function registerAllHandlers(): void {
   mutate(IPC.PROJECT_UPDATE, async (_event, id: unknown, value: unknown) => {
     const { project, root } = registeredProject(id)
     const data = parseProjectUpdate(value)
-    assertLayoutPaths(root, data.config || project.config)
+    assertLayoutPaths(root, data.config || project.config, !!data.config)
     const updated = await updateProject(project.id, data)
     if (
       !isSameProjectRoot(updated.projectPath, root) ||
@@ -337,6 +342,20 @@ export function registerAllHandlers(): void {
       )
         throw new Error('预期文件内容无效')
       const target = assertProjectFileWriteAllowed(path)
+      const configProject =
+        basename(target) === 'project-config.json'
+          ? listRegisteredProjects().find((project) =>
+              isSameProjectRoot(project.projectPath, dirname(target))
+            )
+          : undefined
+      if (configProject) {
+        const config: unknown = JSON.parse(content)
+        assertProjectConfig(config)
+        assertLayoutPaths(
+          assertRegisteredProjectRoot(configProject.projectPath),
+          config
+        )
+      }
       try {
         if (expectedContent === undefined)
           await atomicWriteFile(target, content)

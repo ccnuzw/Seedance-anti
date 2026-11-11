@@ -18,8 +18,8 @@ import {
   isReviewCurrent
 } from '../engine/artifact-provenance'
 import type { ILLMProvider } from '../llm/types'
+import { parsePipelineSettings } from '@shared/pipeline-settings'
 import {
-  DEFAULT_PIPELINE_SETTINGS,
   type AutomatedPipelineStage,
   type ReviewResult,
   type ReviewStage,
@@ -144,12 +144,15 @@ export class WorkflowEngine {
     options: WorkflowGenerateOptions = {}
   ): Promise<WorkflowGenerateResult> {
     // Capture execution-local settings/provider before the first await.
+    const settings = parsePipelineSettings(
+      context.projectConfig?.pipelineSettings
+    )
     const ctx: WorkflowEngineContext = {
       ...context,
       projectConfig: context.projectConfig
         ? structuredClone(context.projectConfig)
         : context.projectConfig,
-      projectContext: { ...context.projectContext },
+      projectContext: { ...context.projectContext, ...settings },
       signal: options.signal || context.signal
     }
     const provider = this.llmProvider
@@ -199,9 +202,7 @@ export class WorkflowEngine {
       normalizeProjectConfig(ctx.projectConfig).entryStage
     )
     const timeoutMs =
-      options.timeoutMs ??
-      ctx.timeoutMs ??
-      (ctx.projectConfig?.pipelineSettings?.llmTimeoutSec ?? 90) * 1000
+      options.timeoutMs ?? ctx.timeoutMs ?? settings.llmTimeoutSec * 1000
     const generateOptions = {
       signal: ctx.signal,
       timeoutMs,
@@ -269,6 +270,9 @@ export class WorkflowEngine {
     stage: WorkflowEngineReviewStage,
     context: ReviewContext
   ): Promise<WorkflowReviewResult> {
+    const settings = parsePipelineSettings(
+      context.projectConfig?.pipelineSettings
+    )
     const ctx: ReviewContext = {
       ...context,
       projectConfig: context.projectConfig
@@ -288,10 +292,6 @@ export class WorkflowEngine {
     )
     const engine = new ReviewEngine(this.skillLoader, this.promptAssembler)
     engine.setProvider(provider)
-    const settings = {
-      ...DEFAULT_PIPELINE_SETTINGS,
-      ...ctx.projectConfig?.pipelineSettings
-    }
     const callOptions = {
       projectConfig: ctx.projectConfig,
       signal: ctx.signal,
@@ -752,9 +752,9 @@ export class WorkflowEngine {
       required.push('art')
     if (required.length === 0) return
     let state: ProjectPipelineState | null = null
-    const threshold =
-      ctx.projectConfig?.pipelineSettings?.passScore ??
-      DEFAULT_PIPELINE_SETTINGS.passScore
+    const threshold = parsePipelineSettings(
+      ctx.projectConfig?.pipelineSettings
+    ).passScore
     for (const upstream of required) {
       let review: ReviewResult | null | undefined
       if (upstream === 'script_review' || upstream === 'story_review') {

@@ -15,16 +15,8 @@ export interface PipelineSettings {
   scriptWordCountMax: number // 每集剧本最多字数 (default: 2000)
 }
 
-export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
-  maxRetries: 3,
-  passScore: 7,
-  llmTimeoutSec: 90,
-  durationMin: 90,
-  durationMax: 120,
-  singlePromptMax: 10,
-  scriptWordCountMin: 1500,
-  scriptWordCountMax: 2000
-}
+// Compatibility export; defaults and validation live in the shared contract.
+export { DEFAULT_PIPELINE_SETTINGS } from './pipeline-settings'
 
 export type ProjectWorkflowVersion = 1 | 2
 export type ProjectEntryStage = 'novel' | 'story' | 'script'

@@ -18,7 +18,11 @@ import {
   getRegisteredProjectPlotBreakdownSummary,
   listProjectEpisodes
 } from './project-service'
-import { launchPipeline, runWorkflowAction } from './pipeline-service'
+import {
+  launchPipeline,
+  loadPipelineSettings,
+  runWorkflowAction
+} from './pipeline-service'
 import { recoverBatchCommit } from './batch-queue-recovery'
 import { IPC } from '@shared/ipc-channels'
 import { PipelineStateMachine } from '../engine/state-machine'
@@ -90,7 +94,7 @@ export function getBatchQueueRuntime(): BatchQueue {
             projectName: project.name,
             visualStyle: project.visualStyle,
             targetMedium: project.targetMedium,
-            maxRetries: project.config.pipelineSettings?.maxRetries,
+            maxRetries: loadPipelineSettings(trusted).maxRetries,
             allEpisodes: listProjectEpisodes(id).map(
               (episode) => episode.episodeNumber
             )

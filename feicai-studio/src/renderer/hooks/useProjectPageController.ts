@@ -16,9 +16,13 @@ import {
 } from '@renderer/services/file-cache'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useToastStore } from '@renderer/stores/toastStore'
-import type { PipelineSettings, ProjectConfig } from '@shared/types'
+import type { ProjectConfig } from '@shared/types'
+import {
+  pipelineSettingsDraft,
+  validatePipelineSettingsDraft,
+  type PipelineSettingsDraft
+} from '@renderer/components/project/pipeline-settings-draft'
 import type { PlotBreakdownSummary } from '@shared/ipc-contracts'
-import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
 import { VISUAL_STYLES, TARGET_MEDIUMS } from '@shared/constants'
 import type { DetectedProjectInfo } from '@shared/project-detection'
 import {
@@ -48,9 +52,9 @@ export function useProjectPageController() {
   const [importing, setImporting] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card')
-  const [ps, setPs] = useState<PipelineSettings>({
-    ...DEFAULT_PIPELINE_SETTINGS
-  })
+  const [ps, setPs] = useState<PipelineSettingsDraft>(() =>
+    pipelineSettingsDraft()
+  )
   const [projectDraft, setProjectDraft] = useState({
     name: '',
     visualStyle: '',
@@ -100,15 +104,11 @@ export function useProjectPageController() {
         currentProject.config
       )
       try {
-        const raw = await readCachedTextFile(configPath)
-        if (!raw) {
-          throw new Error('missing project config')
-        }
-        const config = JSON.parse(raw)
-        setPs({
-          ...DEFAULT_PIPELINE_SETTINGS,
-          ...(config.pipelineSettings || {})
-        })
+        const raw = await readTextFile(configPath)
+        const config = raw !== null ? JSON.parse(raw) : currentProject.config
+        if (!config || typeof config !== 'object' || Array.isArray(config))
+          throw new Error('项目配置必须为对象')
+        setPs(pipelineSettingsDraft(config.pipelineSettings))
         setProjectDraft({
           name: config.projectName || currentProject.name,
           visualStyle: config.visualStyle || currentProject.visualStyle,
@@ -121,8 +121,10 @@ export function useProjectPageController() {
             Number(config.chaptersPerEpisode || 0) || 0
           )
         })
-      } catch {
-        setPs({ ...DEFAULT_PIPELINE_SETTINGS })
+      } catch (error) {
+        const message = getExceptionMessage(error, '读取项目配置失败')
+        setPs({ ...pipelineSettingsDraft(), configError: message })
+        addToast('error', message)
         setProjectDraft({
           name: currentProject.name,
           visualStyle: currentProject.visualStyle,
@@ -140,6 +142,15 @@ export function useProjectPageController() {
 
   const handleSaveSettings = async () => {
     if (!currentProject) return
+    const validation = validatePipelineSettingsDraft(ps)
+    if (!validation.settings) {
+      addToast(
+        'error',
+        validation.issues.map((issue) => issue.message).join('；')
+      )
+      return
+    }
+    const settings = validation.settings
     setPsSaving(true)
     try {
       let config: Record<string, unknown> = {}
@@ -148,17 +159,12 @@ export function useProjectPageController() {
         'projectConfig',
         currentProject.config
       )
-      try {
-        const raw = await readCachedTextFile(configPath)
-        if (!raw) {
-          throw new Error('missing project config')
-        }
-        config = JSON.parse(raw)
-      } catch {
-        // 文件不存在时创建新的配置
-      }
+      const raw = await readTextFile(configPath)
+      config = raw !== null ? JSON.parse(raw) : { ...currentProject.config }
+      if (!config || typeof config !== 'object' || Array.isArray(config))
+        throw new Error('项目配置必须为对象')
 
-      config.pipelineSettings = ps
+      config.pipelineSettings = settings
       config.projectName = projectDraft.name.trim() || currentProject.name
       config.visualStyle = projectDraft.visualStyle.trim()
       config.targetMedium = projectDraft.targetMedium.trim()
@@ -170,23 +176,6 @@ export function useProjectPageController() {
         0,
         Number(projectDraft.chaptersPerEpisode) || 0
       )
-      invalidateCachedTextFile(configPath)
-      await writeTextFile(configPath, JSON.stringify(config, null, 2))
-      invalidateCachedTextFile(configPath)
-      await syncPlotBreakdownPlanningIfPresent(
-        currentProject.projectPath,
-        {
-          ...currentProject.config,
-          ...config,
-          chaptersPerEpisode: config.chaptersPerEpisode as number
-        },
-        {
-          projectName: config.projectName as string,
-          projectType: config.targetMedium as string,
-          totalEpisodes: config.totalEpisodes as number,
-          chaptersPerEpisode: config.chaptersPerEpisode as number
-        }
-      )
       await useProjectStore.getState().updateProject(currentProject.id, {
         name: config.projectName as string,
         visualStyle: config.visualStyle as string,
@@ -196,11 +185,31 @@ export function useProjectPageController() {
           ...currentProject.config,
           ...config,
           chaptersPerEpisode: config.chaptersPerEpisode as number,
-          pipelineSettings: ps
+          pipelineSettings: settings
         }
       })
-      setPlotBreakdownSummary(await getPlotBreakdownSummary(currentProject.id))
-      addToast('success', '项目设置已保存')
+      invalidateCachedTextFile(configPath)
+      try {
+        await syncPlotBreakdownPlanningIfPresent(
+          currentProject.projectPath,
+          { ...currentProject.config, ...config, pipelineSettings: settings },
+          {
+            projectName: config.projectName as string,
+            projectType: config.targetMedium as string,
+            totalEpisodes: config.totalEpisodes as number,
+            chaptersPerEpisode: config.chaptersPerEpisode as number
+          }
+        )
+        setPlotBreakdownSummary(
+          await getPlotBreakdownSummary(currentProject.id)
+        )
+        addToast('success', '项目设置已保存')
+      } catch (error) {
+        addToast(
+          'error',
+          `配置已保存，剧情规划同步失败；可再次保存重试：${getExceptionMessage(error, '同步失败')}`
+        )
+      }
     } catch (error) {
       addToast('error', getExceptionMessage(error, '保存失败'))
     }
@@ -208,7 +217,7 @@ export function useProjectPageController() {
   }
 
   const handleResetSettings = () => {
-    setPs({ ...DEFAULT_PIPELINE_SETTINGS })
+    setPs(pipelineSettingsDraft())
     addToast('info', '已恢复默认值（需保存生效）')
   }
 

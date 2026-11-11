@@ -5,7 +5,7 @@ import type {
   PipelineSettings,
   PipelineState
 } from '@shared/types'
-import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
+import { parsePipelineSettings } from '@shared/pipeline-settings'
 import { resolveProjectArtifactPath } from '@shared/path-resolver'
 import { getDefaultLLMConfig } from '../db/llm-config-repository'
 import { resolveProjectConfig } from './project-service'
@@ -74,16 +74,22 @@ function buildProjectContext(params: {
   return context
 }
 
-function loadPipelineSettings(projectPath: string): PipelineSettings {
+export function loadPipelineSettings(projectPath: string): PipelineSettings {
   try {
     const raw = readFileSync(
       resolveProjectArtifactPath(projectPath, 'projectConfig'),
       'utf-8'
     )
     const config = JSON.parse(raw)
-    return { ...DEFAULT_PIPELINE_SETTINGS, ...(config.pipelineSettings || {}) }
-  } catch {
-    return { ...DEFAULT_PIPELINE_SETTINGS }
+    if (!config || typeof config !== 'object' || Array.isArray(config))
+      throw new Error('项目配置必须为对象')
+    return parsePipelineSettings(config.pipelineSettings)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return parsePipelineSettings()
+    throw new Error(
+      `读取流水线配置失败：${error instanceof Error ? error.message : String(error)}`
+    )
   }
 }
 
@@ -279,7 +285,7 @@ export function buildWorkflowStepParams(params: {
   return {
     projectPath: params.projectPath,
     episodeNum: params.episodeNum,
-    projectConfig,
+    projectConfig: { ...projectConfig, pipelineSettings },
     projectContext: buildProjectContext({
       projectName: params.projectName,
       visualStyle: params.visualStyle,

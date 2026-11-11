@@ -21,6 +21,33 @@ const skill: Skill = {
 }
 
 describe('prompt-assembler', () => {
+  it('rejects invalid prompt bounds and fills omitted limits from the shared contract', () => {
+    const assembler = new PromptAssembler()
+    const context = {
+      projectName: '项目',
+      visualStyle: '',
+      targetMedium: '',
+      episodeNumber: 1
+    }
+    expect(() =>
+      assembler.assemble(
+        skill,
+        '',
+        {},
+        { ...context, durationMin: 121 },
+        'script_generation'
+      )
+    ).toThrow('不能大于')
+    const prompt = assembler.assemble(
+      skill,
+      '',
+      {},
+      context,
+      'script_generation'
+    )
+    expect(prompt.user).toContain('1500-2000 字')
+  })
+
   it('assemble 会按既定顺序拼装 system 和 user 内容', () => {
     const assembler = new PromptAssembler()
 
