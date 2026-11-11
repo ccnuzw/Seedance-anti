@@ -28,31 +28,24 @@ function PromptCardList(props: PromptCardListProps) {
     <DevProfiler id="PromptCardList">
       <div className="prompt-cards">
         {prompts.map((prompt) => {
-          const isRefTable = prompt.index === 0
           return (
             <div
               key={prompt.index}
-              className={`card prompt-card ${isRefTable ? 'prompt-card-ref-table' : ''} ${selectedIndex === prompt.index ? 'selected' : ''}`}
+              className={`card prompt-card ${selectedIndex === prompt.index ? 'selected' : ''}`}
               onClick={() => onSelect(prompt.index)}
             >
               <div className="prompt-card-header">
-                <span
-                  className={`prompt-index ${isRefTable ? 'prompt-index-ref' : ''}`}
-                >
-                  {isRefTable
-                    ? '📋 P00'
-                    : `P${String(prompt.index).padStart(2, '0')}`}
+                <span className="prompt-index">
+                  {`P${String(prompt.index).padStart(2, '0')}`}
                 </span>
                 <span className="prompt-title text-secondary">
                   {prompt.title}
                 </span>
-                {!isRefTable && (
-                  <span
-                    className={`prompt-duration badge ${prompt.duration > 10 ? 'badge-warning' : 'badge-info'}`}
-                  >
-                    {prompt.duration}s
-                  </span>
-                )}
+                <span
+                  className={`prompt-duration badge ${prompt.duration > 10 ? 'badge-warning' : 'badge-info'}`}
+                >
+                  {prompt.duration}s
+                </span>
               </div>
               <div className="prompt-card-body">
                 <p className="prompt-content">{prompt.content}</p>

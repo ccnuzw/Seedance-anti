@@ -20,6 +20,12 @@ export function parsePromptsFromMarkdown(raw: string): ParsedPrompt[] {
   sections.forEach((section, idx) => {
     const lines = section.trim().split('\n')
     const title = lines[0]?.trim() || `提示词 ${idx + 1}`
+    // Metadata may occur anywhere. Keep the original section index for selection.
+    const plainTitle = title
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[*`]/g, '')
+      .trim()
+    if (/^(?:素材对应表|参考图表)\s*[：:]?$/.test(plainTitle)) return
 
     const duration = parseSeedanceDuration(title, lines.slice(1).join('\n'))
 

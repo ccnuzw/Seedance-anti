@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useArtifactDocument } from '@renderer/hooks/useArtifactDocument'
@@ -181,11 +181,7 @@ export default function PromptPage() {
     }
   }
 
-  const actualPrompts = useMemo(
-    () => prompts.filter((_, index) => index > 0),
-    [prompts]
-  )
-  const totalDuration = actualPrompts.reduce((sum, p) => sum + p.duration, 0)
+  const totalDuration = prompts.reduce((sum, p) => sum + p.duration, 0)
   const durationOk = totalDuration >= 90 && totalDuration <= 120
 
   return (
@@ -271,7 +267,7 @@ export default function PromptPage() {
             />
             <PromptHeader
               currentEp={currentEp}
-              promptCount={actualPrompts.length}
+              promptCount={prompts.length}
               totalDuration={totalDuration}
               durationOk={durationOk}
               isEditing={isEditing}

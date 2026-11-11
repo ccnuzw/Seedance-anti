@@ -8,6 +8,7 @@ import {
   resolveProjectArtifactPath
 } from '@shared/path-resolver'
 import type { EpisodeArtifactId } from '@shared/artifact-registry'
+import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
 import type { ProjectConfig, ReviewResult, ReviewStage } from '@shared/types'
 
 let projectPath: string
@@ -78,6 +79,42 @@ beforeEach(() => {
 afterEach(() => rmSync(projectPath, { recursive: true, force: true }))
 
 describe('artifact provenance', () => {
+  it('缺省、空设置、显式默认值和不同字段顺序具有相同指纹，真实设置变化失效', () => {
+    const review = boundReview('script_review')
+    for (const pipelineSettings of [
+      undefined,
+      {},
+      { ...DEFAULT_PIPELINE_SETTINGS },
+      Object.fromEntries(Object.entries(DEFAULT_PIPELINE_SETTINGS).reverse())
+    ]) {
+      const effectiveConfig = { ...config, pipelineSettings }
+      expect(
+        captureReviewProvenance(
+          projectPath,
+          'script_review',
+          1,
+          effectiveConfig
+        )
+      ).toEqual({
+        artifactHash: review.artifactHash,
+        inputHashes: review.inputHashes
+      })
+      expect(isReviewCurrent(review, projectPath, 1, effectiveConfig)).toBe(
+        true
+      )
+    }
+    for (const pipelineSettings of [
+      { passScore: 8 },
+      { durationMax: 130 },
+      { scriptWordCountMin: 1000 }
+    ]) {
+      // The score still exceeds 8; failure must come from changed provenance.
+      expect(
+        isReviewCurrent(review, projectPath, 1, { ...config, pipelineSettings })
+      ).toBe(false)
+    }
+  })
+
   it('依赖schema升级后旧凭据即使正文未变也保守失效', () => {
     const review = boundReview('art')
     delete review.inputHashes!.dependencySchema

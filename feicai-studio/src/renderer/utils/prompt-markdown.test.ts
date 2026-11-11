@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { storyboard } from '@shared/fixtures/controlled-production'
 import { describe, expect, it } from 'vitest'
 import { parsePromptsFromMarkdown } from './prompt-markdown'
 
@@ -20,49 +20,35 @@ describe('prompt-markdown', () => {
 
     const prompts = parsePromptsFromMarkdown(raw)
 
-    expect(prompts).toHaveLength(3)
-    expect(prompts[1].duration).toBe(8)
-    expect(prompts[1].references).toEqual([
+    expect(prompts).toHaveLength(2)
+    expect(prompts.map((prompt) => prompt.index)).toEqual([1, 2])
+    expect(prompts[0].duration).toBe(8)
+    expect(prompts[0].references).toEqual([
       { referenceTag: '@图片1', assetType: 'character' },
       { referenceTag: '@场景图2', assetType: 'scene' }
     ])
-    expect(prompts[2].duration).toBe(5)
+    expect(prompts[1].duration).toBe(5)
   })
 
   it('真实模板的卡片保持索引协议，场景类型、去重和标题时长与主进程一致', () => {
-    const template = readFileSync(
-      new URL(
-        '../../../resources/builtin-skills/seedance-storyboard-skill/templates/seedance-prompts-template.md',
-        import.meta.url
-      ),
-      'utf8'
-    )
-    const raw = template
-      .match(/```markdown\n([\s\S]*?)\n```/)![1]
-      .replace('[根据01讲戏本填入]', '10')
-      .replace('[X]', '6.5')
-      .replace(
-        /\[完整的[\s\S]*?视频。\]/,
-        '以@图片1为主角，场景参考@图片3。\n0-3秒：开场@图片1。\n3-6秒：@图片3。\n6-10秒：收尾，@音频1。'
-      )
-      .replace('[...]', '参考@图片2与@图片4，@视频1。')
-    const prompts = parsePromptsFromMarkdown(raw)
+    const prompts = parsePromptsFromMarkdown(storyboard)
+    expect(prompts).toHaveLength(2)
+    expect(prompts.reduce((sum, prompt) => sum + prompt.duration, 0)).toBe(16.5)
     expect(prompts.map(({ index, duration }) => ({ index, duration }))).toEqual(
       [
-        { index: 0, duration: 5 },
         { index: 1, duration: 10 },
         { index: 2, duration: 6.5 }
       ]
     )
-    expect(prompts[1].references).toEqual([
+    expect(prompts[0].references).toEqual([
       { referenceTag: '@图片1', assetType: 'character' },
       { referenceTag: '@图片3', assetType: 'scene' }
     ])
-    expect(prompts[2].references).toEqual([
+    expect(prompts[1].references).toEqual([
       { referenceTag: '@图片2', assetType: 'character' },
       { referenceTag: '@图片4', assetType: 'scene' }
     ])
-    expect(prompts[1].content).toContain('6-10秒：收尾，@音频1。')
+    expect(prompts[0].content).toContain('6-10秒：定格')
   })
 
   it('不从时间轴猜测时长，标题无效时回退正文时长', () => {
@@ -79,6 +65,40 @@ describe('prompt-markdown', () => {
       { referenceTag: '@场景图2', assetType: 'scene' }
     ])
   })
+
+  it.each(['素材对应表', '**参考图表**：'])(
+    '元数据 %s 位于开头、中间、末尾或独立存在均不生成卡片',
+    (heading) => {
+      const table = `## ${heading}\n| 引用编号 | 素材类型 | 对应素材 |\n| --- | --- | --- |\n| @图片3 | 场景参考 | 院子 |\n`
+      const first = '## 开场镜头\n时长：10秒\n场景参考@图片3。\n'
+      const last = '## 收尾镜头\n时长：6.5秒\n场景参考@图片3。\n'
+      for (const [raw, indices] of [
+        [table + first + last, [1, 2]],
+        [first + table + last, [0, 2]],
+        [first + last + table, [0, 1]],
+        [first + last, [0, 1]]
+      ] as const) {
+        const prompts = parsePromptsFromMarkdown(raw)
+        expect(prompts.map((prompt) => prompt.index)).toEqual(indices)
+        expect(prompts.map((prompt) => prompt.title)).toEqual([
+          '开场镜头',
+          '收尾镜头'
+        ])
+        expect(prompts.reduce((sum, prompt) => sum + prompt.duration, 0)).toBe(
+          16.5
+        )
+        if (raw.includes(table))
+          expect(prompts[0].references).toEqual([
+            { referenceTag: '@图片3', assetType: 'scene' }
+          ])
+      }
+      const onlyTable = parsePromptsFromMarkdown(table)
+      expect(onlyTable).toEqual([])
+      expect(onlyTable.reduce((sum, prompt) => sum + prompt.duration, 0)).toBe(
+        0
+      )
+    }
+  )
 
   it('会跳过没有正文内容的分段', () => {
     const raw = `## 空段
