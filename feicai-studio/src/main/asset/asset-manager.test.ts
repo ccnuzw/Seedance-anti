@@ -60,6 +60,53 @@ describe('AssetManager真实文件边界', () => {
     expect(existsSync(join(root, 'script'))).toBe(false)
   })
 
+  it('读取自定义输出目录的真实提示词，素材引用与统计遵从模板协议', async () => {
+    const root = temporary()
+    const output = join(root, 'custom/outputs/ep02')
+    mkdirSync(output, { recursive: true })
+    writeFileSync(
+      join(output, '02-seedance-prompts.md'),
+      `## 素材对应表
+| 引用编号 | 素材类型 | 对应素材 |
+| --- | --- | --- |
+| @图片1 | 人物参考 | 林薇 |
+| @图片3 | 场景参考 | 天台 |
+| @音频1 | 背景音乐 | 城市环境音 |
+
+## P01 重逢 【建议时长：10s】
+0-3秒：以@图片1为主角，场景参考@图片3。
+3-6秒：@图片1走近栏杆。
+6-10秒：定格，配乐参考@音频1。
+
+## P02 离开
+时长：6.5秒
+参考@场景图2。`
+    )
+    const manager = new AssetManager(root, {
+      directories: { outputsDir: 'custom/outputs' }
+    })
+    const prompts = await manager.loadPrompts(2)
+    expect(prompts[0].references).toEqual([
+      {
+        promptIndex: 1,
+        referenceTag: '@图片1',
+        assetType: 'character',
+        assetName: '林薇'
+      },
+      {
+        promptIndex: 1,
+        referenceTag: '@图片3',
+        assetType: 'scene',
+        assetName: '天台'
+      }
+    ])
+    expect(await manager.getPromptStats(2)).toEqual({
+      totalCount: 2,
+      totalDuration: 16.5,
+      avgDuration: 8.3
+    })
+  })
+
   it('拒绝资产文件的有效/悬空链接及script父目录链接，不伪装成空资产', async () => {
     const root = temporary()
     const outside = temporary()
