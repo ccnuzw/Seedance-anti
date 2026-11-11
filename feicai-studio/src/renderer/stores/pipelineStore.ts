@@ -21,7 +21,7 @@ import type {
   ReviewResult
 } from '@shared/types'
 
-interface StageTiming {
+export interface StageTiming {
   stage: AutomatedPipelineStage
   startedAt: number
   endedAt?: number
@@ -109,7 +109,9 @@ function _flushPendingStream(set: Function): void {
   const chunk = _pendingStreamChunks.join('')
   _pendingStreamChunks = []
   _streamFlushTimer = null
-  set((s: PipelineStore) => ({ streamBuffer: s.streamBuffer + chunk }))
+  set((s: PipelineStore) => ({
+    streamBuffer: (s.streamBuffer + chunk).slice(-200000)
+  }))
 }
 
 function _registerListeners(set: Function, get: Function): () => void {
@@ -124,11 +126,12 @@ function _registerListeners(set: Function, get: Function): () => void {
       }
       const isTerminal = [
         'idle',
-        'paused',
         'error',
-        'episode_complete'
+        'episode_complete',
+        'director_done',
+        'art_done'
       ].includes(newState)
-      const isRunning = !isTerminal
+      const isRunning = context.running ?? !isTerminal
       const now = Date.now()
       const store = get()
 
@@ -138,6 +141,16 @@ function _registerListeners(set: Function, get: Function): () => void {
         (newState as string).endsWith('_designing') ||
         (newState as string).endsWith('_writing')
       const resetStream = newState === 'script_done' || isExecuting
+      if (
+        resetStream ||
+        (context.runId && context.runId !== store.context?.runId)
+      ) {
+        _pendingStreamChunks = []
+        if (_streamFlushTimer) {
+          clearTimeout(_streamFlushTimer)
+          _streamFlushTimer = null
+        }
+      }
 
       // 检测阶段变化
       const newStage = detectStage(newState)
@@ -205,6 +218,8 @@ function _registerListeners(set: Function, get: Function): () => void {
 
   unsubscribers.push(
     pipelineEvents.onLog((entry: unknown) => {
+      const runId = (entry as LogEntry & { runId?: string }).runId
+      if (runId && get().context?.runId && runId !== get().context.runId) return
       _pendingLogs.push(entry as LogEntry)
       if (_logFlushTimer) return
       _logFlushTimer = setTimeout(() => _flushPendingLogs(set), 80)
@@ -214,7 +229,8 @@ function _registerListeners(set: Function, get: Function): () => void {
   // 流式输出
   unsubscribers.push(
     pipelineEvents.onStream((data: unknown) => {
-      const { chunk } = data as { chunk: string }
+      const { chunk, runId } = data as { chunk: string; runId?: string }
+      if (runId && get().context?.runId && runId !== get().context.runId) return
       _pendingStreamChunks.push(chunk)
       if (_streamFlushTimer) return
       _streamFlushTimer = setTimeout(() => _flushPendingStream(set), 80)
@@ -224,15 +240,18 @@ function _registerListeners(set: Function, get: Function): () => void {
   // 审核结果
   unsubscribers.push(
     pipelineEvents.onReviewResult((data: unknown) => {
-      const { result } = data as { result: ReviewResult }
+      const { result, runId } = data as { result: ReviewResult; runId?: string }
+      if (runId && get().context?.runId && runId !== get().context.runId) return
       set({ currentReview: result })
     })
   )
 
   // 错误
   unsubscribers.push(
-    pipelineEvents.onError(() => {
-      set({ isRunning: false, state: 'error' })
+    pipelineEvents.onError((data: unknown) => {
+      const runId = (data as { runId?: string } | null)?.runId
+      if (runId && get().context?.runId && runId !== get().context.runId) return
+      set({ state: 'error' })
     })
   )
 
@@ -272,11 +291,15 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       stageTimings: [],
       currentStageName: null
     })
-    const result = await startPipeline(params)
-    if (result.error) {
+    try {
+      const result = await startPipeline(params)
+      if (result.error)
+        set({ isRunning: false, state: 'idle', pipelineStartedAt: null })
+      return result
+    } catch (error) {
       set({ isRunning: false, state: 'idle', pipelineStartedAt: null })
+      throw error
     }
-    return result
   },
 
   pausePipeline: async () => {
@@ -344,14 +367,15 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       const ctx = await getPipelineState()
       const isTerminal = [
         'idle',
-        'paused',
         'error',
-        'episode_complete'
+        'episode_complete',
+        'director_done',
+        'art_done'
       ].includes(ctx.state)
       set({
         state: ctx.state,
         context: ctx,
-        isRunning: !isTerminal
+        isRunning: ctx.running ?? !isTerminal
       })
     } catch {
       // 忽略

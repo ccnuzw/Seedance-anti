@@ -56,6 +56,31 @@ describe('workflow', () => {
     ).toBe('idle')
   })
 
+  it('仅有提示词或只有审核标记不算完成，须两者同时存在', () => {
+    const flags = {
+      hasStoryBeat: true,
+      hasScript: true,
+      hasScriptReview: true,
+      hasDirectorAnalysis: true,
+      hasCharacterDesign: true,
+      hasArtDesign: true,
+      hasStoryboard: false,
+      hasSeedancePrompts: true,
+      hasStoryboardReview: false
+    }
+    expect(deriveEpisodeStatus(flags)).toBe('storyboard')
+    expect(deriveEpisodeStatus({ ...flags, hasStoryboardReview: true })).toBe(
+      'complete'
+    )
+    expect(
+      deriveEpisodeStatus({
+        ...flags,
+        hasSeedancePrompts: false,
+        hasStoryboardReview: true
+      })
+    ).not.toBe('complete')
+  })
+
   it('归一化项目配置时补默认目录与入口阶段', () => {
     const config = normalizeProjectConfig({
       projectName: 'Test',

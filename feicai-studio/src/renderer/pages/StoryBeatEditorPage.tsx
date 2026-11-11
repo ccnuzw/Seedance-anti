@@ -70,7 +70,7 @@ export default function StoryBeatEditorPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const urlEp = parseInt(searchParams.get('ep') || '1')
-  const [currentEp, setCurrentEp] = useEpisodeParam(urlEp)
+  const [currentEp] = useEpisodeParam(urlEp)
   const { running: runningAction, run: runAsyncAction } = useAsyncAction()
 
   const config = normalizeProjectConfig(currentProject?.config)
@@ -93,7 +93,9 @@ export default function StoryBeatEditorPage() {
     saved,
     loading,
     reload: loadStoryBeat,
-    save
+    save,
+    documentSession,
+    overwriteConflict
   } = useEpisodeTextFile({
     enabled: !!currentProject,
     episodeNum: currentEp,
@@ -123,7 +125,8 @@ export default function StoryBeatEditorPage() {
   } = useDocumentEditorActions({
     setContent,
     save,
-    addToast
+    addToast,
+    documentKey: `${currentProject?.id}:${currentEp}`
   })
 
   const handleRunScriptGeneration = async () => {
@@ -158,6 +161,7 @@ export default function StoryBeatEditorPage() {
 
   const handleRegenerateStoryWithReviewFeedback = async () => {
     if (!currentProject || !latestStoryReview) return
+    if (!(await ensureSaved(saved))) return
 
     await runAsyncAction(async () => {
       await executeRegenerateStoryAndReviewAction(
@@ -178,15 +182,6 @@ export default function StoryBeatEditorPage() {
   }
 
   const handleEpSwitch = (ep: number) => {
-    if (!saved) {
-      if (
-        !confirm(
-          `EP${String(currentEp).padStart(2, '0')} 有未保存的修改，确定切换？`
-        )
-      )
-        return
-    }
-    setCurrentEp(ep)
     if (currentProject) {
       navigate(`/project/${currentProject.id}/story?ep=${ep}`)
     }
@@ -239,6 +234,10 @@ export default function StoryBeatEditorPage() {
       saved={saved}
       content={content}
       onContentChange={setContent}
+      documentSession={documentSession}
+      onOverwriteConflict={overwriteConflict}
+      onReload={loadStoryBeat}
+      onSave={handleSave}
       workflow={{
         title: isNovelEntry ? '确认剧情库存批次' : '确认剧情拆解',
         description:

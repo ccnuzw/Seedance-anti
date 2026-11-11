@@ -8,6 +8,11 @@ import type {
   LLMConfig,
   LLMProviderType
 } from '@shared/types'
+import {
+  LLMRequestError,
+  normalizeBaseEndpoint,
+  safeLLMError
+} from './endpoint-security'
 
 /**
  * LLM Provider 统一接口
@@ -43,6 +48,9 @@ export abstract class BaseLLMProvider implements ILLMProvider {
   protected config: LLMConfig
 
   constructor(config: LLMConfig) {
+    normalizeBaseEndpoint(config.baseUrl)
+    if (!config.apiKey.trim())
+      throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
     this.name = config.name
     this.providerType = config.provider
     this.config = config
@@ -56,11 +64,31 @@ export abstract class BaseLLMProvider implements ILLMProvider {
     prompt: AssembledPrompt,
     options?: GenerateOptions
   ): AsyncGenerator<string, void, unknown>
-  abstract testConnection(): Promise<{
+  async testConnection(): Promise<{
     success: boolean
     message: string
     model?: string
-  }>
+  }> {
+    if (this.config.category !== 'llm' && this.config.category !== undefined) {
+      return {
+        success: false,
+        message: '此配置尚未提供图片或视频生成生产链及连接测试'
+      }
+    }
+    try {
+      await this.generate(
+        { system: 'Reply with OK', user: 'Reply with OK' },
+        { maxTokens: 32 }
+      )
+      return {
+        success: true,
+        message: '真实文本生成测试成功（服务商可能已计费）',
+        model: this.config.model
+      }
+    } catch (error) {
+      return { success: false, message: safeLLMError(error) }
+    }
+  }
 
   protected getMaxTokens(options?: GenerateOptions): number {
     return options?.maxTokens ?? this.config.maxTokens ?? 8192

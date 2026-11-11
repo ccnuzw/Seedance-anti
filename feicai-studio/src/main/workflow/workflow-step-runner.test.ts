@@ -54,7 +54,13 @@ describe('workflow-step-runner', async () => {
           episodeNumber: 1
         }
       },
-      { reviewFeedback: undefined }
+      {
+        reviewFeedback: undefined,
+        signal: undefined,
+        timeoutMs: undefined,
+        idleTimeoutMs: undefined,
+        firstChunkTimeoutMs: undefined
+      }
     )
     expect(result).toEqual({
       stage: 'story',
@@ -114,7 +120,13 @@ describe('workflow-step-runner', async () => {
       expect.objectContaining({
         reviewFeedback: '冲突不足，需要加强钩子'
       }),
-      { reviewFeedback: '冲突不足，需要加强钩子' }
+      {
+        reviewFeedback: '冲突不足，需要加强钩子',
+        signal: undefined,
+        timeoutMs: undefined,
+        idleTimeoutMs: undefined,
+        firstChunkTimeoutMs: undefined
+      }
     )
   })
 

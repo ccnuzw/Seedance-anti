@@ -197,7 +197,9 @@ export default function ProjectPage() {
             <div className="status-dashboard-label">剧本消耗进度</div>
             <strong>{waterline?.scriptProgressPct ?? 0}%</strong>
             <div className="status-progress-bar">
-              <span style={{ width: `${waterline?.scriptProgressPct ?? 0}%` }} />
+              <span
+                style={{ width: `${waterline?.scriptProgressPct ?? 0}%` }}
+              />
             </div>
           </div>
           <div className="status-dashboard-item">

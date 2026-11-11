@@ -1,15 +1,14 @@
 import type { ReactNode } from 'react'
+import { useSyncExternalStore } from 'react'
+import type { DocumentSession } from '@renderer/stores/documentDraftStore'
+import DocumentRecoveryNotice from './DocumentRecoveryNotice'
 import type { Episode } from '@shared/types'
 import EpisodeNav from '@renderer/components/layout/EpisodeNav'
 import DocumentEditorShell from './DocumentEditorShell'
 import DocumentEditorToolbar from './DocumentEditorToolbar'
 
 export type DocumentWorkflowStepState =
-  | 'done'
-  | 'active'
-  | 'ready'
-  | 'blocked'
-  | 'warning'
+  'done' | 'active' | 'ready' | 'blocked' | 'warning'
 
 export interface DocumentWorkflowStep {
   id: string
@@ -42,6 +41,10 @@ interface DocumentWorkflowPageProps {
   toolbarActions: ReactNode
   content: string
   onContentChange: (value: string) => void
+  documentSession: DocumentSession
+  onOverwriteConflict: () => Promise<boolean>
+  onReload: () => Promise<void>
+  onSave: () => Promise<unknown>
   episodes?: Episode[]
   currentEp?: number
   onEpisodeSelect?: (ep: number) => void
@@ -72,6 +75,10 @@ export default function DocumentWorkflowPage(props: DocumentWorkflowPageProps) {
   } = props
 
   const showEpisodeNav = episodes && currentEp !== undefined && onEpisodeSelect
+  const documentState = useSyncExternalStore(
+    props.documentSession.subscribe,
+    props.documentSession.getSnapshot
+  )
   const hasSidePanel = !!sidePanel
   const toButtonClassName = (action: DocumentWorkflowAction) =>
     action.variant === 'primary'
@@ -109,7 +116,23 @@ export default function DocumentWorkflowPage(props: DocumentWorkflowPageProps) {
             />
           </div>
 
-          <DocumentEditorShell content={content} onChange={onContentChange} />
+          <DocumentRecoveryNotice
+            session={props.documentSession}
+            onOverwriteConflict={props.onOverwriteConflict}
+            onRetry={props.onReload}
+          />
+          <DocumentEditorShell
+            content={content}
+            onChange={onContentChange}
+            label={`${title} Markdown 编辑器`}
+            readOnly={
+              documentState.loading ||
+              !documentState.loaded ||
+              !!documentState.recovery ||
+              documentState.draftReadError
+            }
+            onSave={props.onSave}
+          />
         </main>
 
         {(workflow || reviewPanel) && (

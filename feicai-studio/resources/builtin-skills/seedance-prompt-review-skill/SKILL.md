@@ -1,6 +1,9 @@
 ---
 name: seedance-prompt-review-skill
 description: Seedance 提示词审核技能。用于审核阶段三分镜师产出的 Seedance 2.0 动态提示词，通过逐条比对、脑内预演和评分制确保规范性、运镜合理性、叙事连贯性。
+dependencies:
+  - ../seedance-storyboard-skill/seedance-prompt-methodology.md
+  - ../seedance-storyboard-skill/templates/seedance-prompts-template.md
 ---
 
 # Seedance 2.0 提示词审核技能
@@ -80,6 +83,10 @@ outputs/<集数>/02-seedance-prompts.md
         □ 光影连续：相邻场景之间的光影/色调过渡是否合理？是否与导演设定的光影变化一致？
 
 [输出规范]
+最终仅输出一个 JSON 对象：
+{"result":"PASS或FAIL","score":0,"feedback":"完整评分表、逐项比对与整体连贯性评估","issues":[{"severity":"critical或major或minor","description":"具体问题","location":"位置","suggestion":"修改方向"}]}
+score 为 0..10 的有限数值，使用提示词平均分；issues 无问题时为空数组。
+下方 Markdown 表格及评价仅作为 feedback 字符串内的内容依据，不在 JSON 外输出另一份结论。
 
     评分表格式：
         | 提示词 | 忠实度 | 画面还原 | 动作可执行 | 镜头可实现 | Seedance友好 | 音频设计 | 情绪准确 | 均分 | 问题摘要 |

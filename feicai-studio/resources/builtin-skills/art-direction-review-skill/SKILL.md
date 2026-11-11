@@ -1,6 +1,10 @@
 ---
 name: art-direction-review-skill
 description: 服化道审核技能。用于审核阶段二服化道设计产出（人物设定提示词、场景环境提示词），通过逐项比对、脑内预演和评分制确保造型准确、风格一致、提示词可执行。
+dependencies:
+  - ../art-design-skill/gemini-image-prompt-guide.md
+  - ../art-design-skill/examples/character-prompt-examples.md
+  - ../art-design-skill/examples/scene-prompt-examples.md
 ---
 
 # 服化道设计审核技能
@@ -87,6 +91,10 @@ assets/character-prompts.md 和 assets/scene-prompts.md 中本集新增内容
         □ 新设计的角色/场景风格是否与已有素材协调？
 
 [输出规范]
+最终仅输出一个 JSON 对象：
+{"result":"PASS或FAIL","score":0,"feedback":"完整评分表、脑内预演与整体评价","issues":[{"severity":"critical或major或minor","description":"具体问题","location":"位置","suggestion":"修改方向"}]}
+score 为 0..10 的有限数值，使用总平均分；issues 无问题时为空数组。
+下方 Markdown 表格及评价仅作为 feedback 字符串内的内容依据，不在 JSON 外输出另一份结论。
 
     评分表格式：
         **人物提示词评分**：

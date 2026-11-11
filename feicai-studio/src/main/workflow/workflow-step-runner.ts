@@ -17,6 +17,13 @@ export interface WorkflowStepParams {
   projectContext: ProjectContext
   projectConfig?: Partial<ProjectConfig> | null
   reviewFeedback?: string
+  signal?: AbortSignal
+  batchNumber?: number
+  operationId?: string
+  timeoutMs?: number
+  idleTimeoutMs?: number
+  firstChunkTimeoutMs?: number
+  waitUntilResumed?: () => Promise<void>
 }
 
 export interface WorkflowStepRunResult {
@@ -122,7 +129,11 @@ export class WorkflowStepRunner {
   ): Promise<WorkflowStepRunResult> {
     try {
       const result = await this.engine.generateStage(stage, params, {
-        reviewFeedback: params.reviewFeedback
+        reviewFeedback: params.reviewFeedback,
+        signal: params.signal,
+        timeoutMs: params.timeoutMs,
+        idleTimeoutMs: params.idleTimeoutMs,
+        firstChunkTimeoutMs: params.firstChunkTimeoutMs
       })
       return {
         stage,

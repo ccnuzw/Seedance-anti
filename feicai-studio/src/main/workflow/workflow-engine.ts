@@ -1,10 +1,10 @@
-import { mkdir, readFile, writeFile } from 'fs/promises'
-import { dirname } from 'path'
+import { readFile } from 'fs/promises'
 import { listSourceChapters } from '../project/novel-importer'
 import {
   appendGeneratedStoryToProjectPlotBreakdown,
   getProjectPlotBreakdownMarkdownForEpisode,
-  markProjectPlotBreakdownEpisodeStatus
+  markProjectPlotBreakdownEpisodeStatus,
+  summarizeProjectPlotBreakdown
 } from '../project/plot-breakdown-store'
 import { SkillLoader } from '../engine/skill-loader'
 import {
@@ -13,20 +13,27 @@ import {
   type UpstreamInputs
 } from '../engine/prompt-assembler'
 import { ReviewEngine } from '../engine/review-engine'
+import {
+  captureReviewProvenance,
+  isReviewCurrent
+} from '../engine/artifact-provenance'
 import type { ILLMProvider } from '../llm/types'
 import {
   DEFAULT_PIPELINE_SETTINGS,
   type AutomatedPipelineStage,
   type ReviewResult,
   type ReviewStage,
-  type ProjectConfig
+  type ProjectConfig,
+  type ProjectPipelineState
 } from '@shared/types'
 import { ArtOutputMerger } from '../engine/art-output-merger'
-import { parseAssetMarkdown, serializeAssets } from '../asset/markdown-parser'
-import { formatReviewMarkdown } from '@shared/review-artifacts'
 import {
-  extractPlotBreakdownEntries,
-  formatPlotBreakdownEntriesMarkdown
+  formatReviewMarkdown,
+  parseReviewMarkdown
+} from '@shared/review-artifacts'
+import {
+  formatPlotBreakdownEntriesMarkdown,
+  validateGeneratedPlotBreakdown
 } from '@shared/plot-breakdown'
 import { validateScriptHardRules } from '@shared/script-quality'
 import {
@@ -36,12 +43,14 @@ import {
   resolveProjectArtifactPath
 } from '@shared/path-resolver'
 import { ROLE_DECLARATIONS, STAGE_SKILL_MAP } from '@shared/constants'
+import { atomicWriteFile, readJsonWithRecovery } from '../io/atomic-file'
+import {
+  assertEpisodeNumber,
+  assertPathWithinProject
+} from '../security/access-control'
 
 export type WorkflowGenerateStage =
-  | AutomatedPipelineStage
-  | 'story'
-  | 'script'
-  | 'character'
+  AutomatedPipelineStage | 'story' | 'script' | 'character'
 export type WorkflowEngineReviewStage = ReviewStage
 
 export interface WorkflowEngineContext {
@@ -49,11 +58,21 @@ export interface WorkflowEngineContext {
   episodeNum: number
   projectContext: ProjectContext
   projectConfig?: Partial<ProjectConfig> | null
+  signal?: AbortSignal
+  batchNumber?: number
+  timeoutMs?: number
+  idleTimeoutMs?: number
+  firstChunkTimeoutMs?: number
+  waitUntilResumed?: () => Promise<void>
+  operationId?: string
 }
 
 export interface WorkflowGenerateOptions {
   reviewFeedback?: string
+  signal?: AbortSignal
   timeoutMs?: number
+  idleTimeoutMs?: number
+  firstChunkTimeoutMs?: number
   onChunk?: (chunk: string, totalLength: number) => void
 }
 
@@ -61,10 +80,7 @@ export interface WorkflowGenerateResult {
   stage: WorkflowGenerateStage
   outputPath: string
   content: string
-  promptMetrics: {
-    systemChars: number
-    userChars: number
-  }
+  promptMetrics: { systemChars: number; userChars: number }
 }
 
 export interface WorkflowReviewResult {
@@ -73,6 +89,11 @@ export interface WorkflowReviewResult {
   outputPath?: string
 }
 
+type ReviewContext = Omit<WorkflowEngineContext, 'projectContext'> & {
+  scriptPath?: string
+}
+const STORY_BREAKDOWN_CHAPTERS_PER_BATCH = 6
+const STORY_BATCH_MARKER = /<!--\s*feicai-story-batch:(\d+)\s*-->/u
 const GENERATION_SKILL_MAP: Record<WorkflowGenerateStage, string> = {
   story: 'story-breakdown-skill',
   script: 'script-generation-skill',
@@ -81,19 +102,17 @@ const GENERATION_SKILL_MAP: Record<WorkflowGenerateStage, string> = {
   art: STAGE_SKILL_MAP.art,
   storyboard: STAGE_SKILL_MAP.storyboard
 }
-
 const GENERATION_ROLE_MAP: Record<WorkflowGenerateStage, string> = {
-  story: `🧩 **切换到剧情策划角色**
-我现在是一名短剧剧情策划。我负责把上游小说或故事设定，拆成适合单集剧本生成的剧情 beat 文档。我的输出必须强调冲突、转折、节奏、钩子和短剧化改编。`,
-  script: `📖 **切换到编剧角色**
-我现在是一名短剧编剧。我负责把单集剧情拆解，转化为可直接进入导演分析的完整剧本。我的输出必须包含明确场景、动作、对白、情绪推进和结尾钩子。`,
-  character: `🎭 **切换到角色设计师角色**
-我现在是一名专业的影视角色设计师。我的核心任务是把剧本与导演讲戏中的角色，沉淀为可复用的角色视觉资产。我的输出必须直接可进入资产库，强调外观识别点、服装层次、材质、妆发、年龄感与镜头识别度。`,
+  story:
+    '我是一名短剧剧情策划，负责将小说拆为强调冲突、转折、节奏和钩子的单集剧情点。',
+  script:
+    '我是一名短剧编剧，负责将本集剧情点改编为包含场景、动作、对白和结尾钩子的完整剧本。',
+  character:
+    '我是一名影视角色设计师，负责根据剧本与导演分析设计具有稳定视觉识别点的角色素材。',
   director: ROLE_DECLARATIONS.director,
   art: ROLE_DECLARATIONS.art,
   storyboard: ROLE_DECLARATIONS.storyboard
 }
-
 const PROMPT_STAGE_MAP: Record<WorkflowGenerateStage, string> = {
   story: 'story',
   script: 'script_generation',
@@ -103,47 +122,68 @@ const PROMPT_STAGE_MAP: Record<WorkflowGenerateStage, string> = {
   storyboard: 'storyboard'
 }
 
-const STORY_BREAKDOWN_CHAPTERS_PER_BATCH = 6
-
 export class WorkflowEngine {
   private skillLoader: SkillLoader
   private promptAssembler: PromptAssembler
-  private reviewEngine: ReviewEngine
   private llmProvider: ILLMProvider | null = null
 
   constructor(skillsDir: string) {
     this.skillLoader = new SkillLoader(skillsDir)
     this.promptAssembler = new PromptAssembler()
-    this.reviewEngine = new ReviewEngine(this.skillLoader, this.promptAssembler)
   }
 
   setProvider(provider: ILLMProvider): void {
     this.llmProvider = provider
-    this.reviewEngine.setProvider(provider)
-  }
-
-  setPassScore(score: number): void {
-    this.reviewEngine.setPassScore(score)
   }
 
   async generateStage(
     stage: WorkflowGenerateStage,
-    ctx: WorkflowEngineContext,
+    context: WorkflowEngineContext,
     options: WorkflowGenerateOptions = {}
   ): Promise<WorkflowGenerateResult> {
-    if (!this.llmProvider) {
-      throw new Error('请先配置 LLM Provider')
+    // Capture execution-local settings/provider before the first await.
+    const ctx: WorkflowEngineContext = {
+      ...context,
+      projectConfig: context.projectConfig
+        ? structuredClone(context.projectConfig)
+        : context.projectConfig,
+      projectContext: { ...context.projectContext },
+      signal: options.signal || context.signal
     }
-
-    const skill = await this.skillLoader.load(GENERATION_SKILL_MAP[stage])
+    const provider = this.llmProvider
+    if (!provider) throw new Error('请先配置 LLM Provider')
+    this.assertContext(ctx)
+    await this.checkpoint(ctx)
+    await this.assertCurrentPrerequisites(stage, ctx)
+    if (stage === 'story') {
+      const existing = options.reviewFeedback
+        ? await this.readOptionalFile(
+            this.episodePath(ctx, 'storyBeat'),
+            ctx.projectPath
+          )
+        : undefined
+      const draftBatch = existing?.match(STORY_BATCH_MARKER)?.[1]
+      ctx.batchNumber =
+        ctx.batchNumber ??
+        (draftBatch
+          ? Number(draftBatch)
+          : summarizeProjectPlotBreakdown({
+              projectPath: ctx.projectPath,
+              config: (ctx.projectConfig || {}) as ProjectConfig
+            }).nextBatchNumber)
+      assertEpisodeNumber(ctx.batchNumber)
+      if (draftBatch && Number(draftBatch) !== ctx.batchNumber)
+        throw new Error('修订草稿的剧情批次不匹配')
+    }
     const inputs = await this.gatherInputs(
       ctx.projectPath,
       ctx.episodeNum,
       ctx.projectConfig,
-      stage
+      stage,
+      ctx.batchNumber
     )
     this.assertGenerationPrerequisites(stage, inputs)
-
+    const skill = await this.skillLoader.load(GENERATION_SKILL_MAP[stage])
     const prompt = this.promptAssembler.assemble(
       skill,
       GENERATION_ROLE_MAP[stage],
@@ -152,13 +192,62 @@ export class WorkflowEngine {
       PROMPT_STAGE_MAP[stage],
       options.reviewFeedback
     )
-
-    const content = options.onChunk
-      ? await this.generateWithStream(prompt, options)
-      : await this.llmProvider.generate(prompt)
-
-    const outputPath = await this.writeGenerationOutput(stage, ctx, content)
-
+    const timeoutMs =
+      options.timeoutMs ??
+      ctx.timeoutMs ??
+      (ctx.projectConfig?.pipelineSettings?.llmTimeoutSec ?? 90) * 1000
+    const generateOptions = {
+      signal: ctx.signal,
+      timeoutMs,
+      idleTimeoutMs: options.idleTimeoutMs ?? ctx.idleTimeoutMs ?? timeoutMs,
+      firstChunkTimeoutMs:
+        options.firstChunkTimeoutMs ?? ctx.firstChunkTimeoutMs ?? timeoutMs
+    }
+    await this.checkpoint(ctx)
+    let content = ''
+    if (options.onChunk) {
+      for await (const chunk of provider.generateStream(
+        prompt,
+        generateOptions
+      )) {
+        await this.checkpoint(ctx)
+        content += chunk
+        options.onChunk(chunk, content.length)
+      }
+    } else {
+      content = await provider.generate(prompt, generateOptions)
+    }
+    await this.checkpoint(ctx)
+    if (!content.trim()) throw new Error('模型返回空白内容，未覆盖现有产物')
+    if (stage === 'story') {
+      validateGeneratedPlotBreakdown(content, ctx.projectConfig?.totalEpisodes)
+      content = `<!-- feicai-story-batch:${ctx.batchNumber} -->\n${content.replace(STORY_BATCH_MARKER, '').trim()}\n`
+    }
+    if (ctx.operationId) {
+      content = `<!-- feicai-operation:${ctx.operationId} -->\n${content.replace(/^<!--\s*feicai-operation:[^\r\n]*-->\s*\n?/gm, '')}`
+    }
+    if (stage === 'art') ArtOutputMerger.validateOutput(content)
+    const artifactId =
+      stage === 'story'
+        ? 'storyBeat'
+        : stage === 'script'
+          ? 'script'
+          : stage === 'character'
+            ? 'characterDesign'
+            : stage === 'director'
+              ? 'directorAnalysis'
+              : stage === 'art'
+                ? 'artDesign'
+                : 'seedancePrompts'
+    const outputPath = this.episodePath(ctx, artifactId)
+    // Recheck prerequisites after generation: external edits must not authorize stale work.
+    await this.checkpoint(ctx)
+    await this.assertCurrentPrerequisites(stage, ctx)
+    ctx.signal?.throwIfAborted()
+    await atomicWriteFile(
+      assertPathWithinProject(ctx.projectPath, outputPath),
+      content
+    )
     return {
       stage,
       outputPath,
@@ -172,267 +261,308 @@ export class WorkflowEngine {
 
   async reviewStage(
     stage: WorkflowEngineReviewStage,
-    ctx: Omit<WorkflowEngineContext, 'projectContext'> & { scriptPath?: string }
+    context: ReviewContext
   ): Promise<WorkflowReviewResult> {
+    const ctx: ReviewContext = {
+      ...context,
+      projectConfig: context.projectConfig
+        ? structuredClone(context.projectConfig)
+        : context.projectConfig
+    }
+    const provider = this.llmProvider
+    if (!provider) throw new Error('请先配置 LLM Provider')
+    this.assertContext(ctx)
+    await this.checkpoint(ctx)
+    await this.assertCurrentPrerequisites(stage, ctx)
+    const provenance = captureReviewProvenance(
+      ctx.projectPath,
+      stage,
+      ctx.episodeNum,
+      ctx.projectConfig
+    )
+    const engine = new ReviewEngine(this.skillLoader, this.promptAssembler)
+    engine.setProvider(provider)
+    const settings = {
+      ...DEFAULT_PIPELINE_SETTINGS,
+      ...ctx.projectConfig?.pipelineSettings
+    }
+    const callOptions = {
+      signal: ctx.signal,
+      timeoutMs: ctx.timeoutMs ?? settings.llmTimeoutSec * 1000,
+      passScore: settings.passScore,
+      provider,
+      waitUntilResumed: ctx.waitUntilResumed
+    }
+    let review: ReviewResult
+    let outputPath: string | undefined
+    let storyBeat: string | undefined
     if (stage === 'story_review') {
-      const storyBeat = await this.readRequiredFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'storyBeat',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
+      storyBeat = await this.readRequiredFile(
+        this.episodePath(ctx, 'storyBeat'),
+        ctx.projectPath
+      )
+      const storedBatch = storyBeat.match(STORY_BATCH_MARKER)?.[1]
+      if (!storedBatch)
+        throw new Error('剧情草稿缺少批次身份，请重新生成草稿后审核')
+      const batchNumber = Number(storedBatch)
+      assertEpisodeNumber(batchNumber)
+      if (ctx.batchNumber !== undefined && ctx.batchNumber !== batchNumber)
+        throw new Error('审核批次与草稿批次不匹配')
+      ctx.batchNumber = batchNumber
+      const entries = validateGeneratedPlotBreakdown(
+        storyBeat,
+        ctx.projectConfig?.totalEpisodes
       )
       const sourceNovel = await this.readEpisodeSourceNovel(
         ctx.projectPath,
-        ctx.episodeNum,
+        batchNumber,
         ctx.projectConfig,
         'breakdownBatch'
       )
-      const plotBreakdown = formatPlotBreakdownEntriesMarkdown(
-        extractPlotBreakdownEntries(storyBeat),
-        { heading: '# 当前批次新增剧情点' }
-      )
-      const review = await this.reviewEngine.reviewContent({
+      if (!sourceNovel?.trim()) throw new Error('缺少当前批次原文章节')
+      const plotBreakdown = formatPlotBreakdownEntriesMarkdown(entries, {
+        heading: '# 当前批次新增剧情点'
+      })
+      await this.checkpoint(ctx)
+      review = await engine.reviewContent({
         stage,
         reviewSkillName: 'story-breakdown-review-skill',
         outputToReview: storyBeat,
-        originalScript: [plotBreakdown, sourceNovel].filter(Boolean).join('\n\n---\n\n'),
-        plotBreakdown
+        originalScript: [plotBreakdown, sourceNovel].join('\n\n---\n\n'),
+        plotBreakdown,
+        ...callOptions
       })
-      const outputPath = await this.persistReviewFile(
-        '剧情拆解审核',
-        review,
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'storyReview',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
-      )
-      if (review.passed && ctx.projectConfig) {
-        appendGeneratedStoryToProjectPlotBreakdown({
-          projectPath: ctx.projectPath,
-          config: ctx.projectConfig as ProjectConfig,
-          generatedContent: storyBeat,
-          episodeNum: ctx.episodeNum,
-          chaptersPerEpisode: STORY_BREAKDOWN_CHAPTERS_PER_BATCH
-        })
-      }
-      return { stage, review, outputPath }
-    }
-
-    if (stage === 'script_review') {
+      outputPath = this.episodePath(ctx, 'storyReview')
+    } else if (stage === 'script_review') {
       const script = await this.readRequiredFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'script',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
-      )
-      const storyBeat = await this.readOptionalFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'storyBeat',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
+        this.episodePath(ctx, 'script'),
+        ctx.projectPath
       )
       const sourceNovel = await this.readEpisodeSourceNovel(
         ctx.projectPath,
         ctx.episodeNum,
         ctx.projectConfig
       )
-      const previousScript = await this.readPreviousEpisodeScript(
-        ctx.projectPath,
-        ctx.episodeNum,
-        ctx.projectConfig
-      )
-      const plotBreakdown =
-        ctx.projectConfig && ctx.episodeNum > 0
-          ? getProjectPlotBreakdownMarkdownForEpisode({
-              projectPath: ctx.projectPath,
-              config: ctx.projectConfig as ProjectConfig,
-              episodeNum: ctx.episodeNum,
-              heading: '# 当前集剧情点'
-            })
-          : undefined
-      const review = await this.reviewEngine.reviewContent({
+      const previousScript = await this.readAdjacentEpisodeScript(ctx, -1)
+      const plotBreakdown = getProjectPlotBreakdownMarkdownForEpisode({
+        projectPath: ctx.projectPath,
+        config: (ctx.projectConfig || {}) as ProjectConfig,
+        episodeNum: ctx.episodeNum,
+        heading: '# 当前集剧情点'
+      })
+      if (!plotBreakdown.trim())
+        throw new Error('缺少本集绑定剧情点，无法审核剧本')
+      await this.checkpoint(ctx)
+      review = await engine.reviewContent({
         stage,
         reviewSkillName: 'script-review-skill',
         outputToReview: script,
-        originalScript: [plotBreakdown, storyBeat, sourceNovel, previousScript]
+        originalScript: [plotBreakdown, sourceNovel, previousScript]
           .filter(Boolean)
           .join('\n\n---\n\n'),
-        plotBreakdown
+        plotBreakdown,
+        ...callOptions
       })
-      const hardValidation = validateScriptHardRules(script, {
-        ...DEFAULT_PIPELINE_SETTINGS,
-        ...(ctx.projectConfig?.pipelineSettings || {})
-      })
-      if (!hardValidation.passed) {
-        review.passed = false
-        review.result = 'FAIL'
-        review.score = Math.min(review.score, 6)
-        review.issues = [...hardValidation.issues, ...review.issues]
-        review.feedback = [
-          '本地硬校验未通过：',
-          ...hardValidation.issues.map((issue) => `- ${issue.description}`),
-          '',
-          review.feedback
-        ].join('\n')
-      }
-      const outputPath = await this.persistReviewFile(
-        '剧本审核',
-        review,
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'scriptReview',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
+      const validation = validateScriptHardRules(
+        script.replace(/^<!--\s*feicai-operation:[^\r\n]*-->\s*\n?/gm, ''),
+        settings
       )
-      if (review.passed && ctx.projectConfig) {
-        markProjectPlotBreakdownEpisodeStatus({
-          projectPath: ctx.projectPath,
-          config: ctx.projectConfig as ProjectConfig,
-          episodeNum: ctx.episodeNum,
-          fromStatus: '未用',
-          toStatus: '已用'
-        })
+      if (!validation.passed) {
+        review = {
+          ...review,
+          passed: false,
+          result: 'FAIL',
+          score: Math.min(review.score, 6),
+          issues: [...validation.issues, ...review.issues],
+          feedback: [
+            '本地硬校验未通过：',
+            ...validation.issues.map((issue) => `- ${issue.description}`),
+            '',
+            review.feedback
+          ].join('\n')
+        }
       }
-      return { stage, review, outputPath }
-    }
-
-    if (stage === 'storyboard_review') {
+      outputPath = this.episodePath(ctx, 'scriptReview')
+    } else if (stage === 'storyboard_review') {
       const prompts = await this.readRequiredFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'seedancePrompts',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
+        this.episodePath(ctx, 'seedancePrompts'),
+        ctx.projectPath
       )
-      const script = await this.readOptionalFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'script',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
+      const script = await this.readRequiredFile(
+        this.episodePath(ctx, 'script'),
+        ctx.projectPath
       )
-      const directorAnalysis = await this.readOptionalFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'directorAnalysis',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
+      const artDesign = await this.readRequiredFile(
+        this.episodePath(ctx, 'artDesign'),
+        ctx.projectPath
       )
-      const review = await this.reviewEngine.reviewContent({
+      const directorAnalysis = await this.readRequiredFile(
+        this.episodePath(ctx, 'directorAnalysis'),
+        ctx.projectPath
+      )
+      await this.checkpoint(ctx)
+      review = await engine.reviewContent({
         stage,
         reviewSkillName: 'seedance-prompt-review-skill',
         outputToReview: prompts,
         originalScript: script,
-        directorAnalysis
+        directorAnalysis,
+        artDesign,
+        ...callOptions
       })
-      const outputPath = await this.persistReviewFile(
-        '分镜审核',
-        review,
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'storyboardReview',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
-      )
-      return { stage, review, outputPath }
+      outputPath = this.episodePath(ctx, 'storyboardReview')
+    } else {
+      await this.checkpoint(ctx)
+      review = await engine.review(stage, {
+        projectPath: ctx.projectPath,
+        episodeNum: ctx.episodeNum,
+        scriptPath: ctx.scriptPath,
+        projectConfig: ctx.projectConfig,
+        ...callOptions
+      })
     }
-
-    const review = await this.reviewEngine.review(stage, {
-      projectPath: ctx.projectPath,
-      episodeNum: ctx.episodeNum,
-      scriptPath: ctx.scriptPath,
-      projectConfig: ctx.projectConfig
-    })
-    return { stage, review }
+    review = { ...review, ...provenance }
+    if (
+      review.passed &&
+      (review.result !== 'PASS' ||
+        !Number.isFinite(review.score) ||
+        review.score < settings.passScore ||
+        review.score > 10)
+    ) {
+      review = {
+        ...review,
+        result: 'FAIL',
+        passed: false,
+        feedback: `审核未达到项目通过阈值 ${settings.passScore}/10。\n${review.feedback}`
+      }
+    }
+    await this.checkpoint(ctx)
+    this.assertReviewUnchanged(review, ctx)
+    await this.assertCurrentPrerequisites(stage, ctx)
+    if (review.passed && stage === 'story_review') {
+      await this.checkpoint(ctx)
+      this.assertReviewUnchanged(review, ctx)
+      const published = appendGeneratedStoryToProjectPlotBreakdown({
+        projectPath: ctx.projectPath,
+        config: (ctx.projectConfig || {}) as ProjectConfig,
+        generatedContent: storyBeat!,
+        batchNumber: ctx.batchNumber!,
+        chaptersPerBatch: STORY_BREAKDOWN_CHAPTERS_PER_BATCH
+      })
+      if (published.appendedEntries === 0)
+        throw new Error('剧情库存未写入任何剧情点')
+    }
+    if (review.passed && stage === 'script_review') {
+      await this.checkpoint(ctx)
+      this.assertReviewUnchanged(review, ctx)
+      markProjectPlotBreakdownEpisodeStatus({
+        projectPath: ctx.projectPath,
+        config: (ctx.projectConfig || {}) as ProjectConfig,
+        episodeNum: ctx.episodeNum,
+        fromStatus: '未用',
+        toStatus: '已用'
+      })
+    }
+    if (review.passed && stage === 'art') {
+      const art = await this.readRequiredFile(
+        this.episodePath(ctx, 'artDesign'),
+        ctx.projectPath
+      )
+      await ArtOutputMerger.parseAndMerge(
+        art,
+        ctx.projectPath,
+        ctx.episodeNum,
+        ctx.projectConfig,
+        async () => {
+          await this.checkpoint(ctx)
+          await this.assertCurrentPrerequisites(stage, ctx)
+          ctx.signal?.throwIfAborted()
+          this.assertReviewUnchanged(review, ctx)
+        }
+      )
+    }
+    if (outputPath) {
+      const title =
+        stage === 'story_review'
+          ? '剧情拆解审核'
+          : stage === 'script_review'
+            ? '剧本审核'
+            : '分镜审核'
+      await this.checkpoint(ctx)
+      await this.assertCurrentPrerequisites(stage, ctx)
+      ctx.signal?.throwIfAborted()
+      this.assertReviewUnchanged(review, ctx)
+      const markdown = formatReviewMarkdown(title, review)
+      await atomicWriteFile(
+        assertPathWithinProject(ctx.projectPath, outputPath),
+        ctx.operationId
+          ? `${markdown}\n<!-- feicai-operation:${ctx.operationId} -->\n`
+          : markdown
+      )
+    }
+    return { stage, review, outputPath }
   }
 
   async gatherInputs(
     projectPath: string,
     episodeNum: number,
     projectConfig?: Partial<ProjectConfig> | null,
-    stage?: WorkflowGenerateStage
+    stage?: WorkflowGenerateStage,
+    batchNumber?: number
   ): Promise<UpstreamInputs> {
+    const ctx = { projectPath, episodeNum, projectConfig }
+    const sourceNumber =
+      stage === 'story'
+        ? (batchNumber ??
+          summarizeProjectPlotBreakdown({
+            projectPath,
+            config: (projectConfig || {}) as ProjectConfig
+          }).nextBatchNumber)
+        : episodeNum
     const sourceNovel = await this.readEpisodeSourceNovel(
       projectPath,
-      episodeNum,
+      sourceNumber,
       projectConfig,
       stage === 'story' ? 'breakdownBatch' : 'episode'
     )
-
+    const episodeRead = (
+      artifact: Parameters<typeof resolveEpisodeArtifactPath>[1]
+    ) => this.readOptionalFile(this.episodePath(ctx, artifact), projectPath)
+    const projectRead = (
+      artifact: Parameters<typeof resolveProjectArtifactPath>[1]
+    ) =>
+      this.readOptionalFile(
+        assertPathWithinProject(
+          projectPath,
+          resolveProjectArtifactPath(projectPath, artifact, projectConfig)
+        ),
+        projectPath
+      )
     return {
       sourceNovel,
       plotBreakdown:
-        projectConfig && episodeNum > 0
-          ? getProjectPlotBreakdownMarkdownForEpisode({
+        stage === 'story'
+          ? undefined
+          : getProjectPlotBreakdownMarkdownForEpisode({
               projectPath,
-              config: projectConfig as ProjectConfig,
+              config: (projectConfig || {}) as ProjectConfig,
               episodeNum,
-              status: '未用',
-              heading: '# 当前集未用剧情点'
-            })
-          : undefined,
-      storyBeat: await this.readOptionalFile(
-        resolveEpisodeArtifactPath(
-          projectPath,
-          'storyBeat',
-          episodeNum,
-          projectConfig
-        )
-      ),
+              heading: '# 当前集绑定剧情点（含已用剧情，可用于本集修订）'
+            }),
+      storyBeat: undefined,
       previousScript:
         stage === 'script'
-          ? await this.readPreviousEpisodeScript(
-              projectPath,
-              episodeNum,
-              projectConfig
-            )
+          ? await this.readAdjacentEpisodeScript(ctx, -1)
           : undefined,
       nextScript:
         stage === 'script'
-          ? await this.readNextEpisodeScript(projectPath, episodeNum, projectConfig)
+          ? await this.readAdjacentEpisodeScript(ctx, 1)
           : undefined,
-      script: await this.readOptionalFile(
-        resolveEpisodeArtifactPath(
-          projectPath,
-          'script',
-          episodeNum,
-          projectConfig
-        )
-      ),
-      directorAnalysis: await this.readOptionalFile(
-        resolveEpisodeArtifactPath(
-          projectPath,
-          'directorAnalysis',
-          episodeNum,
-          projectConfig
-        )
-      ),
-      characterPrompts: await this.readOptionalFile(
-        resolveProjectArtifactPath(
-          projectPath,
-          'characterPrompts',
-          projectConfig
-        )
-      ),
-      scenePrompts: await this.readOptionalFile(
-        resolveProjectArtifactPath(projectPath, 'scenePrompts', projectConfig)
-      ),
-      fullPlotBreakdown: await this.readOptionalFile(
-        resolveProjectArtifactPath(projectPath, 'plotBreakdown', projectConfig)
-      )
+      script: await episodeRead('script'),
+      directorAnalysis: await episodeRead('directorAnalysis'),
+      characterPrompts: await projectRead('characterPrompts'),
+      scenePrompts: await projectRead('scenePrompts'),
+      fullPlotBreakdown: await projectRead('plotBreakdown')
     }
   }
 
@@ -440,151 +570,183 @@ export class WorkflowEngine {
     stage: WorkflowGenerateStage,
     inputs: UpstreamInputs
   ): void {
-    if (stage === 'story' && !inputs.sourceNovel) {
+    if (stage === 'story' && !inputs.sourceNovel?.trim())
       throw new Error(
         `缺少 ${describeProjectArtifact('sourceNovel')}，请先补齐小说原文或项目设定`
       )
-    }
-    if (stage === 'script' && !inputs.plotBreakdown) {
-      throw new Error('缺少当前集未用剧情点，请先完成剧情库存拆解')
-    }
-    if (stage === 'character') {
-      if (!inputs.script) {
-        throw new Error(
-          `缺少剧本文件，请先补齐 ${describeEpisodeArtifact('script')}`
+    if (stage === 'script' && !inputs.plotBreakdown?.trim())
+      throw new Error('缺少当前集绑定剧情点，请先完成剧情库存拆解')
+    if (
+      ['director', 'art', 'storyboard', 'character'].includes(stage) &&
+      !inputs.script?.trim()
+    )
+      throw new Error(
+        `缺少剧本文件，请先补齐 ${describeEpisodeArtifact('script')}`
+      )
+    if (
+      ['art', 'storyboard', 'character'].includes(stage) &&
+      !inputs.directorAnalysis?.trim()
+    )
+      throw new Error(
+        `缺少导演分析，请先生成 ${describeEpisodeArtifact('directorAnalysis')}`
+      )
+  }
+
+  private async assertCurrentPrerequisites(
+    stage: WorkflowGenerateStage | ReviewStage,
+    ctx: ReviewContext
+  ): Promise<void> {
+    const required: ReviewStage[] = []
+    if (
+      [
+        'director',
+        'art',
+        'storyboard',
+        'character',
+        'storyboard_review'
+      ].includes(stage)
+    )
+      required.push('script_review')
+    if (['art', 'storyboard', 'character', 'storyboard_review'].includes(stage))
+      required.push('director')
+    if (['storyboard', 'storyboard_review'].includes(stage))
+      required.push('art')
+    if (required.length === 0) return
+    let state: ProjectPipelineState | null = null
+    const threshold =
+      ctx.projectConfig?.pipelineSettings?.passScore ??
+      DEFAULT_PIPELINE_SETTINGS.passScore
+    for (const upstream of required) {
+      let review: ReviewResult | null | undefined
+      if (upstream === 'script_review') {
+        const raw = await this.readOptionalFile(
+          this.episodePath(ctx, 'scriptReview'),
+          ctx.projectPath
         )
+        review = raw ? parseReviewMarkdown(raw, upstream) : null
+      } else {
+        if (!state)
+          state = await readJsonWithRecovery<ProjectPipelineState>(
+            assertPathWithinProject(
+              ctx.projectPath,
+              resolveProjectArtifactPath(
+                ctx.projectPath,
+                'pipelineState',
+                ctx.projectConfig
+              )
+            )
+          )
+        review =
+          state?.episodes[ctx.episodeNum]?.stageStates?.[
+            upstream as 'director' | 'art'
+          ]?.lastReview
       }
-      if (!inputs.directorAnalysis) {
+      if (
+        !review?.passed ||
+        review.result !== 'PASS' ||
+        !Number.isFinite(review.score) ||
+        review.score < threshold ||
+        !isReviewCurrent(
+          review,
+          ctx.projectPath,
+          ctx.episodeNum,
+          ctx.projectConfig
+        )
+      ) {
         throw new Error(
-          `缺少导演分析，请先生成 ${describeEpisodeArtifact('directorAnalysis')}`
+          `缺少当前有效 ${upstream} PASS（阈值 ${threshold}/10），请先审核上游产物`
         )
       }
     }
   }
 
-  private async writeGenerationOutput(
-    stage: WorkflowGenerateStage,
-    ctx: WorkflowEngineContext,
-    content: string
-  ): Promise<string> {
-    const artifactId =
-      stage === 'story'
-        ? 'storyBeat'
-        : stage === 'script'
-          ? 'script'
-          : stage === 'character'
-            ? 'characterDesign'
-            : stage === 'director'
-              ? 'directorAnalysis'
-              : stage === 'art'
-                ? 'artDesign'
-                : 'seedancePrompts'
-
-    const outputPath = resolveEpisodeArtifactPath(
+  private assertReviewUnchanged(
+    review: ReviewResult,
+    ctx: ReviewContext
+  ): void {
+    const current = captureReviewProvenance(
       ctx.projectPath,
-      artifactId,
+      review.stage,
       ctx.episodeNum,
       ctx.projectConfig
     )
-    await this.writeTextFile(outputPath, content)
+    const keys = Object.keys(current.inputHashes)
+    if (
+      current.artifactHash !== review.artifactHash ||
+      keys.length !== Object.keys(review.inputHashes || {}).length ||
+      keys.some((key) => current.inputHashes[key] !== review.inputHashes?.[key])
+    ) {
+      throw new Error('审核期间产物或依赖已改变，请重新审核')
+    }
+  }
 
-    if (stage === 'character') {
-      await this.mergeCharacterAssets(
+  private assertContext(ctx: ReviewContext): void {
+    assertEpisodeNumber(ctx.episodeNum)
+    if (ctx.batchNumber !== undefined) assertEpisodeNumber(ctx.batchNumber)
+    if (
+      ctx.projectConfig?.totalEpisodes &&
+      ctx.episodeNum > ctx.projectConfig.totalEpisodes
+    )
+      throw new Error('目标集数超出项目范围')
+  }
+
+  private async checkpoint(
+    ctx: Pick<WorkflowEngineContext, 'signal' | 'waitUntilResumed'>
+  ): Promise<void> {
+    ctx.signal?.throwIfAborted()
+    if (ctx.waitUntilResumed && ctx.signal) {
+      const { promise, reject } = Promise.withResolvers<never>()
+      const onAbort = () =>
+        reject(ctx.signal!.reason ?? new Error('任务已取消'))
+      ctx.signal.addEventListener('abort', onAbort, { once: true })
+      try {
+        await Promise.race([ctx.waitUntilResumed(), promise])
+      } finally {
+        ctx.signal.removeEventListener('abort', onAbort)
+      }
+    } else {
+      await ctx.waitUntilResumed?.()
+    }
+    ctx.signal?.throwIfAborted()
+  }
+
+  private episodePath(
+    ctx: Pick<ReviewContext, 'projectPath' | 'episodeNum' | 'projectConfig'>,
+    artifact: Parameters<typeof resolveEpisodeArtifactPath>[1]
+  ): string {
+    return assertPathWithinProject(
+      ctx.projectPath,
+      resolveEpisodeArtifactPath(
         ctx.projectPath,
-        content,
+        artifact,
+        ctx.episodeNum,
         ctx.projectConfig
       )
-    }
-
-    if (stage === 'art') {
-      await ArtOutputMerger.parseAndMerge(
-        content,
-        ctx.projectPath,
-        ctx.episodeNum
-      )
-    }
-
-    return outputPath
-  }
-
-  private async generateWithStream(
-    prompt: { system: string; user: string },
-    options: WorkflowGenerateOptions
-  ): Promise<string> {
-    let output = ''
-    let lastChunkTime = Date.now()
-    const timeoutMs = options.timeoutMs ?? 90_000
-
-    const stream = this.llmProvider!.generateStream(prompt, {
-      onChunk: (chunk) => {
-        output += chunk
-        lastChunkTime = Date.now()
-        options.onChunk?.(chunk, output.length)
-      }
-    })
-
-    for await (const _chunk of stream) {
-      if (Date.now() - lastChunkTime > timeoutMs) {
-        throw new Error(
-          `LLM 生成超时 (${Math.round(timeoutMs / 1000)}s 无响应)`
-        )
-      }
-    }
-
-    return output
-  }
-
-  private async mergeCharacterAssets(
-    projectPath: string,
-    generatedContent: string,
-    projectConfig?: Partial<ProjectConfig> | null
-  ): Promise<void> {
-    const incoming = parseAssetMarkdown(generatedContent)
-    if (incoming.length === 0) {
-      throw new Error('角色设计输出缺少标准角色分节，请检查模板格式')
-    }
-
-    const assetPath = resolveProjectArtifactPath(
-      projectPath,
-      'characterPrompts',
-      projectConfig
     )
-    const existingRaw = await this.readOptionalFile(assetPath)
-    const existing = existingRaw ? parseAssetMarkdown(existingRaw) : []
-    const merged = [...existing]
-
-    for (const asset of incoming) {
-      const index = merged.findIndex((item) => item.name === asset.name)
-      if (index >= 0) {
-        merged[index] = asset
-      } else {
-        merged.push(asset)
-      }
-    }
-
-    await this.writeTextFile(assetPath, serializeAssets(merged))
   }
 
-  private async persistReviewFile(
-    title: string,
-    review: ReviewResult,
-    filePath: string
+  private async readRequiredFile(
+    filePath: string,
+    projectPath: string
   ): Promise<string> {
-    await this.writeTextFile(filePath, formatReviewMarkdown(title, review))
-    return filePath
-  }
-
-  private async readRequiredFile(filePath: string): Promise<string> {
-    return readFile(filePath, 'utf-8')
+    const content = await readFile(
+      assertPathWithinProject(projectPath, filePath),
+      'utf-8'
+    )
+    if (!content.trim()) throw new Error('所需产物为空，无法生成或审核')
+    return content
   }
 
   private async readOptionalFile(
-    filePath: string
+    filePath: string,
+    projectPath: string
   ): Promise<string | undefined> {
+    const safePath = assertPathWithinProject(projectPath, filePath)
     try {
-      return await readFile(filePath, 'utf-8')
-    } catch {
-      return undefined
+      return await readFile(safePath, 'utf-8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
     }
   }
 
@@ -602,27 +764,21 @@ export class WorkflowEngine {
       windowMode === 'breakdownBatch'
         ? STORY_BREAKDOWN_CHAPTERS_PER_BATCH
         : configuredChaptersPerEpisode
-    const totalEpisodes = Math.max(
-      0,
-      Number(projectConfig?.totalEpisodes) || 0
-    )
-    if (chapterWindowSize <= 0) {
-      return await this.readOptionalFile(
-        resolveProjectArtifactPath(projectPath, 'sourceNovel', projectConfig)
+    const totalEpisodes = Math.max(0, Number(projectConfig?.totalEpisodes) || 0)
+    if (chapterWindowSize <= 0)
+      return this.readOptionalFile(
+        resolveProjectArtifactPath(projectPath, 'sourceNovel', projectConfig),
+        projectPath
       )
-    }
-
     if (
       windowMode === 'episode' &&
       totalEpisodes > 0 &&
       episodeNum > totalEpisodes
-    ) {
+    )
       return undefined
-    }
-
     const chapters = listSourceChapters({
       projectPath,
-      config: projectConfig as ProjectConfig
+      config: (projectConfig || {}) as ProjectConfig
     })
     const maxChapterIndex =
       totalEpisodes > 0 && configuredChaptersPerEpisode > 0
@@ -632,43 +788,41 @@ export class WorkflowEngine {
       maxChapterIndex > 0
         ? chapters.filter((chapter) => chapter.index <= maxChapterIndex)
         : chapters
-    const startChapterIndex = (Math.max(episodeNum, 1) - 1) * chapterWindowSize + 1
-    const endChapterIndex = startChapterIndex + chapterWindowSize - 1
+    const startChapterIndex = (episodeNum - 1) * chapterWindowSize + 1
     const selectedChapters = scopedChapters.filter(
       (chapter) =>
-        chapter.index >= startChapterIndex && chapter.index <= endChapterIndex
+        chapter.index >= startChapterIndex &&
+        chapter.index < startChapterIndex + chapterWindowSize
     )
-    if (selectedChapters.length === 0) {
-      if (chapters.length === 0) {
-        return await this.readOptionalFile(
-          resolveProjectArtifactPath(projectPath, 'sourceNovel', projectConfig)
-        )
-      }
-      return undefined
-    }
-
+    if (selectedChapters.length === 0)
+      return chapters.length === 0
+        ? this.readOptionalFile(
+            resolveProjectArtifactPath(
+              projectPath,
+              'sourceNovel',
+              projectConfig
+            ),
+            projectPath
+          )
+        : undefined
     const contents = await Promise.all(
-      selectedChapters.map(async (chapter) => {
-        const content = await this.readOptionalFile(chapter.filePath)
-        return content?.trim() || `# ${chapter.title}\n\n（空章节）`
-      })
+      selectedChapters.map((chapter) =>
+        this.readRequiredFile(chapter.filePath, projectPath)
+      )
     )
-    const firstChapter = selectedChapters[0]
-    const lastChapter = selectedChapters[selectedChapters.length - 1]
     return [
-      windowMode === 'breakdownBatch' ? '# 当前批次小说章节' : '# 当前集小说章节',
+      windowMode === 'breakdownBatch'
+        ? '# 当前批次小说章节'
+        : '# 当前集小说章节',
       '',
       windowMode === 'breakdownBatch'
         ? `> 当前批次：第${episodeNum}批`
         : `> 当前集：EP${String(episodeNum).padStart(2, '0')}`,
-      windowMode === 'breakdownBatch'
-        ? `> 每批章节数：${chapterWindowSize}`
-        : `> 每集章节数：${chapterWindowSize}`,
+      `> ${windowMode === 'breakdownBatch' ? '每批' : '每集'}章节数：${chapterWindowSize}`,
       totalEpisodes > 0
         ? `> 目标总集数：${totalEpisodes}，小说处理上限：第1-${maxChapterIndex}章`
-        : undefined,
-      `> 章节范围：${firstChapter.index}-${lastChapter.index}`,
-      `> 已选章节数：${selectedChapters.length}`,
+        : '',
+      `> 章节范围：${selectedChapters[0].index}-${selectedChapters[selectedChapters.length - 1].index}`,
       '',
       '---',
       '',
@@ -676,58 +830,23 @@ export class WorkflowEngine {
     ].join('\n')
   }
 
-  private async readPreviousEpisodeScript(
-    projectPath: string,
-    episodeNum: number,
-    projectConfig?: Partial<ProjectConfig> | null
+  private async readAdjacentEpisodeScript(
+    ctx: Pick<ReviewContext, 'projectPath' | 'episodeNum' | 'projectConfig'>,
+    offset: -1 | 1
   ): Promise<string | undefined> {
-    if (episodeNum <= 1) return undefined
-    const previousEpisodeNum = episodeNum - 1
-    const content = await this.readOptionalFile(
-      resolveEpisodeArtifactPath(
-        projectPath,
-        'script',
-        previousEpisodeNum,
-        projectConfig
-      )
+    const adjacent = ctx.episodeNum + offset
+    if (
+      adjacent < 1 ||
+      (ctx.projectConfig?.totalEpisodes &&
+        adjacent > ctx.projectConfig.totalEpisodes)
     )
-    if (!content) return undefined
-    return [
-      `# EP${String(previousEpisodeNum).padStart(2, '0')} 上一集剧本`,
-      '',
-      content
-    ].join('\n')
-  }
-
-  private async readNextEpisodeScript(
-    projectPath: string,
-    episodeNum: number,
-    projectConfig?: Partial<ProjectConfig> | null
-  ): Promise<string | undefined> {
-    const totalEpisodes = Math.max(0, Number(projectConfig?.totalEpisodes) || 0)
-    if (totalEpisodes > 0 && episodeNum >= totalEpisodes) return undefined
-    const nextEpisodeNum = episodeNum + 1
+      return undefined
     const content = await this.readOptionalFile(
-      resolveEpisodeArtifactPath(
-        projectPath,
-        'script',
-        nextEpisodeNum,
-        projectConfig
-      )
+      this.episodePath({ ...ctx, episodeNum: adjacent }, 'script'),
+      ctx.projectPath
     )
-    if (!content) return undefined
-    return [
-      `# EP${String(nextEpisodeNum).padStart(2, '0')} 下一集剧本`,
-      '',
-      content
-    ].join('\n')
-  }
-
-  private async writeTextFile(
-    filePath: string,
-    content: string
-  ): Promise<void> {
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, content, 'utf-8')
+    return content?.trim()
+      ? `# EP${String(adjacent).padStart(2, '0')} ${offset < 0 ? '上一集' : '下一集'}剧本\n\n${content}`
+      : undefined
   }
 }

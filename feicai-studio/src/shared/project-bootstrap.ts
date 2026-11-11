@@ -66,19 +66,18 @@ export function buildDefaultScenePromptsTemplate(): string {
 `
 }
 
-export function buildDefaultPlotBreakdownTemplate(params: {
-  projectName?: string
-  projectType?: string
-  totalEpisodes?: number
-  chaptersPerEpisode?: number
-} = {}): string {
+export function buildDefaultPlotBreakdownTemplate(
+  params: {
+    projectName?: string
+    projectType?: string
+    totalEpisodes?: number
+    chaptersPerEpisode?: number
+  } = {}
+): string {
   const projectName = params.projectName || '未命名项目'
   const projectType = params.projectType || '待确定'
   const totalEpisodes = Math.max(0, Number(params.totalEpisodes) || 0)
-  const chaptersPerEpisode = Math.max(
-    0,
-    Number(params.chaptersPerEpisode) || 0
-  )
+  const chaptersPerEpisode = Math.max(0, Number(params.chaptersPerEpisode) || 0)
   const maxChapterRange =
     totalEpisodes > 0 && chaptersPerEpisode > 0
       ? `第1-${totalEpisodes * chaptersPerEpisode}章`

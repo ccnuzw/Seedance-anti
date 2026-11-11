@@ -32,8 +32,9 @@ export interface WorkflowStageMeta {
 export function deriveEpisodeStatus(
   flags: EpisodeArtifactFlags
 ): EpisodeStatus {
-  if (flags.hasStoryboardReview || flags.hasSeedancePrompts) return 'complete'
-  if (flags.hasStoryboard) return 'storyboard'
+  // 标记必须由调用者用当前、已绑定正文的 PASS 审核派生。
+  if (flags.hasStoryboardReview && flags.hasSeedancePrompts) return 'complete'
+  if (flags.hasStoryboard || flags.hasSeedancePrompts) return 'storyboard'
   if (flags.hasArtDesign) return 'art'
   if (flags.hasCharacterDesign) return 'character'
   if (flags.hasDirectorAnalysis) return 'director'

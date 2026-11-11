@@ -241,8 +241,7 @@
     var(--color-accent) 8%,
     var(--color-bg-elevated)
   );
-  box-shadow: 0 0 0 1px
-    color-mix(in srgb, var(--color-accent) 35%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
 .wizard-entry-top {
@@ -269,11 +268,7 @@
   align-self: flex-start;
   padding: 4px 10px;
   border-radius: 999px;
-  background: color-mix(
-    in srgb,
-    var(--color-accent) 12%,
-    var(--color-bg-card)
-  );
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-card));
   color: var(--color-accent);
   border: 1px solid
     color-mix(in srgb, var(--color-accent) 24%, var(--color-border));

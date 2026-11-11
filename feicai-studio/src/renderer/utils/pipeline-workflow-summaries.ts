@@ -53,9 +53,11 @@ export function buildWorkflowSummaries(
     summaryMap.script_review = score
       ? [`审核评分 ${score}`]
       : ['已生成剧本审核记录']
-    summaryMap.script_approved = score
-      ? [`已通过门槛，评分 ${score}`]
-      : ['已具备进入制作段条件']
+    if (episode?.hasScriptReview) {
+      summaryMap.script_approved = score
+        ? [`已通过门槛，评分 ${score}`]
+        : ['已具备进入制作段条件']
+    }
   }
   if (texts.directorRaw) {
     summaryMap.director = [
@@ -84,7 +86,9 @@ export function buildWorkflowSummaries(
       promptCount > 0 ? `${promptCount} 条提示词` : '已生成分镜产物',
       promptDuration ? `总时长 ${promptDuration}s` : '等待时长统计'
     ]
-    summaryMap.complete = summaryMap.storyboard
+    if (episode?.status === 'complete' && episode.hasStoryboardReview) {
+      summaryMap.complete = summaryMap.storyboard
+    }
   }
   if (texts.storyboardReviewRaw) {
     const score = parseReviewScore(texts.storyboardReviewRaw)

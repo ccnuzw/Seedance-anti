@@ -12,6 +12,7 @@ export interface ReviewCycleContext {
   retryCount: number
   maxRetries: number
   statePersistence: ProjectStatePersistence | null
+  operationId?: string
   getStageOutputPath: (stage: AutomatedPipelineStage) => string | undefined
   getStageReviewPath: (stage: AutomatedPipelineStage) => string | undefined
   onStateChange: (state: string) => void
@@ -34,30 +35,44 @@ export interface ReviewCycleOutcome {
   exhaustedMessage?: string
 }
 
-function persistReviewResult(
+async function persistReviewResult(
   persistence: ProjectStatePersistence | null,
   episodeNum: number,
   stage: AutomatedPipelineStage,
   review: ReviewResult,
   getStageOutputPath: (stage: AutomatedPipelineStage) => string | undefined,
-  getStageReviewPath: (stage: AutomatedPipelineStage) => string | undefined
-): void {
+  getStageReviewPath: (stage: AutomatedPipelineStage) => string | undefined,
+  operationId: string | undefined
+): Promise<void> {
   if (!persistence) return
-
-  persistence
-    .markStageReviewResult(episodeNum, stage, review, {
-      outputPath: getStageOutputPath(stage),
-      reviewPath: getStageReviewPath(stage)
-    })
-    .catch(console.error)
+  await persistence.markStageReviewResult(episodeNum, stage, review, {
+    outputPath: getStageOutputPath(stage),
+    reviewPath: getStageReviewPath(stage),
+    operationId
+  })
 }
 
-export function handleReviewCycleResult(
+export async function handleReviewCycleResult(
   ctx: ReviewCycleContext
-): ReviewCycleOutcome {
+): Promise<ReviewCycleOutcome> {
   const { stage, reviewResult } = ctx
 
   if (reviewResult?.passed) {
+    await persistReviewResult(
+      ctx.statePersistence,
+      ctx.episodeNum,
+      stage,
+      reviewResult,
+      ctx.getStageOutputPath,
+      ctx.getStageReviewPath,
+      ctx.operationId
+    )
+    if (ctx.statePersistence) {
+      await ctx.statePersistence.updateEpisodeStatus(
+        ctx.episodeNum,
+        deriveEpisodeStatusFromStage(stage)
+      )
+    }
     ctx.onStateChange(PIPELINE_STAGE_STATES[stage].done)
     ctx.onLog(
       'info',
@@ -65,24 +80,6 @@ export function handleReviewCycleResult(
       `✅ ${stage} 阶段通过审核 (${reviewResult.score}分)`
     )
     ctx.onStageComplete({ stage, result: reviewResult })
-
-    persistReviewResult(
-      ctx.statePersistence,
-      ctx.episodeNum,
-      stage,
-      reviewResult,
-      ctx.getStageOutputPath,
-      ctx.getStageReviewPath
-    )
-
-    if (ctx.statePersistence) {
-      ctx.statePersistence
-        .updateEpisodeStatus(
-          ctx.episodeNum,
-          deriveEpisodeStatusFromStage(stage)
-        )
-        .catch(console.error)
-    }
 
     return {
       passed: true,
@@ -96,13 +93,14 @@ export function handleReviewCycleResult(
   const reviewScore = reviewResult ? reviewResult.score : 0
 
   if (reviewResult) {
-    persistReviewResult(
+    await persistReviewResult(
       ctx.statePersistence,
       ctx.episodeNum,
       stage,
       reviewResult,
       ctx.getStageOutputPath,
-      ctx.getStageReviewPath
+      ctx.getStageReviewPath,
+      ctx.operationId
     )
   }
 

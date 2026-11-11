@@ -226,7 +226,7 @@ describe('state-machine-stage-runner', () => {
     })
 
     expect(onError).toHaveBeenCalledWith(
-      '导演分析执行失败（将自动重试）',
+      '导演分析执行失败（请求超时，请检查连接后重试）',
       expect.any(Error)
     )
   })

@@ -206,6 +206,8 @@ export interface PipelineContext {
   state: PipelineState
   retryCount: number
   singleStage?: boolean
+  runId?: string
+  running?: boolean
 
   // 执行产物路径
   scriptPath?: string
@@ -254,13 +256,9 @@ export interface Skill {
 // ---------- Reviews ----------
 
 export type ReviewType = 'business' | 'compliance'
-export type ReviewResultStatus = 'PASS' | 'FAIL'
+export type ReviewResultStatus = 'PASS' | 'FAIL' | 'INVALID'
 export type ReviewStage =
-  | 'story_review'
-  | 'script_review'
-  | 'director'
-  | 'art'
-  | 'storyboard_review'
+  'story_review' | 'script_review' | 'director' | 'art' | 'storyboard_review'
 
 export interface ReviewIssue {
   severity: 'critical' | 'major' | 'minor'
@@ -279,6 +277,8 @@ export interface ReviewResult {
   feedback: string
   issues: ReviewIssue[]
   createdAt: string
+  artifactHash?: string
+  inputHashes?: Record<string, string>
 }
 
 export type EpisodeWorkflowStageStatus =
@@ -287,6 +287,8 @@ export type EpisodeWorkflowStageStatus =
   | 'passed'
   | 'failed'
   | 'skipped'
+  | 'stale'
+  | 'interrupted'
 
 export interface EpisodeStageSnapshot {
   stage: PipelineStage
@@ -299,6 +301,7 @@ export interface EpisodeStageSnapshot {
   reviewPath?: string
   lastError?: string
   lastReview?: ReviewResult
+  operationId?: string
 }
 
 export interface EpisodePipelineState {
@@ -323,10 +326,7 @@ export interface ProjectPipelineState {
 export type ModelCategory = 'llm' | 'image' | 'video'
 
 export type LLMProviderType =
-  | 'google'
-  | 'anthropic'
-  | 'openai'
-  | 'openai-compatible'
+  'google' | 'anthropic' | 'openai' | 'openai-compatible'
 export type OpenAIWireApi = 'chat-completions' | 'responses'
 export type OpenAIReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 export type OpenAIImageSize = 'auto' | '1024x1024' | '1024x1536' | '1536x1024'
@@ -364,6 +364,10 @@ export interface GenerateOptions {
   maxTokens?: number
   temperature?: number
   onChunk?: (chunk: string) => void
+  signal?: AbortSignal
+  timeoutMs?: number
+  idleTimeoutMs?: number
+  firstChunkTimeoutMs?: number
 }
 
 // ---------- Logs ----------

@@ -1,21 +1,23 @@
-// ============================================================
-// Pipeline IPC Handlers — 流水线控制的 IPC 处理器
-// ============================================================
-
-import { ipcMain } from 'electron'
+import type { IpcMainInvokeEvent } from 'electron'
 import { IPC } from '@shared/ipc-channels'
 import type { AutomatedPipelineStage } from '@shared/types'
-import { assertRegisteredProjectRoot } from '../security/access-control'
+import {
+  assertEpisodeNumber,
+  assertRegisteredProjectRoot
+} from '../security/access-control'
+import { registerSafeIpcHandler } from '../security/safe-ipc'
 import {
   abortPipeline,
   getPipelineContext,
-  isPipelineBusy,
   launchPipeline,
   pausePipeline,
   resumePipeline,
   retryPipeline,
   runWorkflowAction,
-  skipPipelineReview
+  skipPipelineReview,
+  type PipelineLaunchParams,
+  type WorkflowActionParams,
+  type WorkflowActionName
 } from '../services/pipeline-service'
 import {
   getPipelineRuntime,
@@ -26,247 +28,133 @@ export function getPipeline() {
   return getPipelineRuntime()
 }
 
-async function runWorkflowHandler(
-  action:
-    | 'runStoryGeneration'
-    | 'runStoryReview'
-    | 'runScriptGeneration'
-    | 'runScriptReview'
-    | 'runCharacterDesign'
-    | 'runStoryboardReview',
-  params: {
-    projectId?: string
-    projectPath: string
-    episodeNum: number
-    projectName: string
-    visualStyle: string
-    targetMedium: string
-  }
-): Promise<{
-  success: boolean
-  error?: string
-  stage?: string
-  outputPath?: string
-  review?: unknown
-}> {
-  try {
-    const trustedProjectPath = assertRegisteredProjectRoot(params.projectPath)
-    const runner = getWorkflowRunnerRuntime()
-    return await runWorkflowAction(runner, action, {
-      ...params,
-      projectPath: trustedProjectPath
-    })
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
+function validateStage(
+  stage: unknown
+): asserts stage is AutomatedPipelineStage | undefined {
+  if (
+    stage !== undefined &&
+    !['director', 'art', 'storyboard'].includes(stage as string)
+  ) {
+    throw new Error('无效制作阶段')
   }
 }
 
+export function validateWorkflowParams(input: unknown): WorkflowActionParams {
+  if (!input || typeof input !== 'object') throw new Error('缺少任务参数')
+  const params = input as WorkflowActionParams
+  assertEpisodeNumber(params.episodeNum)
+  if (params.batchNumber !== undefined) assertEpisodeNumber(params.batchNumber)
+  for (const key of [
+    'projectPath',
+    'projectName',
+    'visualStyle',
+    'targetMedium'
+  ] as const) {
+    if (typeof params[key] !== 'string' || params[key].length > 10000)
+      throw new Error(`无效任务参数: ${key}`)
+  }
+  if (
+    params.reviewFeedback !== undefined &&
+    (typeof params.reviewFeedback !== 'string' ||
+      params.reviewFeedback.length > 200000)
+  ) {
+    throw new Error('无效审核反馈')
+  }
+  // Copy only transport data: renderer can never supply a runtime lease or abort controller.
+  return {
+    projectId:
+      typeof params.projectId === 'string' ? params.projectId : undefined,
+    projectPath: assertRegisteredProjectRoot(params.projectPath),
+    episodeNum: params.episodeNum,
+    projectName: params.projectName,
+    visualStyle: params.visualStyle,
+    targetMedium: params.targetMedium,
+    reviewFeedback: params.reviewFeedback,
+    batchNumber: params.batchNumber
+  }
+}
+
+function registerResultHandler(
+  channel: string,
+  action: (input: unknown) => unknown
+): void {
+  registerSafeIpcHandler(
+    channel,
+    async (_event: IpcMainInvokeEvent, input: unknown) => {
+      try {
+        return await action(input)
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : '制作任务失败'
+        }
+      }
+    }
+  )
+}
+
 export function registerPipelineHandlers(): void {
-  ipcMain.handle(
-    IPC.PIPELINE_START,
-    async (
-      _event,
-      params: {
-        projectId: string
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-        startStage?: AutomatedPipelineStage
-        singleStage?: boolean
-      }
-    ) => {
-      try {
-        const trustedProjectPath = assertRegisteredProjectRoot(
-          params.projectPath
-        )
-        const engine = getPipelineRuntime()
-
-        if (isPipelineBusy(engine)) {
-          return { error: '流水线正在执行中，请先停止当前任务' }
-        }
-        return await launchPipeline(
-          engine,
-          { ...params, projectPath: trustedProjectPath },
-          { waitForCompletion: false }
-        )
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        return { error: msg }
-      }
-    }
+  for (const [channel, waitForCompletion] of [
+    [IPC.PIPELINE_START, false],
+    [IPC.PIPELINE_RUN_AND_WAIT, true]
+  ] as const) {
+    registerResultHandler(channel, (input) => {
+      const common = validateWorkflowParams(input)
+      const params = input as PipelineLaunchParams
+      validateStage(params.startStage)
+      if (
+        params.singleStage !== undefined &&
+        typeof params.singleStage !== 'boolean'
+      )
+        throw new Error('无效单阶段参数')
+      if (typeof common.projectId !== 'string') throw new Error('缺少项目标识')
+      return launchPipeline(
+        getPipelineRuntime(),
+        {
+          ...common,
+          projectId: common.projectId,
+          startStage: params.startStage,
+          singleStage: params.singleStage
+        },
+        { waitForCompletion }
+      )
+    })
+  }
+  registerResultHandler(IPC.PIPELINE_PAUSE, () =>
+    pausePipeline(getPipelineRuntime())
   )
-
-  // 批量模式：启动并等待完成
-  ipcMain.handle(
-    IPC.PIPELINE_RUN_AND_WAIT,
-    async (
-      _event,
-      params: {
-        projectId: string
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-        startStage?: AutomatedPipelineStage
-        singleStage?: boolean
-      }
-    ) => {
-      try {
-        const trustedProjectPath = assertRegisteredProjectRoot(
-          params.projectPath
-        )
-        const engine = getPipelineRuntime()
-
-        if (isPipelineBusy(engine)) {
-          return { error: '流水线正在执行中，请先停止当前任务' }
-        }
-        return await launchPipeline(
-          engine,
-          { ...params, projectPath: trustedProjectPath },
-          { waitForCompletion: true }
-        )
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        return { error: msg }
-      }
-    }
+  registerResultHandler(IPC.PIPELINE_ABORT, () =>
+    abortPipeline(getPipelineRuntime())
   )
-
-  ipcMain.handle(IPC.PIPELINE_PAUSE, async () => {
-    const engine = getPipelineRuntime()
-    return pausePipeline(engine)
+  registerResultHandler(IPC.PIPELINE_RESUME, () =>
+    resumePipeline(getPipelineRuntime())
+  )
+  registerResultHandler(IPC.PIPELINE_RETRY, (stage) => {
+    validateStage(stage)
+    return retryPipeline(getPipelineRuntime(), stage)
   })
-
-  ipcMain.handle(IPC.PIPELINE_ABORT, async () => {
-    const engine = getPipelineRuntime()
-    return abortPipeline(engine)
+  registerResultHandler(IPC.PIPELINE_SKIP, (stage) => {
+    validateStage(stage)
+    return skipPipelineReview(getPipelineRuntime(), stage)
   })
-
-  ipcMain.handle(IPC.PIPELINE_RESUME, async () => {
-    const engine = getPipelineRuntime()
-    return resumePipeline(engine)
-  })
-
-  ipcMain.handle(
-    IPC.PIPELINE_RETRY,
-    async (_event, stage?: AutomatedPipelineStage) => {
-      const engine = getPipelineRuntime()
-      return retryPipeline(engine, stage)
-    }
+  registerSafeIpcHandler(IPC.PIPELINE_GET_STATE, () =>
+    getPipelineContext(getPipelineRuntime())
   )
-
-  ipcMain.handle(
-    IPC.PIPELINE_SKIP,
-    async (_event, stage?: AutomatedPipelineStage) => {
-      const engine = getPipelineRuntime()
-      return skipPipelineReview(engine, stage)
-    }
-  )
-
-  ipcMain.handle(IPC.PIPELINE_GET_STATE, async () => {
-    const engine = getPipelineRuntime()
-    return getPipelineContext(engine)
-  })
-
-  ipcMain.handle(
-    IPC.WORKFLOW_RUN_STORY_GENERATION,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-      }
-    ) => {
-      return await runWorkflowHandler('runStoryGeneration', params)
-    }
-  )
-
-  ipcMain.handle(
-    IPC.WORKFLOW_RUN_STORY_REVIEW,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-      }
-    ) => {
-      return await runWorkflowHandler('runStoryReview', params)
-    }
-  )
-
-  ipcMain.handle(
-    IPC.WORKFLOW_RUN_SCRIPT_GENERATION,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-      }
-    ) => {
-      return await runWorkflowHandler('runScriptGeneration', params)
-    }
-  )
-
-  ipcMain.handle(
-    IPC.WORKFLOW_RUN_SCRIPT_REVIEW,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-      }
-    ) => {
-      return await runWorkflowHandler('runScriptReview', params)
-    }
-  )
-
-  ipcMain.handle(
-    IPC.WORKFLOW_RUN_CHARACTER_DESIGN,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-      }
-    ) => {
-      return await runWorkflowHandler('runCharacterDesign', params)
-    }
-  )
-
-  ipcMain.handle(
-    IPC.WORKFLOW_RUN_STORYBOARD_REVIEW,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        episodeNum: number
-        projectName: string
-        visualStyle: string
-        targetMedium: string
-      }
-    ) => {
-      return await runWorkflowHandler('runStoryboardReview', params)
-    }
-  )
+  const workflows: Array<[string, WorkflowActionName]> = [
+    [IPC.WORKFLOW_RUN_STORY_GENERATION, 'runStoryGeneration'],
+    [IPC.WORKFLOW_RUN_STORY_REVIEW, 'runStoryReview'],
+    [IPC.WORKFLOW_RUN_SCRIPT_GENERATION, 'runScriptGeneration'],
+    [IPC.WORKFLOW_RUN_SCRIPT_REVIEW, 'runScriptReview'],
+    [IPC.WORKFLOW_RUN_CHARACTER_DESIGN, 'runCharacterDesign'],
+    [IPC.WORKFLOW_RUN_STORYBOARD_REVIEW, 'runStoryboardReview']
+  ]
+  for (const [channel, action] of workflows) {
+    registerResultHandler(channel, (input) =>
+      runWorkflowAction(
+        getWorkflowRunnerRuntime(),
+        action,
+        validateWorkflowParams(input)
+      )
+    )
+  }
 }

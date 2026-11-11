@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  getEpisodeCardSummary,
-  getProjectEntryLabel,
-  getProjectProgress
-} from './project-page-view'
+import { getProjectProgress } from './project-page-view'
 import type { Episode } from '@shared/types'
 
 function createEpisode(partial: Partial<Episode> = {}): Episode {
@@ -14,6 +10,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -29,8 +26,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
 }
 
 describe('project-page-view', () => {
-  it('返回项目入口文案和进度摘要', () => {
-    expect(getProjectEntryLabel({ entryStage: 'story' })).toBe('从剧情开始')
+  it('按已完成集数计算项目进度', () => {
     expect(
       getProjectProgress([
         createEpisode({ status: 'complete' }),
@@ -39,23 +35,6 @@ describe('project-page-view', () => {
     ).toEqual({
       completedCount: 1,
       progressPct: 50
-    })
-  })
-
-  it('返回单集卡片摘要', () => {
-    expect(
-      getEpisodeCardSummary(
-        createEpisode({
-          status: 'director',
-          totalPrompts: 8,
-          totalDurationSeconds: 90
-        })
-      )
-    ).toEqual({
-      stageLabel: '导演',
-      progress: 62,
-      promptCountLabel: '8 条提示词',
-      durationLabel: '90s'
     })
   })
 })

@@ -299,8 +299,7 @@ export async function executeScriptGenerationAction(
 }
 
 interface RegenerateStoryAndReviewDeps
-  extends StoryGenerationDeps,
-    StoryReviewDeps {
+  extends StoryGenerationDeps, StoryReviewDeps {
   reloadDocument?: (episodeNum: number) => Promise<unknown>
 }
 
@@ -325,13 +324,16 @@ export async function executeRegenerateStoryAndReviewAction(
   }
 
   await deps.reloadDocument?.(currentEp)
-  const nextReview = await executeStoryReviewAction(currentProject, currentEp, deps)
+  const nextReview = await executeStoryReviewAction(
+    currentProject,
+    currentEp,
+    deps
+  )
   return { generation, review: nextReview }
 }
 
 interface RegenerateScriptAndReviewDeps
-  extends ScriptGenerationDeps,
-    ScriptReviewDeps {
+  extends ScriptGenerationDeps, ScriptReviewDeps {
   reloadDocument?: (episodeNum: number) => Promise<unknown>
 }
 
@@ -356,7 +358,11 @@ export async function executeRegenerateScriptAndReviewAction(
   }
 
   await deps.reloadDocument?.(currentEp)
-  const nextReview = await executeScriptReviewAction(currentProject, currentEp, deps)
+  const nextReview = await executeScriptReviewAction(
+    currentProject,
+    currentEp,
+    deps
+  )
   return { generation, review: nextReview }
 }
 

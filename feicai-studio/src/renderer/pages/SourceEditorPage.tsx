@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useDocumentEditorActions } from '@renderer/hooks/useDocumentEditorActions'
@@ -17,6 +17,7 @@ import {
   resolveProjectArtifactPath
 } from '@shared/path-resolver'
 import { useShallow } from 'zustand/react/shallow'
+import { confirmDocumentLeave } from '@renderer/stores/documentDraftStore'
 import type { SourceChapterItem } from '@shared/ipc-contracts'
 import './ScriptEditorPage.css'
 
@@ -37,6 +38,9 @@ export default function SourceEditorPage() {
   const [sourceChapters, setSourceChapters] = useState<SourceChapterItem[]>([])
   const [selectedChapterPath, setSelectedChapterPath] = useState('')
   const [loadingChapters, setLoadingChapters] = useState(false)
+  const [chaptersProjectId, setChaptersProjectId] = useState('')
+  const activeProjectIdRef = useRef(currentProject?.id)
+  activeProjectIdRef.current = currentProject?.id
 
   const config = normalizeProjectConfig(currentProject?.config)
   const sourcePath = currentProject
@@ -50,7 +54,9 @@ export default function SourceEditorPage() {
     currentProject?.name || '未命名项目'
   )
   const activeSourcePath =
-    sourceViewMode === 'chapter' && selectedChapterPath
+    sourceViewMode === 'chapter' &&
+    selectedChapterPath &&
+    chaptersProjectId === currentProject?.id
       ? selectedChapterPath
       : sourcePath
   const selectedChapter = sourceChapters.find(
@@ -68,7 +74,9 @@ export default function SourceEditorPage() {
     setContent,
     saved,
     reload: loadSource,
-    save
+    save,
+    documentSession,
+    overwriteConflict
   } = useProjectTextFile({
     enabled: !!currentProject,
     filePath: activeSourcePath,
@@ -88,15 +96,13 @@ export default function SourceEditorPage() {
     }
   })
 
-  const {
-    importMarkdown: handleImportMarkdown,
-    saveDocument: handleSave,
-    ensureSaved
-  } = useDocumentEditorActions({
-    setContent,
-    save,
-    addToast
-  })
+  const { importMarkdown: handleImportMarkdown, saveDocument: handleSave } =
+    useDocumentEditorActions({
+      setContent,
+      save,
+      addToast,
+      documentKey: activeSourcePath
+    })
 
   useEffect(() => {
     if (!currentProject) {
@@ -140,12 +146,14 @@ export default function SourceEditorPage() {
     }
 
     let cancelled = false
+    setChaptersProjectId('')
     setLoadingChapters(true)
     ;(async () => {
       try {
         const chapters = await listSourceChapters(currentProject.id)
         if (cancelled) return
         setSourceChapters(chapters)
+        setChaptersProjectId(currentProject.id)
         setSelectedChapterPath((current) => {
           if (
             current &&
@@ -155,9 +163,6 @@ export default function SourceEditorPage() {
           }
           return chapters[0]?.filePath || ''
         })
-        if (chapters.length > 0) {
-          setSourceViewMode('chapter')
-        }
       } catch {
         if (!cancelled) {
           setSourceChapters([])
@@ -177,10 +182,13 @@ export default function SourceEditorPage() {
 
   const reloadSourceChapters = async () => {
     if (!currentProject) return
+    if (!confirmDocumentLeave()) return
     setLoadingChapters(true)
     try {
       const chapters = await listSourceChapters(currentProject.id)
+      if (activeProjectIdRef.current !== currentProject.id) return
       setSourceChapters(chapters)
+      setChaptersProjectId(currentProject.id)
       setSelectedChapterPath((current) => {
         if (
           current &&
@@ -195,29 +203,34 @@ export default function SourceEditorPage() {
       }
       addToast('success', `已加载 ${chapters.length} 个章节文件`)
     } catch {
-      addToast('error', '章节列表加载失败')
+      if (activeProjectIdRef.current === currentProject.id)
+        addToast('error', '章节列表加载失败')
     } finally {
-      setLoadingChapters(false)
+      if (activeProjectIdRef.current === currentProject.id)
+        setLoadingChapters(false)
     }
   }
 
   const handleSourceViewModeChange = async (nextMode: SourceViewMode) => {
     if (nextMode === sourceViewMode) return
-    const savedOk = await ensureSaved(saved)
-    if (!savedOk) return
+    if (!confirmDocumentLeave()) return
     setSourceViewMode(nextMode)
   }
 
   const handleChapterSelect = async (filePath: string) => {
-    if (!filePath || filePath === selectedChapterPath) return
-    const savedOk = await ensureSaved(saved)
-    if (!savedOk) return
+    if (
+      !filePath ||
+      (filePath === selectedChapterPath && sourceViewMode === 'chapter')
+    )
+      return
+    if (!confirmDocumentLeave()) return
     setSelectedChapterPath(filePath)
     setSourceViewMode('chapter')
   }
 
   const handleMigrateLegacyNovel = async () => {
     if (!currentProject) return
+    if (!confirmDocumentLeave()) return
     setMigratingLegacyNovel(true)
     try {
       const result = await migrateLegacyNovelDirectory(
@@ -247,6 +260,10 @@ export default function SourceEditorPage() {
       saved={saved}
       content={content}
       onContentChange={setContent}
+      documentSession={documentSession}
+      onOverwriteConflict={overwriteConflict}
+      onReload={loadSource}
+      onSave={handleSave}
       toolbarVariant="source"
       workflow={{
         title: '准备小说原文',
@@ -319,6 +336,7 @@ export default function SourceEditorPage() {
                 onClick={reloadSourceChapters}
                 disabled={loadingChapters}
                 title="重新读取章节目录"
+                aria-label="重新读取章节目录"
               >
                 ↻
               </button>
@@ -332,6 +350,11 @@ export default function SourceEditorPage() {
                   }`}
                   onClick={() => handleChapterSelect(chapter.filePath)}
                   title={chapter.fileName}
+                  aria-current={
+                    chapter.filePath === selectedChapterPath
+                      ? 'true'
+                      : undefined
+                  }
                 >
                   <span className="source-chapter-index">
                     {String(chapter.index).padStart(2, '0')}
@@ -352,12 +375,14 @@ export default function SourceEditorPage() {
                 <button
                   className={sourceViewMode === 'full' ? 'active' : ''}
                   onClick={() => handleSourceViewModeChange('full')}
+                  aria-pressed={sourceViewMode === 'full'}
                 >
                   整本
                 </button>
                 <button
                   className={sourceViewMode === 'chapter' ? 'active' : ''}
                   onClick={() => handleSourceViewModeChange('chapter')}
+                  aria-pressed={sourceViewMode === 'chapter'}
                 >
                   章节
                 </button>

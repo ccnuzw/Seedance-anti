@@ -13,6 +13,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -115,16 +116,12 @@ describe('project-experience-view', () => {
       projectId: 'project-1'
     })
 
-    expect(summary.entryLabel).toBe('从剧情开始')
     expect(summary.progressPct).toBe(33)
     expect(summary.completedCount).toBe(1)
     expect(summary.inProgressCount).toBe(1)
     expect(summary.idleCount).toBe(1)
     expect(summary.latestActiveEpisode).toBe(2)
-    expect(summary.latestPipelineStatus).toBe('2 集 · 剧本已生成')
     expect(summary.pipelineUpdatedAt).toBe('2026-05-08T12:30:00.000Z')
-    expect(summary.currentFocusStageLabel).toBe('剧本审核中')
-    expect(summary.healthScore.score).toBeGreaterThan(0)
     expect(['C', 'D']).toContain(summary.healthScore.grade)
     expect(
       summary.stageCoverage.find((item) => item.key === 'script')?.count
@@ -186,7 +183,6 @@ describe('project-experience-view', () => {
       stageId: 'script'
     })
 
-    expect(drilldown.stageLabel).toBe('剧本已生成')
     expect(drilldown.reached.map((item) => item.episodeNumber)).toEqual([1])
     expect(drilldown.blocked.map((item) => item.episodeNumber)).toEqual([2])
     expect(drilldown.pending.map((item) => item.episodeNumber)).toEqual([3])

@@ -8,84 +8,165 @@
 //   - Seedance 提示词的条数和总时长
 //
 
-import type { ReviewIssue } from '@shared/types'
+import type { ReviewIssue, ReviewResultStatus } from '@shared/types'
+import { parseDocument } from 'yaml'
+
+export interface ParsedReview {
+  result: ReviewResultStatus
+  passed: boolean
+  score: number
+  issues: ReviewIssue[]
+  feedback: string
+}
 
 export class OutputParser {
   /**
    * 解析审核结果
    * LLM 审核输出通常包含评分和 PASS/FAIL 结论
    */
-  static parseReview(
-    response: string,
-    passScore = 7
-  ): {
-    passed: boolean
-    score: number
-    issues: ReviewIssue[]
-    feedback: string
-  } {
+  static parseReview(response: string, passScore = 7): ParsedReview {
     const text = response.trim()
+    const invalid = (reason: string, score = 0): ParsedReview => ({
+      result: 'INVALID',
+      passed: false,
+      score,
+      issues: [
+        { severity: 'critical', description: `审核输出无效：${reason}` }
+      ],
+      feedback: text
+    })
+    if (!Number.isFinite(passScore) || passScore < 0 || passScore > 10) {
+      return invalid('通过阈值必须在 0..10 范围内')
+    }
 
-    // 提取评分 — 匹配常见的评分格式
-    let score = 7 // 默认锚定分数
-    const scorePatterns = [
-      /(?:总[分评]|评分|得分|分数)[：:]\s*(\d+(?:\.\d+)?)/,
-      /(\d+(?:\.\d+)?)\s*[/／]\s*10/,
-      /(?:score|rating)[：:]\s*(\d+(?:\.\d+)?)/i,
-      /(\d+(?:\.\d+)?)\s*分/
-    ]
-    for (const pattern of scorePatterns) {
-      const match = text.match(pattern)
-      if (match) {
-        const parsed = parseFloat(match[1])
-        if (parsed >= 1 && parsed <= 10) {
-          score = parsed
-          break
+    const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i)
+    const jsonText = fenced ? fenced[1].trim() : text
+    if (jsonText.startsWith('{') || jsonText.startsWith('[')) {
+      let value: Record<string, unknown>
+      try {
+        if (parseDocument(jsonText, { uniqueKeys: true }).errors.length > 0) {
+          return invalid('JSON 含重复字段或无效结构')
         }
+        const parsed: unknown = JSON.parse(jsonText)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return invalid('必须返回审核 JSON 对象')
+        }
+        value = parsed as Record<string, unknown>
+      } catch {
+        return invalid('JSON 无法解析')
+      }
+      if (value.result !== 'PASS' && value.result !== 'FAIL') {
+        return invalid('缺少明确的 PASS/FAIL 结论')
+      }
+      if (
+        typeof value.score !== 'number' ||
+        !Number.isFinite(value.score) ||
+        value.score < 0 ||
+        value.score > 10
+      ) {
+        return invalid('评分必须是 0..10 的有限数值')
+      }
+      if (typeof value.feedback !== 'string' || !Array.isArray(value.issues)) {
+        return invalid('缺少 feedback 或 issues')
+      }
+      const issues: ReviewIssue[] = []
+      for (const issue of value.issues) {
+        if (
+          !issue ||
+          typeof issue !== 'object' ||
+          !['critical', 'major', 'minor'].includes(issue.severity) ||
+          typeof issue.description !== 'string' ||
+          !issue.description.trim() ||
+          (issue.location !== undefined &&
+            typeof issue.location !== 'string') ||
+          (issue.suggestion !== undefined &&
+            typeof issue.suggestion !== 'string')
+        ) {
+          return invalid('问题清单格式不合法', value.score)
+        }
+        issues.push({
+          severity: issue.severity,
+          description: issue.description,
+          ...(issue.location !== undefined ? { location: issue.location } : {}),
+          ...(issue.suggestion !== undefined
+            ? { suggestion: issue.suggestion }
+            : {})
+        })
+      }
+      const passed = value.result === 'PASS' && value.score >= passScore
+      if (
+        value.passed !== undefined &&
+        value.passed !== (value.result === 'PASS')
+      ) {
+        return invalid('结论与 passed 相互矛盾', value.score)
+      }
+      const opposite = value.result === 'PASS' ? 'FAIL' : 'PASS'
+      if (
+        new RegExp(`\\b${opposite}\\b`, 'i').test(value.feedback) ||
+        ['verdict', 'conclusion'].some(
+          (key) => value[key] !== undefined && value[key] !== value.result
+        )
+      ) {
+        return invalid('综合意见与最终结论相互矛盾', value.score)
+      }
+      return {
+        result: passed ? 'PASS' : 'FAIL',
+        passed,
+        score: value.score,
+        issues,
+        feedback: value.feedback
       }
     }
 
-    // 提取 PASS/FAIL — 匹配常见的结论格式
-    // 阈值使用项目级 passScore 参数
-    let passed = score >= passScore
-    const passPatterns = [
-      /(?:结论|结果|verdict|conclusion)[：:]\s*(PASS|通过)/i,
-      /(?:✅|☑️)\s*(PASS|通过)/i,
-      /\*\*(PASS|通过)\*\*/i
+    // 兼容明确的旧 Markdown；绝不从分数或缺省值推断通过。
+    const normalized = text.replace(/\*\*|__/g, '')
+    const explicitVerdict =
+      /(?:^|\n)\s*(?:[-#>]+\s*)?(?:(?:✅|❌|☑️?|✖️?)\s*)?(?:(?:最终结论|审核结论|结论|结果|业务审核|合规审核|拆解质检|verdict|conclusion)\s*[：:]\s*)?(?:PASS|FAIL|不通过|未通过|通过)(?=\s|[（(。！!]|$)/i
+    if (!explicitVerdict.test(normalized)) return invalid('缺少明确的最终结论')
+    const verdicts = new Set<string>(
+      [...normalized.matchAll(/\b(PASS|FAIL)\b/gi)].map((match) =>
+        match[1].toUpperCase()
+      )
+    )
+    for (const match of normalized.matchAll(
+      /(?:结论|结果|审核|质检|verdict|conclusion)\s*[：:]\s*(不通过|未通过|通过)/gi
+    )) {
+      verdicts.add(match[1] === '通过' ? 'PASS' : 'FAIL')
+    }
+    if (verdicts.size !== 1) return invalid('结论缺失或相互矛盾')
+    const scores = [
+      ...normalized.matchAll(
+        /(?:综合评分|总平均分|剧情点平均分|平均分|总分|总评|评分|得分|分数|score|rating)\s*[：:]\s*(-?\d+(?:\.\d+)?)(?:\s*[/／]\s*(\d+(?:\.\d+)?))?/gi
+      )
     ]
-    const failPatterns = [
-      /(?:结论|结果|verdict|conclusion)[：:]\s*(FAIL|不通过|未通过)/i,
-      /(?:❌|✖️)\s*(FAIL|不通过|未通过)/i,
-      /\*\*(FAIL|不通过|未通过)\*\*/i
-    ]
-    // 优先检测明确的 PASS 标记
-    let hasExplicitPass = false
-    let hasExplicitFail = false
-    for (const pattern of passPatterns) {
-      if (pattern.test(text)) {
-        hasExplicitPass = true
-        break
-      }
+    // 没有命名总分时，仅接受唯一的 X/10，而不是任意“X 分”。
+    const matches =
+      scores.length > 0
+        ? scores
+        : [
+            ...normalized.matchAll(
+              /(-?\d+(?:\.\d+)?)\s*[/／]\s*(\d+(?:\.\d+)?)/g
+            )
+          ]
+    const values = new Set(matches.map((match) => Number(match[1])))
+    if (
+      values.size !== 1 ||
+      matches.some((match) => match[2] && Number(match[2]) !== 10)
+    ) {
+      return invalid('必须包含明确且唯一的 10 分制综合评分')
     }
-    for (const pattern of failPatterns) {
-      if (pattern.test(text)) {
-        hasExplicitFail = true
-        break
-      }
+    const score = Number(matches[0][1])
+    if (!Number.isFinite(score) || score < 0 || score > 10) {
+      return invalid('评分必须在 0..10 范围内')
     }
-    // 明确 FAIL 永远优先；明确 PASS 仍需满足项目阈值，避免模型用
-    // “PASS” 绕过旧版质量门槛。
-    if (hasExplicitFail) {
-      passed = false
-    } else if (hasExplicitPass) {
-      passed = score >= passScore
+    const passed = verdicts.has('PASS') && score >= passScore
+    return {
+      result: passed ? 'PASS' : 'FAIL',
+      passed,
+      score,
+      issues: this.extractIssues(text),
+      feedback: text
     }
-    // 如果没有明确标记，使用分数阈值（score >= passScore）
-
-    // 提取问题列表
-    const issues = this.extractIssues(text)
-
-    return { passed, score, issues, feedback: text }
   }
 
   /**

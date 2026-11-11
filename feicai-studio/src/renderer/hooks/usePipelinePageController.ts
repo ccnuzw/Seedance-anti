@@ -376,8 +376,7 @@ export function usePipelinePageController() {
         primaryLabel: currentEpisode?.hasStoryBeat
           ? storyReviewMeta?.primaryLabel ||
             (isNovelEntry ? '审核批次' : '审核剧情')
-          : storyMeta?.primaryLabel ||
-            (isNovelEntry ? '拆解一批' : '生成剧情'),
+          : storyMeta?.primaryLabel || (isNovelEntry ? '拆解一批' : '生成剧情'),
         primaryDisabled: currentEpisode?.hasStoryBeat
           ? storyReviewMeta?.primaryDisabled
           : storyMeta?.primaryDisabled,

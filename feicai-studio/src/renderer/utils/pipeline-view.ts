@@ -58,12 +58,7 @@ export const FULL_WORKFLOW: Array<{
 }))
 
 export type FlowCardState =
-  | 'done'
-  | 'active'
-  | 'ready'
-  | 'blocked'
-  | 'skipped'
-  | 'warning'
+  'done' | 'active' | 'ready' | 'blocked' | 'skipped' | 'warning'
 export type WorkflowActionId =
   | 'story'
   | 'story_review'
@@ -323,7 +318,8 @@ export function getWorkflowActionAvailability(
     }
     return {
       canStart: true,
-      reason: '已满足剧本生成前置条件。若当前集没有未用剧情点，执行时会提示先补充剧情库存。'
+      reason:
+        '已满足剧本生成前置条件。若当前集没有未用剧情点，执行时会提示先补充剧情库存。'
     }
   }
 
@@ -738,9 +734,7 @@ export function resolveWorkflowCardActionSpec(
     case 'story_review':
       return {
         openLabel: '查看剧情审核',
-        openPath: currentEpisode?.hasStoryReview
-          ? storyReviewPath
-          : storyPath,
+        openPath: currentEpisode?.hasStoryReview ? storyReviewPath : storyPath,
         primaryLabel: currentEpisode?.hasStoryReview
           ? '查看审核结果'
           : '审核当前批次',

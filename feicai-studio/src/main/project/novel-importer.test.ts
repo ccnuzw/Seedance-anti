@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  mkdtempSync,
-  mkdirSync,
-  rmSync,
-  writeFileSync
-} from 'fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
@@ -79,11 +74,7 @@ Chapter 1: Arrival
         '# 第2章 救人\n\n内容',
         'utf-8'
       )
-      writeFileSync(
-        join(chaptersDir, 'notes.md'),
-        '# 忽略文件\n',
-        'utf-8'
-      )
+      writeFileSync(join(chaptersDir, 'notes.md'), '# 忽略文件\n', 'utf-8')
 
       const chapters = listSourceChapters({
         projectPath,

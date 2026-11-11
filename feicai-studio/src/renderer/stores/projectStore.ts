@@ -47,6 +47,9 @@ interface ProjectStore {
   setCurrentProject: (project: Project | null) => void
 }
 
+// Invalidate pending project reads when selection changes or a newer load starts.
+let projectEpoch = 0
+
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -60,47 +63,59 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   loadProject: async (id) => {
+    const epoch = ++projectEpoch
+    if (get().currentProject?.id !== id)
+      set({ currentProject: null, episodes: [] })
     const project = await getProject(id)
-    set({ currentProject: project })
-    if (project) {
-      const episodes = await listProjectEpisodes(project.id)
-      set({ episodes })
-    }
+    if (epoch !== projectEpoch) return
+    const episodes = project ? await listProjectEpisodes(project.id) : []
+    if (epoch === projectEpoch) set({ currentProject: project, episodes })
   },
 
   loadEpisodes: async (projectId) => {
+    const epoch = projectEpoch
     const episodes = await listProjectEpisodes(projectId)
-    set({ episodes })
+    if (epoch === projectEpoch && get().currentProject?.id === projectId)
+      set({ episodes })
   },
 
   refreshProject: async () => {
     const { currentProject } = get()
-    if (!currentProject) return
-    const episodes = await listProjectEpisodes(currentProject.id)
-    set({ episodes })
+    if (currentProject) await get().loadEpisodes(currentProject.id)
   },
 
   syncEpisodeStatus: async () => {
     const { currentProject } = get()
     if (!currentProject) return
+    const epoch = projectEpoch
     clearCachedTextFiles()
     const episodes = await syncProjectStatus(
       currentProject.id,
       currentProject.projectPath
     )
-    set({ episodes })
+    if (
+      epoch === projectEpoch &&
+      get().currentProject?.id === currentProject.id
+    )
+      set({ episodes })
   },
 
   syncSingleEpisodeStatus: async (episodeNum) => {
     const { currentProject } = get()
     if (!currentProject || episodeNum <= 0) return
+    const epoch = projectEpoch
     clearCachedTextFiles()
     const episode = await syncSingleEpisodeSnapshot({
       projectId: currentProject.id,
       projectPath: currentProject.projectPath,
       episodeNum
     })
-    if (!episode) return
+    if (
+      !episode ||
+      epoch !== projectEpoch ||
+      get().currentProject?.id !== currentProject.id
+    )
+      return
 
     set((state) => ({
       episodes: state.episodes.some((item) => item.id === episode.id)
@@ -120,16 +135,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   updateProject: async (id, data) => {
+    const epoch = projectEpoch
     const project = await updateProjectRecord(id, data)
     set((state) => ({
       currentProject:
-        state.currentProject?.id === id ? project : state.currentProject,
+        epoch === projectEpoch && state.currentProject?.id === id
+          ? project
+          : state.currentProject,
       projects: state.projects.map((item) => (item.id === id ? project : item))
     }))
-    if (get().currentProject?.id === id) {
-      const episodes = await listProjectEpisodes(id)
-      set({ episodes })
-    }
+    if (epoch === projectEpoch && get().currentProject?.id === id)
+      await get().loadEpisodes(id)
     return project
   },
 
@@ -142,10 +158,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await deleteProjectRecord(id)
     const { currentProject } = get()
     if (currentProject?.id === id) {
-      set({ currentProject: null, episodes: [] })
+      get().setCurrentProject(null)
     }
     await get().loadProjects()
   },
 
-  setCurrentProject: (project) => set({ currentProject: project })
+  setCurrentProject: (project) => {
+    const changed = get().currentProject?.id !== project?.id
+    if (changed) projectEpoch++
+    set((state) => ({
+      currentProject: project,
+      episodes: changed ? [] : state.episodes
+    }))
+  }
 }))

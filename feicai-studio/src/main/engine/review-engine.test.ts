@@ -1,254 +1,270 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { dirname, join } from 'path'
+import { ReviewEngine } from './review-engine'
+import { PromptAssembler } from './prompt-assembler'
+import { isReviewCurrent } from './artifact-provenance'
+import {
+  resolveEpisodeArtifactPath,
+  resolveProjectArtifactPath
+} from '@shared/path-resolver'
+import type { EpisodeArtifactId } from '@shared/artifact-registry'
+import type { Skill } from '@shared/types'
 
-const readFile = vi.fn()
-const loadSkill = vi.fn()
-const assembleReview = vi.fn()
-const generate = vi.fn()
+const pass = JSON.stringify({
+  result: 'PASS',
+  score: 8.5,
+  feedback: '逐项核验通过',
+  issues: []
+})
+const fail = JSON.stringify({
+  result: 'FAIL',
+  score: 5,
+  feedback: '存在问题',
+  issues: [
+    {
+      severity: 'major',
+      description: '核心冲突不足',
+      location: '中段',
+      suggestion: '补足对抗'
+    }
+  ]
+})
+const skill: Skill = {
+  name: 'review',
+  description: '',
+  systemPrompt: '逐项核验',
+  templates: {},
+  examples: {},
+  skillPath: '',
+  fileManifest: []
+}
 
-vi.mock('fs/promises', () => ({
-  readFile
-}))
+let projectPath: string
+function writeArtifact(id: EpisodeArtifactId, content: string): void {
+  const path = resolveEpisodeArtifactPath(projectPath, id, 1)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, content)
+}
 
-vi.mock('./output-parser', () => ({
-  OutputParser: {
-    parseReview: vi.fn()
-  }
-}))
+function createEngine() {
+  const load = vi.fn().mockResolvedValue(skill)
+  const generate = vi.fn().mockResolvedValue(pass)
+  const engine = new ReviewEngine({ load } as never, new PromptAssembler())
+  engine.setProvider({ generate } as never)
+  return { engine, load, generate }
+}
 
-describe('review-engine', async () => {
-  const { ReviewEngine } = await import('./review-engine')
-  const { OutputParser } = await import('./output-parser')
+beforeEach(() => {
+  projectPath = mkdtempSync(join(tmpdir(), 'feicai-review-engine-'))
+  writeArtifact('script', '# 剧本\n【卡黑】')
+  writeArtifact('directorAnalysis', '# 导演')
+  writeArtifact('artDesign', '# 服化道')
+  writeArtifact('seedancePrompts', '# 提示词')
+  const source = resolveProjectArtifactPath(projectPath, 'sourceNovel')
+  mkdirSync(dirname(source), { recursive: true })
+  writeFileSync(source, '# 原文')
+})
 
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+afterEach(() => {
+  vi.useRealTimers()
+  rmSync(projectPath, { recursive: true, force: true })
+})
 
-  it('reviewContent 会合并业务审核与合规审核结果，并以业务评分作为最终分数', async () => {
-    loadSkill
-      .mockResolvedValueOnce({ systemPrompt: 'business-skill' })
-      .mockResolvedValueOnce({ systemPrompt: 'compliance-skill' })
-    assembleReview
-      .mockReturnValueOnce({ system: 'business-system', user: 'business-user' })
-      .mockReturnValueOnce({
-        system: 'compliance-system',
-        user: 'compliance-user'
-      })
-    generate
-      .mockResolvedValueOnce('business-response')
-      .mockResolvedValueOnce('compliance-response')
-    vi.mocked(OutputParser.parseReview)
-      .mockReturnValueOnce({
-        passed: true,
-        score: 8,
-        issues: [{ severity: 'minor', description: '节奏可更紧凑' }],
-        feedback: '业务通过'
-      })
-      .mockReturnValueOnce({
-        passed: false,
-        score: 6,
-        issues: [{ severity: 'critical', description: '存在合规风险' }],
-        feedback: '合规不通过'
-      })
-
-    const engine = new ReviewEngine(
-      { load: loadSkill } as never,
-      { assembleReview } as never
-    )
-    engine.setProvider({ generate } as never)
-
+describe('ReviewEngine', () => {
+  it('使用真实解析器合并两步审核，合规未通过阻断最终通过', async () => {
+    const { engine, generate } = createEngine()
+    generate.mockResolvedValueOnce(pass).mockResolvedValueOnce(fail)
     const result = await engine.reviewContent({
       stage: 'script_review',
       reviewSkillName: 'script-review-skill',
-      outputToReview: '# output',
-      originalScript: '# script'
+      outputToReview: '# 剧本'
     })
-
-    expect(loadSkill).toHaveBeenNthCalledWith(1, 'script-review-skill')
-    expect(loadSkill).toHaveBeenNthCalledWith(2, 'compliance-review-skill')
-    expect(generate).toHaveBeenNthCalledWith(1, {
-      system: 'business-system',
-      user: 'business-user'
-    })
-    expect(generate).toHaveBeenNthCalledWith(2, {
-      system: 'compliance-system',
-      user: 'compliance-user'
-    })
-    expect(result.result).toBe('FAIL')
-    expect(result.passed).toBe(false)
-    expect(result.score).toBe(8)
-    expect(result.issues).toEqual([
-      { severity: 'minor', description: '节奏可更紧凑' },
-      { severity: 'critical', description: '存在合规风险' }
-    ])
-    expect(result.feedback).toContain('## 业务审核: ✅ PASS (8分)')
+    expect(result).toMatchObject({ result: 'FAIL', passed: false, score: 8.5 })
+    expect(result.issues[0].location).toBe('中段')
     expect(result.feedback).toContain('## 合规审核: ❌ FAIL')
+    expect(generate).toHaveBeenCalledTimes(2)
   })
 
-  it('review(director) 会重新读取最新产物，并按阶段选择正确审核 skill', async () => {
-    readFile.mockResolvedValueOnce('# director output')
-    loadSkill
-      .mockResolvedValueOnce({ systemPrompt: 'director-review-skill' })
-      .mockResolvedValueOnce({ systemPrompt: 'compliance-review-skill' })
-    assembleReview
-      .mockReturnValueOnce({ system: 'director-system', user: 'director-user' })
-      .mockReturnValueOnce({
-        system: 'compliance-system',
-        user: 'compliance-user'
-      })
+  it.each([0, 1])('任一步输出无效都保留 INVALID（第%s步）', async (step) => {
+    const { engine, generate } = createEngine()
     generate
-      .mockResolvedValueOnce('director-response')
-      .mockResolvedValueOnce('compliance-response')
-    vi.mocked(OutputParser.parseReview)
-      .mockReturnValueOnce({
-        passed: true,
-        score: 9,
-        issues: [],
-        feedback: '业务通过'
+      .mockResolvedValueOnce(step === 0 ? '看起来很好' : pass)
+      .mockResolvedValueOnce(step === 1 ? 'FAIL' : pass)
+    expect(
+      await engine.reviewContent({
+        stage: 'script_review',
+        reviewSkillName: 'script-review-skill',
+        outputToReview: '# 剧本'
       })
-      .mockReturnValueOnce({
-        passed: true,
-        score: 9,
-        issues: [],
-        feedback: '合规通过'
+    ).toMatchObject({ result: 'INVALID', passed: false })
+  })
+
+  it('业务请求失败不加载或启动合规请求', async () => {
+    const { engine, generate, load } = createEngine()
+    generate.mockRejectedValueOnce(new Error('provider rejected'))
+    await expect(
+      engine.reviewContent({
+        stage: 'script_review',
+        reviewSkillName: 'script-review-skill',
+        outputToReview: '# 剧本'
       })
+    ).rejects.toThrow('provider rejected')
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(load).toHaveBeenCalledTimes(1)
+  })
 
-    const engine = new ReviewEngine(
-      { load: loadSkill } as never,
-      { assembleReview } as never
-    )
-    engine.setProvider({ generate } as never)
-
-    const result = await engine.review('director', {
-      projectPath: '/tmp/project',
-      episodeNum: 3,
-      projectConfig: {
-        directories: {
-          outputsDir: 'deliverables'
-        }
-      }
+  it('预取消不调用模型，业务审核中取消也不启动第二步', async () => {
+    const { engine, generate } = createEngine()
+    const cancelled = new AbortController()
+    cancelled.abort(new Error('停止'))
+    await expect(
+      engine.reviewContent({
+        stage: 'script_review',
+        reviewSkillName: 'script-review-skill',
+        outputToReview: '# 剧本',
+        signal: cancelled.signal
+      })
+    ).rejects.toThrow('停止')
+    expect(generate).not.toHaveBeenCalled()
+    const active = new AbortController()
+    generate.mockImplementationOnce(async (_prompt, options) => {
+      active.abort(new Error('中断'))
+      expect(options.signal.aborted).toBe(true)
+      return pass
     })
-
-    expect(readFile).toHaveBeenCalledWith(
-      '/tmp/project/deliverables/ep03/01-director-analysis.md',
-      'utf-8'
-    )
-    expect(loadSkill).toHaveBeenNthCalledWith(1, 'script-analysis-review-skill')
-    expect(result.result).toBe('PASS')
-    expect(result.score).toBe(9)
+    await expect(
+      engine.reviewContent({
+        stage: 'script_review',
+        reviewSkillName: 'script-review-skill',
+        outputToReview: '# 剧本',
+        signal: active.signal
+      })
+    ).rejects.toThrow('中断')
+    expect(generate).toHaveBeenCalledTimes(1)
   })
 
-  it('reviewContent 会把显式传入的剧情库存作为对照输入传给审核 prompt', async () => {
-    loadSkill
-      .mockResolvedValueOnce({ systemPrompt: 'script-review-skill' })
-      .mockResolvedValueOnce({ systemPrompt: 'compliance-review-skill' })
-    assembleReview
-      .mockReturnValueOnce({ system: 'business-system', user: 'business-user' })
-      .mockReturnValueOnce({
-        system: 'compliance-system',
-        user: 'compliance-user'
-      })
-    generate
-      .mockResolvedValueOnce('business-response')
-      .mockResolvedValueOnce('compliance-response')
-    vi.mocked(OutputParser.parseReview)
-      .mockReturnValueOnce({
-        passed: true,
-        score: 8,
-        issues: [],
-        feedback: '业务通过'
-      })
-      .mockReturnValueOnce({
-        passed: true,
-        score: 8,
-        issues: [],
-        feedback: '合规通过'
-      })
-
-    const engine = new ReviewEngine(
-      { load: loadSkill } as never,
-      { assembleReview } as never
-    )
-    engine.setProvider({ generate } as never)
-
-    await engine.reviewContent({
+  it('共享总超时会中止挂起模型，且不再启动合规', async () => {
+    vi.useFakeTimers()
+    const { engine, generate } = createEngine()
+    generate.mockReturnValueOnce(Promise.withResolvers<string>().promise)
+    const promise = engine.reviewContent({
       stage: 'script_review',
       reviewSkillName: 'script-review-skill',
-      outputToReview: '# script output',
-      originalScript: '# script output',
-      plotBreakdown:
-        '# 当前集剧情点\n\n【剧情1】院子，主角救人，危机反转，第1集，状态：未用\n'
+      outputToReview: '# 剧本',
+      timeoutMs: 50
     })
-
-    expect(assembleReview).toHaveBeenNthCalledWith(
-      1,
-      { systemPrompt: 'script-review-skill' },
-      expect.any(String),
-      '# script output',
-      '# script output',
-      undefined,
-      '# 当前集剧情点\n\n【剧情1】院子，主角救人，危机反转，第1集，状态：未用\n'
-    )
+    const rejection = expect(promise).rejects.toThrow('审核超时')
+    await vi.advanceTimersByTimeAsync(51)
+    await rejection
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(generate.mock.calls[0][1].signal.aborted).toBe(true)
+    expect(generate.mock.calls[0][1].timeoutMs).toBeLessThanOrEqual(50)
   })
 
-  it('review(storyboard) 会尝试附带读取导演分析作为对照，但缺失时不报错', async () => {
-    readFile
-      .mockResolvedValueOnce('# prompts output')
-      .mockRejectedValueOnce(new Error('missing director analysis'))
-    loadSkill
-      .mockResolvedValueOnce({ systemPrompt: 'storyboard-review-skill' })
-      .mockResolvedValueOnce({ systemPrompt: 'compliance-review-skill' })
-    assembleReview
-      .mockReturnValueOnce({
-        system: 'storyboard-system',
-        user: 'storyboard-user'
-      })
-      .mockReturnValueOnce({
-        system: 'compliance-system',
-        user: 'compliance-user'
-      })
-    generate
-      .mockResolvedValueOnce('storyboard-response')
-      .mockResolvedValueOnce('compliance-response')
-    vi.mocked(OutputParser.parseReview)
-      .mockReturnValueOnce({
-        passed: true,
-        score: 8,
-        issues: [],
-        feedback: '业务通过'
-      })
-      .mockReturnValueOnce({
-        passed: true,
-        score: 8,
-        issues: [],
-        feedback: '合规通过'
-      })
-
-    const engine = new ReviewEngine(
-      { load: loadSkill } as never,
-      { assembleReview } as never
-    )
-    engine.setProvider({ generate } as never)
-
-    const result = await engine.review('storyboard', {
-      projectPath: '/tmp/project',
-      episodeNum: 6,
-      projectConfig: {
-        directories: {
-          outputsDir: 'deliverables'
-        }
-      }
+  it('逐调用 provider/阈值不被共享 setter 的后续改变污染', async () => {
+    const { engine, generate } = createEngine()
+    const replacement = vi.fn().mockResolvedValue(fail)
+    generate.mockImplementationOnce(async () => {
+      engine.setProvider({ generate: replacement } as never)
+      engine.setPassScore(10)
+      return pass
     })
-
-    expect(readFile).toHaveBeenNthCalledWith(
-      1,
-      '/tmp/project/deliverables/ep06/02-seedance-prompts.md',
-      'utf-8'
-    )
-    expect(readFile).toHaveBeenNthCalledWith(
-      2,
-      '/tmp/project/deliverables/ep06/01-director-analysis.md',
-      'utf-8'
-    )
+    const result = await engine.reviewContent({
+      stage: 'script_review',
+      reviewSkillName: 'script-review-skill',
+      outputToReview: '# 剧本',
+      passScore: 8
+    })
     expect(result.result).toBe('PASS')
+    expect(generate).toHaveBeenCalledTimes(2)
+    expect(replacement).not.toHaveBeenCalled()
   })
+
+  it('文件路径审核附带本集服化道、正文与依赖来源绑定', async () => {
+    const { engine, generate } = createEngine()
+    const result = await engine.review('storyboard', {
+      projectPath,
+      episodeNum: 1
+    })
+    expect(result.result).toBe('PASS')
+    expect(result.artifactHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(isReviewCurrent(result, projectPath, 1)).toBe(true)
+    expect(generate.mock.calls[0][0].user).toContain('# 服化道')
+    writeArtifact('artDesign', '# 修改后的服化道')
+    expect(isReviewCurrent(result, projectPath, 1)).toBe(false)
+  })
+
+  it.each([
+    'seedancePrompts',
+    'script',
+    'directorAnalysis',
+    'artDesign'
+  ] as const)(
+    '审核执行期间%s发生变化，不能产出可提交PASS',
+    async (artifact) => {
+      const { engine, generate } = createEngine()
+      generate.mockImplementationOnce(async () => {
+        writeArtifact(artifact, '# 已修改')
+        return pass
+      })
+      await expect(
+        engine.review('storyboard', { projectPath, episodeNum: 1 })
+      ).rejects.toThrow('审核期间正文或上游材料已变化')
+    }
+  )
+
+  it('显式正文与磁盘不一致时，在模型请求前拒绝审核', async () => {
+    const { engine, generate } = createEngine()
+    await expect(
+      engine.reviewContent({
+        stage: 'script_review',
+        reviewSkillName: 'script-review-skill',
+        outputToReview: '旧正文',
+        projectPath,
+        episodeNum: 1
+      })
+    ).rejects.toThrow('待审正文与当前文件不一致')
+    expect(generate).not.toHaveBeenCalled()
+  })
+
+  it.each(['resume', 'cancel'] as const)(
+    '合规模型前等待暂停门：%s',
+    async (action) => {
+      const { engine, generate } = createEngine()
+      const blocked = Promise.withResolvers<void>()
+      const resumed = Promise.withResolvers<void>()
+      const controller = new AbortController()
+      const waitUntilResumed = vi
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockImplementationOnce(() => {
+          blocked.resolve()
+          return resumed.promise
+        })
+      const promise = engine.reviewContent({
+        stage: 'script_review',
+        reviewSkillName: 'script-review-skill',
+        outputToReview: '# 正文',
+        signal: controller.signal,
+        waitUntilResumed
+      })
+      await blocked.promise
+      expect(generate).toHaveBeenCalledTimes(1)
+      if (action === 'cancel') {
+        controller.abort(new Error('暂停中取消'))
+        await expect(promise).rejects.toThrow('暂停中取消')
+        expect(generate).toHaveBeenCalledTimes(1)
+        resumed.resolve()
+      } else {
+        resumed.resolve()
+        expect((await promise).result).toBe('PASS')
+        expect(generate).toHaveBeenCalledTimes(2)
+        expect(generate.mock.calls[0][1].signal).toBe(
+          generate.mock.calls[1][1].signal
+        )
+      }
+    }
+  )
 })

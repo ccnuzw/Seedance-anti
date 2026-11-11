@@ -6,7 +6,10 @@ import {
   DEFAULT_IMAGE_QUALITY,
   DEFAULT_IMAGE_SIZE
 } from '@renderer/settings/llm-config'
-import { formatImageConfigSummary } from '@renderer/settings/llm-settings-helpers'
+import {
+  formatImageConfigSummary,
+  modelTestNotice
+} from '@renderer/settings/llm-settings-helpers'
 
 interface Props {
   activeTabLabel: string
@@ -65,6 +68,14 @@ export function LLMConfigList(props: Props) {
                   })}
                 </div>
               )}
+              <div className="config-meta text-secondary">
+                {modelTestNotice(config.category)}
+              </div>
+              {!config.hasStoredApiKey && !config.apiKey && (
+                <div className="text-error">
+                  未保存密钥，请编辑并重新输入 API Key。
+                </div>
+              )}
               {cardTestResult[config.id] && (
                 <div
                   className={`config-test-result ${cardTestResult[config.id].success ? 'text-success' : 'text-error'}`}
@@ -78,9 +89,17 @@ export function LLMConfigList(props: Props) {
               <button
                 className="btn btn-sm"
                 onClick={() => onCardTest(config)}
-                disabled={testingCardId === config.id}
+                disabled={
+                  testingCardId === config.id ||
+                  config.category === 'video' ||
+                  (!config.hasStoredApiKey && !config.apiKey)
+                }
               >
-                {testingCardId === config.id ? '⏳ 测试中...' : '🔌 测试'}
+                {testingCardId === config.id
+                  ? '测试中...'
+                  : config.category === 'video'
+                    ? '暂不支持视频测试'
+                    : '真实测试（可能收费）'}
               </button>
               <button className="btn btn-sm" onClick={() => onEdit(config)}>
                 ✏️ 编辑
@@ -88,6 +107,7 @@ export function LLMConfigList(props: Props) {
               {!config.isDefault && (
                 <button
                   className="btn btn-sm"
+                  disabled={!config.hasStoredApiKey && !config.apiKey}
                   onClick={() => onSetDefault(config.id)}
                 >
                   设为默认

@@ -1,94 +1,102 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-const readFile = vi.fn()
-const getProjectByPath = vi.fn()
-
-vi.mock('fs/promises', () => ({
-  readFile
+const mocks = vi.hoisted(() => ({
+  read: vi.fn(),
+  project: vi.fn(),
+  current: vi.fn(),
+  regular: vi.fn()
 }))
-
-vi.mock('./project-service', () => ({
-  getProjectByPath
+vi.mock('../io/atomic-file', () => ({
+  readJsonWithRecovery: mocks.read,
+  readRegularFile: mocks.regular
 }))
+vi.mock('./project-service', () => ({ getProjectByPath: mocks.project }))
+vi.mock('../engine/artifact-provenance', () => ({
+  isReviewCurrent: mocks.current
+}))
+vi.mock('../security/access-control', () => ({
+  assertPathWithinProject: (_root: string, path: string) => path,
+  isMissingFileError: (error: unknown) =>
+    error instanceof Error && error.message === 'ENOENT'
+}))
+import { getProjectPipelineState } from './project-state-service'
 
-describe('project-state-service', async () => {
-  const service = await import('./project-state-service')
-
-  beforeEach(() => {
-    vi.clearAllMocks()
+describe('project state recovery boundary', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('reads the configured state through backup recovery', async () => {
+    mocks.project.mockReturnValue({
+      config: { directories: { outputsDir: 'custom-outputs' } }
+    })
+    const state = { projectId: 'p', episodes: {}, updatedAt: 'now' }
+    mocks.read.mockResolvedValue(state)
+    expect(await getProjectPipelineState('/tmp/project')).toEqual(state)
+    expect(mocks.read).toHaveBeenCalledWith(
+      '/tmp/project/custom-outputs/pipeline-state.json'
+    )
   })
+  it('returns null only when no saved state exists', async () => {
+    mocks.project.mockReturnValue(undefined)
+    mocks.read.mockResolvedValue(null)
+    expect(await getProjectPipelineState('/tmp/project')).toBeNull()
+  })
+  it('surfaces unrecoverable corruption instead of presenting an empty project', async () => {
+    mocks.read.mockRejectedValue(new Error('主文件和备份均损坏'))
+    await expect(getProjectPipelineState('/tmp/project')).rejects.toThrow(
+      '均损坏'
+    )
+  })
+})
 
-  it('会根据项目配置解析自定义 pipeline state 路径', async () => {
-    getProjectByPath.mockReturnValue({
-      id: 'project-1',
-      projectPath: '/tmp/project',
-      config: {
-        projectName: '项目',
-        totalEpisodes: 2,
-        visualStyle: '现实',
-        targetMedium: '短剧',
-        createdAt: '2026-05-07T00:00:00.000Z',
-        directories: {
-          outputsDir: 'custom-outputs'
+describe('stale approval projection for project overview', () => {
+  it('marks obsolete approvals stale and removes downstream completion without deleting review history', async () => {
+    const review = {
+      stage: 'director',
+      reviewType: 'business',
+      passed: true,
+      result: 'PASS',
+      score: 8,
+      feedback: '通过',
+      issues: [],
+      createdAt: 'now'
+    }
+    mocks.project.mockReturnValue({ id: 'current', config: {} })
+    mocks.regular.mockRejectedValue(new Error('ENOENT'))
+    mocks.current.mockReturnValue(false)
+    mocks.read.mockResolvedValue({
+      projectId: 'old',
+      updatedAt: 'now',
+      episodes: {
+        1: {
+          episodeNum: 1,
+          status: 'complete',
+          lastStage: 'storyboard',
+          completedStages: ['director', 'art', 'storyboard'],
+          stageStates: {
+            director: {
+              stage: 'director',
+              status: 'passed',
+              attempts: 1,
+              updatedAt: 'now',
+              lastReview: review
+            },
+            art: {
+              stage: 'art',
+              status: 'passed',
+              attempts: 1,
+              updatedAt: 'now'
+            }
+          },
+          reviews: [review],
+          totalDurationSeconds: 0,
+          updatedAt: 'now'
         }
       }
     })
-    readFile.mockResolvedValue('{"updatedAt":"2026-05-07T00:00:00.000Z"}')
-
-    const result = await service.getProjectPipelineState('/tmp/project')
-
-    expect(getProjectByPath).toHaveBeenCalledWith('/tmp/project')
-    expect(readFile).toHaveBeenCalledWith(
-      '/tmp/project/custom-outputs/pipeline-state.json',
-      'utf-8'
-    )
-    expect(result).toEqual({ updatedAt: '2026-05-07T00:00:00.000Z' })
-  })
-
-  it('读取失败时返回 null', async () => {
-    getProjectByPath.mockReturnValue(undefined)
-    readFile.mockRejectedValue(new Error('ENOENT'))
-
-    await expect(
-      service.getProjectPipelineState('/tmp/missing')
-    ).resolves.toBeNull()
-  })
-
-  it('未注册项目时会回退默认 outputs 目录解析 pipeline state', async () => {
-    getProjectByPath.mockReturnValue(undefined)
-    readFile.mockResolvedValue(
-      '{"projectId":"project-2","updatedAt":"2026-05-08T00:00:00.000Z","episodes":{}}'
-    )
-
-    const result = await service.getProjectPipelineState('/tmp/project-b')
-
-    expect(readFile).toHaveBeenCalledWith(
-      '/tmp/project-b/outputs/pipeline-state.json',
-      'utf-8'
-    )
-    expect(result).toEqual({
-      projectId: 'project-2',
-      updatedAt: '2026-05-08T00:00:00.000Z',
-      episodes: {}
-    })
-  })
-
-  it('JSON 解析失败时返回 null', async () => {
-    getProjectByPath.mockReturnValue({
-      id: 'project-1',
-      projectPath: '/tmp/project',
-      config: {
-        projectName: '项目',
-        totalEpisodes: 2,
-        visualStyle: '现实',
-        targetMedium: '短剧',
-        createdAt: '2026-05-07T00:00:00.000Z'
-      }
-    })
-    readFile.mockResolvedValue('not-json')
-
-    await expect(
-      service.getProjectPipelineState('/tmp/project')
-    ).resolves.toBeNull()
+    const result = await getProjectPipelineState('/tmp/project')
+    expect(result?.projectId).toBe('current')
+    expect(result?.episodes[1]?.completedStages).toEqual([])
+    expect(result?.episodes[1]?.stageStates.director?.status).toBe('stale')
+    expect(result?.episodes[1]?.stageStates.art?.status).toBe('stale')
+    expect(result?.episodes[1]?.status).toBe('idle')
+    expect(result?.episodes[1]?.reviews).toHaveLength(1)
   })
 })

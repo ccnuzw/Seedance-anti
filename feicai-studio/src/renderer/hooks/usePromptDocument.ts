@@ -13,58 +13,56 @@ export function usePromptDocument(params: UsePromptDocumentParams) {
   const { enabled, episodeNum, getFilePath, onSaveSuccess } = params
   const [isEditing, setIsEditing] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
-
-  const {
-    content: rawMd,
-    setContent: setRawMd,
-    loading,
-    reload,
-    save
-  } = useEpisodeTextFile({
+  const document = useEpisodeTextFile({
     enabled,
     episodeNum,
     getFilePath,
     emptyContent: '',
     onSaveSuccess
   })
-
+  const {
+    content: rawMd,
+    setContent: setRawMd,
+    reload,
+    save,
+    documentSession
+  } = document
   const prompts = useMemo(() => parsePromptsFromMarkdown(rawMd), [rawMd])
-
+  const filePath = enabled ? getFilePath(episodeNum) : ''
   useEffect(() => {
     setSelectedIndex(null)
     setIsEditing(false)
-  }, [episodeNum])
+  }, [filePath])
 
   const reloadPrompts = useCallback(
     async (ep = episodeNum) => {
       setSelectedIndex(null)
-      setIsEditing(false)
       await reload(ep)
     },
     [episodeNum, reload]
   )
-
-  const startEditing = useCallback(() => {
-    setIsEditing(true)
-  }, [])
-
+  const startEditing = useCallback(() => setIsEditing(true), [])
   const cancelEditing = useCallback(async () => {
-    await reloadPrompts(episodeNum)
-  }, [episodeNum, reloadPrompts])
-
+    if (documentSession.hasPendingChanges()) {
+      if (
+        !window.confirm('确定丢弃此文件的本地草稿和未保存修改，使用磁盘版本？')
+      )
+        return
+      documentSession.discardDraft()
+      if (documentSession.hasPendingChanges()) return
+    }
+    setIsEditing(false)
+  }, [documentSession])
   const saveDraft = useCallback(async () => {
     const ok = await save()
-    if (ok) {
-      setIsEditing(false)
-    }
+    if (ok) setIsEditing(false)
     return ok
   }, [save])
-
   return {
+    ...document,
     rawMd,
     setRawMd,
     prompts,
-    loading,
     isEditing,
     selectedIndex,
     setSelectedIndex,

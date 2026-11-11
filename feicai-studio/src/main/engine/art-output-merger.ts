@@ -1,125 +1,174 @@
-// ============================================================
-// Art Output Merger — 解析 art 阶段输出并合并到 assets
-// ============================================================
+import { readFile } from 'fs/promises'
+import type { ProjectConfig } from '@shared/types'
+import { resolveProjectArtifactPath } from '@shared/path-resolver'
+import {
+  parseAssetMarkdown,
+  serializeAssets,
+  type ParsedAsset
+} from '../asset/markdown-parser'
+import { atomicWriteFile } from '../io/atomic-file'
+import {
+  assertEpisodeNumber,
+  assertPathWithinProject
+} from '../security/access-control'
 
-import { readFile, writeFile, mkdir } from 'fs/promises'
-import { join } from 'path'
+const OWNER_PATTERN = /\s*<!--\s*feicai-art-episodes:([\d,]+)\s*-->/gu
 
+/** Only approved episode art is published. Names are the stable shared asset identity. */
 export class ArtOutputMerger {
-  /**
-   * 解析 art 阶段 LLM 输出，提取人物和场景段落，追加到 assets 文件
-   */
+  static validateOutput(output: string): {
+    characters: ParsedAsset[]
+    scenes: ParsedAsset[]
+  } {
+    const headings = [
+      ...output.matchAll(
+        /^#{1,2}\s*(人物(?:(?:设定|素材)?提示词|设定|素材)?|角色(?:(?:设定|素材)?提示词|设定|素材)?|Character[^\n]*|场景(?:道具|环境)?(?:提示词|设定|素材)?|Scene[^\n]*)\s*$/gimu
+      )
+    ]
+    const sections = {
+      characters: [] as ParsedAsset[],
+      scenes: [] as ParsedAsset[]
+    }
+    for (let index = 0; index < headings.length; index++) {
+      const match = headings[index]
+      const body = output.slice(
+        match.index! + match[0].length,
+        headings[index + 1]?.index ?? output.length
+      )
+      // A category may use ## itself; normalize its nested headings for the asset parser.
+      const assets = parseAssetMarkdown(
+        match[0].trimStart().startsWith('##')
+          ? body.replace(/^###\s+/gm, '## ')
+          : body
+      )
+      const key = /^(?:人物|角色|Character)/iu.test(match[1])
+        ? 'characters'
+        : 'scenes'
+      sections[key].push(...assets)
+    }
+    for (const [kind, assets] of Object.entries(sections)) {
+      if (
+        assets.length === 0 ||
+        assets.some((asset) => !asset.name.trim() || !asset.promptText.trim())
+      ) {
+        throw new Error(
+          `服化道输出缺少有效${kind === 'characters' ? '人物' : '场景'}分节`
+        )
+      }
+      const names = new Set(assets.map((asset) => this.stableName(asset.name)))
+      if (names.size !== assets.length)
+        throw new Error('服化道输出包含重复素材名称')
+    }
+    return sections
+  }
+
   static async parseAndMerge(
     output: string,
     projectPath: string,
-    episodeNum: number
+    episodeNum: number,
+    config?: Partial<ProjectConfig> | null,
+    beforeCommit?: () => Promise<void>
   ): Promise<{ characters: number; scenes: number }> {
-    const epTag = `ep${String(episodeNum).padStart(2, '0')}`
-    const assetsDir = join(projectPath, 'assets')
-    await mkdir(assetsDir, { recursive: true })
-
-    const charPath = join(assetsDir, 'character-prompts.md')
-    const scenePath = join(assetsDir, 'scene-prompts.md')
-
-    // 解析输出：分拆为人物和场景两个段落
-    const { characterSection, sceneSection } = this.parseOutput(output)
-
-    let charCount = 0
-    let sceneCount = 0
-
-    // 追加人物提示词
-    if (characterSection.trim()) {
-      const header = `\n\n<!-- ${epTag} 新增 -->\n`
-      const existing = await this.safeRead(charPath)
-      await writeFile(
-        charPath,
-        existing + header + characterSection.trim() + '\n',
-        'utf-8'
+    assertEpisodeNumber(episodeNum)
+    const sections = this.validateOutput(output)
+    const paths = {
+      characters: assertPathWithinProject(
+        projectPath,
+        resolveProjectArtifactPath(projectPath, 'characterPrompts', config)
+      ),
+      scenes: assertPathWithinProject(
+        projectPath,
+        resolveProjectArtifactPath(projectPath, 'scenePrompts', config)
       )
-      charCount = (characterSection.match(/^##\s/gm) || []).length
     }
-
-    // 追加场景提示词
-    if (sceneSection.trim()) {
-      const header = `\n\n<!-- ${epTag} 新增 -->\n`
-      const existing = await this.safeRead(scenePath)
-      await writeFile(
-        scenePath,
-        existing + header + sceneSection.trim() + '\n',
-        'utf-8'
-      )
-      sceneCount = (sceneSection.match(/^##\s/gm) || []).length
+    const updates = await Promise.all(
+      (['characters', 'scenes'] as const).map(async (kind) => {
+        const existing = await this.safeRead(paths[kind])
+        const firstAsset = existing.search(/^##\s+/m)
+        const prefix =
+          firstAsset >= 0
+            ? existing.slice(0, firstAsset).trim()
+            : existing.trim()
+        const incoming = new Map(
+          sections[kind].map((asset) => [this.stableName(asset.name), asset])
+        )
+        const merged = new Map<string, ParsedAsset>()
+        for (const asset of parseAssetMarkdown(existing)) {
+          const name = this.stableName(asset.name)
+          asset.name = name
+          asset.promptText = asset.promptText
+            .replace(/(?:\n+\s*---\s*)+$/u, '')
+            .trim()
+          const owners = this.owners(asset.promptText)
+          if (owners.has(episodeNum) && !incoming.has(name)) {
+            owners.delete(episodeNum)
+            if (owners.size === 0) continue
+            asset.promptText = this.withOwners(asset.promptText, owners)
+          }
+          merged.set(name, asset)
+        }
+        for (const [name, asset] of incoming) {
+          asset.promptText = asset.promptText
+            .replace(/(?:\n+\s*---\s*)+$/u, '')
+            .trim()
+          const owners = this.owners(merged.get(name)?.promptText || '')
+          owners.add(episodeNum)
+          merged.set(name, {
+            ...asset,
+            name,
+            promptText: this.withOwners(asset.promptText, owners)
+          })
+        }
+        return {
+          path: paths[kind],
+          content:
+            [prefix, serializeAssets([...merged.values()])]
+              .filter(Boolean)
+              .join('\n\n') + '\n'
+        }
+      })
+    )
+    for (const update of updates) {
+      await beforeCommit?.()
+      assertPathWithinProject(projectPath, update.path)
+      await atomicWriteFile(update.path, update.content)
     }
-
-    return { characters: charCount, scenes: sceneCount }
+    return {
+      characters: sections.characters.length,
+      scenes: sections.scenes.length
+    }
   }
 
-  /**
-   * 解析 LLM 输出，分拆为人物和场景两部分
-   * 支持多种标题格式：# 人物提示词 / # 场景道具提示词 / ## 人物 等
-   */
-  private static parseOutput(output: string): {
-    characterSection: string
-    sceneSection: string
-  } {
-    // 尝试按一级标题 # 分割
-    const charPatterns = [
-      /^#\s*人物(?:提示词|设定|素材)/m,
-      /^#\s*角色(?:提示词|设定|素材)/m,
-      /^#\s*Character/im
-    ]
-    const scenePatterns = [
-      /^#\s*场景(?:道具|环境)?(?:提示词|设定|素材)/m,
-      /^#\s*Scene/im
-    ]
-
-    let charStart = -1
-    let sceneStart = -1
-
-    for (const p of charPatterns) {
-      const m = output.match(p)
-      if (m && m.index !== undefined) {
-        charStart = m.index
-        break
-      }
-    }
-    for (const p of scenePatterns) {
-      const m = output.match(p)
-      if (m && m.index !== undefined) {
-        sceneStart = m.index
-        break
-      }
-    }
-
-    let characterSection = ''
-    let sceneSection = ''
-
-    if (charStart >= 0 && sceneStart >= 0) {
-      if (charStart < sceneStart) {
-        characterSection = output.slice(charStart, sceneStart)
-        sceneSection = output.slice(sceneStart)
-      } else {
-        sceneSection = output.slice(sceneStart, charStart)
-        characterSection = output.slice(charStart)
-      }
-    } else if (charStart >= 0) {
-      characterSection = output.slice(charStart)
-    } else if (sceneStart >= 0) {
-      sceneSection = output.slice(sceneStart)
-    } else {
-      // 无法解析分割，整段作为人物部分
-      characterSection = output
-    }
-
-    return { characterSection, sceneSection }
+  private static stableName(name: string): string {
+    return name
+      .normalize('NFC')
+      .trim()
+      .replace(
+        /[（(]\s*ep\d+\s*(新增|复用|变体[：:].*?)?\s*[）)]$/iu,
+        (_match, label: string | undefined) =>
+          label?.startsWith('变体') ? `（${label}）` : ''
+      )
+      .trim()
   }
 
-  /** 安全读取文件，不存在返回空字符串 */
+  private static owners(content: string): Set<number> {
+    return new Set(
+      [...content.matchAll(new RegExp(OWNER_PATTERN.source, 'gu'))].flatMap(
+        (match) => match[1].split(',').map(Number)
+      )
+    )
+  }
+
+  private static withOwners(content: string, owners: Set<number>): string {
+    return `${content.replace(OWNER_PATTERN, '').trim()}\n\n<!-- feicai-art-episodes:${[...owners].sort((a, b) => a - b).join(',')} -->`
+  }
+
   private static async safeRead(path: string): Promise<string> {
     try {
       return await readFile(path, 'utf-8')
-    } catch {
-      return ''
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+      throw error
     }
   }
 }

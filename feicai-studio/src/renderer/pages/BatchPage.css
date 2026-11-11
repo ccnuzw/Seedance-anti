@@ -494,7 +494,7 @@
   );
 }
 
-.ep-num {
+.batch-page .ep-num {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -614,7 +614,6 @@
   gap: var(--spacing-md);
   padding: 12px 14px;
   border-bottom: 1px solid var(--color-border-subtle);
-  cursor: pointer;
   user-select: none;
   transition: background var(--transition-fast);
 }
@@ -629,6 +628,19 @@
   gap: 8px;
   font-size: var(--font-size-sm);
   font-weight: 800;
+}
+
+.batch-page button.batch-log-title {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .batch-log-count {
@@ -805,5 +817,21 @@
   .batch-task {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+}
+
+.batch-page :is(button, input, select):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+@media (max-width: 560px) {
+  .batch-page {
+    min-width: 0;
+  }
+  .batch-bg-banner {
+    flex-wrap: wrap;
+  }
+  .batch-command-buttons .btn {
+    white-space: normal;
   }
 }

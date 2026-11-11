@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { PipelineStartResult as ServicePipelineStartResult } from './ipc-contracts'
 import {
   buildBatchPipelineParams,
   resolveBatchExecutionEpisodes,
   isWorkflowBatchMode,
   isBatchRunSuccess,
   runBatchWorkflowMode,
-  resolveBatchRunException,
+  type BatchMode,
+  type BatchWorkflowDeps,
   resolveBatchRunProgress
-} from './batch-runner'
+} from './batch'
 
 describe('batch-runner', () => {
   it('会根据批量模式构造 pipeline 参数', () => {
@@ -97,75 +99,112 @@ describe('batch-runner', () => {
     ).toBe(false)
   })
 
-  it('会为成功和失败结果生成任务展示文案', () => {
-    expect(
-      resolveBatchRunProgress({ success: true, state: 'art_done' }, 'art', 12)
-    ).toEqual({
-      status: 'done',
-      progress: '完成 (12s)',
-      elapsed: 12
-    })
-
-    expect(
-      resolveBatchRunProgress(
-        { success: true, state: 'paused' },
-        'storyboard',
-        7
-      )
-    ).toEqual({
-      status: 'error',
-      progress: '失败: paused',
-      elapsed: 7
-    })
-  })
-
-  it('workflow 批量结果会生成任务展示文案', () => {
-    expect(
-      resolveBatchRunProgress(
-        {
-          success: false,
-          stage: 'script_review',
-          message: '剧本审核未通过'
-        },
-        'preproduction',
-        31
-      )
-    ).toEqual({
-      status: 'error',
-      progress: '剧本审核未通过 (31s)',
-      elapsed: 31
-    })
-  })
-
-  it('可执行单个 workflow 批量模式', async () => {
-    const deps = {
-      runStoryGeneration: vi.fn().mockResolvedValue({ success: true }),
-      runStoryReview: vi.fn().mockResolvedValue({ success: true }),
-      runScriptGeneration: vi.fn().mockResolvedValue({ success: true }),
-      runScriptReview: vi.fn().mockResolvedValue({ success: true })
-    }
-
-    const result = await runBatchWorkflowMode(
-      'story_review',
-      {
-        projectPath: '/tmp/project',
-        episodeNum: 1,
-        projectName: '项目',
-        visualStyle: '现实',
-        targetMedium: '短剧'
+  it.each<{
+    mode: BatchMode
+    result: ServicePipelineStartResult
+    status: 'done' | 'error'
+  }>([
+    {
+      mode: 'art',
+      result: { success: true, state: 'art_done' },
+      status: 'done'
+    },
+    {
+      mode: 'full',
+      result: { success: true, state: 'episode_complete' },
+      status: 'done'
+    },
+    {
+      mode: 'full',
+      result: { success: true, state: 'director_done' },
+      status: 'error'
+    },
+    {
+      mode: 'storyboard',
+      result: { success: true, state: 'paused' },
+      status: 'error'
+    },
+    {
+      mode: 'director',
+      result: { success: true, state: 'idle' },
+      status: 'error'
+    },
+    {
+      mode: 'art',
+      result: {
+        success: false,
+        state: 'art_done',
+        error: 'generation rejected'
       },
-      deps
-    )
+      status: 'error'
+    },
+    {
+      mode: 'full',
+      result: { success: false, error: 'pipeline busy' },
+      status: 'error'
+    },
+    {
+      mode: 'full',
+      result: { error: 'pipeline start rejected' },
+      status: 'error'
+    },
+    {
+      mode: 'full',
+      result: { success: false, message: 'pipeline unavailable' },
+      status: 'error'
+    },
+    {
+      mode: 'full',
+      result: { success: true },
+      status: 'error'
+    }
+  ])('$mode 模式按终态和执行结果判定 $status', ({ mode, result, status }) => {
+    const progress = resolveBatchRunProgress(result, mode, 12)
 
-    expect(result.success).toBe(true)
-    expect(deps.runStoryReview).toHaveBeenCalledWith({
-      projectPath: '/tmp/project',
-      episodeNum: 1,
-      projectName: '项目',
-      visualStyle: '现实',
-      targetMedium: '短剧'
-    })
+    expect(progress).toMatchObject({ status, elapsed: 12 })
+    if (result.error) expect(progress.progress).toContain(result.error)
+    if (result.message) expect(progress.progress).toContain(result.message)
   })
+
+  it.each<BatchMode>(['story', 'story_review', 'script', 'script_review'])(
+    '%s 批量模式保留成功与失败结果并正确更新任务状态',
+    async (mode) => {
+      for (const success of [true, false]) {
+        const serviceResult = success
+          ? { success: true }
+          : { success: false, error: 'workflow interrupted' }
+        const deps: BatchWorkflowDeps = {
+          runStoryGeneration: vi.fn().mockResolvedValue(serviceResult),
+          runStoryReview: vi.fn().mockResolvedValue(serviceResult),
+          runScriptGeneration: vi.fn().mockResolvedValue(serviceResult),
+          runScriptReview: vi.fn().mockResolvedValue(serviceResult)
+        }
+        const result = await runBatchWorkflowMode(
+          mode,
+          {
+            projectPath: '/tmp/project',
+            episodeNum: 1,
+            projectName: '项目',
+            visualStyle: '现实',
+            targetMedium: '短剧'
+          },
+          deps
+        )
+        const progress = resolveBatchRunProgress(result, mode, 31)
+
+        expect(result).toMatchObject({
+          success,
+          stage: mode,
+          result: serviceResult
+        })
+        expect(progress).toMatchObject({
+          status: success ? 'done' : 'error',
+          elapsed: 31
+        })
+        if (!success) expect(progress.progress).toContain(serviceResult.error)
+      }
+    }
+  )
 
   it('preproduction 有剧情库存时会直接生成剧本', async () => {
     const deps = {
@@ -398,9 +437,19 @@ describe('batch-runner', () => {
     expect(deps.runStoryReview).not.toHaveBeenCalled()
     expect(deps.runScriptReview).not.toHaveBeenCalled()
   })
+})
 
-  it('会把异常转换为统一文案', () => {
-    expect(resolveBatchRunException(new Error('boom'))).toBe('boom')
-    expect(resolveBatchRunException(null)).toBe('执行异常')
-  })
+it('分镜单阶段采用与主进程一致的episode_complete终态', () => {
+  expect(
+    isBatchRunSuccess(
+      { success: true, state: 'episode_complete', stage: 'storyboard' },
+      'storyboard'
+    )
+  ).toBe(true)
+  expect(
+    isBatchRunSuccess(
+      { success: true, state: 'storyboard_done', stage: 'storyboard' },
+      'storyboard'
+    )
+  ).toBe(false)
 })

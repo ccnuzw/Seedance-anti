@@ -17,12 +17,12 @@ export function usePipelineNotifications(params: Params) {
     if (state === 'episode_complete' && episodeNum) {
       addToast(
         'success',
-        `EP${String(episodeNum).padStart(2, '0')} 全流程完成！`,
+        `EP${String(episodeNum).padStart(2, '0')} 提示词制作完成！`,
         { title: '🎉 流水线完成' }
       )
       try {
         new Notification('FEICAI Studio', {
-          body: `EP${String(episodeNum).padStart(2, '0')} 全流程完成 ✅`,
+          body: `EP${String(episodeNum).padStart(2, '0')} 提示词制作完成`,
           silent: false
         })
       } catch {

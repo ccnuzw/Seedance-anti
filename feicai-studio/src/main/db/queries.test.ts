@@ -10,6 +10,7 @@ import {
 import { join } from 'path'
 import { tmpdir } from 'os'
 import type { EpisodeScanResult, ProjectScanResult } from '../project-sync/scan'
+import { runProjectSyncWorker } from './episode-sync-worker'
 
 type Row = Record<string, unknown>
 
@@ -173,27 +174,29 @@ function createStatement(sql: string) {
             title: args[3],
             status: args[4],
             story_beat_path: args[5],
-            script_path: args[6],
-            script_review_path: args[7],
-            director_analysis_path: args[8],
-            character_design_path: args[9],
-            art_design_path: args[10],
-            storyboard_path: args[11],
-            seedance_prompts_path: args[12],
-            storyboard_review_path: args[13],
-            has_story_beat: args[14],
-            has_script: args[15],
-            has_script_review: args[16],
-            has_director: args[17],
-            has_character: args[18],
-            has_art: args[19],
-            has_storyboard: args[20],
-            has_prompts: args[21],
-            has_storyboard_review: args[22],
-            total_prompts: args[23],
-            total_duration_seconds: args[24],
-            created_at: args[25],
-            updated_at: args[26]
+            story_review_path: args[6],
+            script_path: args[7],
+            script_review_path: args[8],
+            director_analysis_path: args[9],
+            character_design_path: args[10],
+            art_design_path: args[11],
+            storyboard_path: args[12],
+            seedance_prompts_path: args[13],
+            storyboard_review_path: args[14],
+            has_story_beat: args[15],
+            has_story_review: args[16],
+            has_script: args[17],
+            has_script_review: args[18],
+            has_director: args[19],
+            has_character: args[20],
+            has_art: args[21],
+            has_storyboard: args[22],
+            has_prompts: args[23],
+            has_storyboard_review: args[24],
+            total_prompts: args[25],
+            total_duration_seconds: args[26],
+            created_at: args[27],
+            updated_at: args[28]
           })
         }
         return
@@ -245,10 +248,6 @@ const mockDb = {
   )
 }
 
-vi.mock('../workers/project-sync-worker?modulePath', () => ({
-  default: 'mock-project-sync-worker'
-}))
-
 vi.mock('./database', () => ({
   getDatabase: () => mockDb
 }))
@@ -258,6 +257,7 @@ const mockEpisodeSnapshot: EpisodeScanResult = {
   title: '第1集',
   status: 'script',
   storyBeatPath: null,
+  storyReviewPath: null,
   scriptPath: '/tmp/project/script/ep01.md',
   scriptReviewPath: null,
   directorAnalysisPath: null,
@@ -267,6 +267,7 @@ const mockEpisodeSnapshot: EpisodeScanResult = {
   seedancePromptsPath: null,
   storyboardReviewPath: null,
   hasStoryBeat: false,
+  hasStoryReview: false,
   hasScript: true,
   hasScriptReview: false,
   hasDirectorAnalysis: false,
@@ -285,24 +286,43 @@ const mockProjectScanResult: ProjectScanResult = {
   episodes: [mockEpisodeSnapshot]
 }
 
-vi.mock('node:worker_threads', async () => {
-  const { EventEmitter } = await import('events')
-
-  class MockWorker extends EventEmitter {
-    constructor(_path: string, options: { workerData: { mode: string } }) {
-      super()
-      queueMicrotask(() => {
-        const payload =
-          options.workerData.mode === 'project'
-            ? mockProjectScanResult
-            : { episode: mockProjectScanResult.episodes[0] }
-        this.emit('message', payload)
-      })
+vi.mock('./episode-sync-worker', () => ({
+  runProjectSyncWorker: vi.fn(
+    async (data: {
+      mode: string
+      totalEpisodes: number
+      episodeNumber?: number
+    }) => {
+      if (data.mode === 'episode') return { episode: mockEpisodeSnapshot }
+      const numbers = [
+        ...new Set([
+          ...Array.from(
+            { length: data.totalEpisodes },
+            (_, index) => index + 1
+          ),
+          ...mockProjectScanResult.episodeNumbers
+        ])
+      ].sort((a, b) => a - b)
+      return {
+        ...mockProjectScanResult,
+        episodeNumbers: numbers,
+        episodes: numbers.map(
+          (number) =>
+            mockProjectScanResult.episodes.find(
+              (episode) => episode.episodeNumber === number
+            ) || {
+              ...mockEpisodeSnapshot,
+              episodeNumber: number,
+              title: `第${number}集`,
+              status: 'idle',
+              hasScript: false,
+              scriptPath: null
+            }
+        )
+      }
     }
-  }
-
-  return { Worker: MockWorker }
-})
+  )
+}))
 
 describe('queries syncEpisodesFromFilesystem', async () => {
   const queries = await import('./queries')
@@ -359,13 +379,46 @@ describe('queries syncEpisodesFromFilesystem', async () => {
     }
   })
 
-  it('会清理磁盘扫描结果中已不存在的 episode 及其关联记录', async () => {
-    await queries.syncEpisodesFromFilesystem('project-1', '/tmp/project', 2)
+  it('30集计划仅ep01有产物也不删除计划业务实体及关联历史，不缩减total', async () => {
+    tables.projects[0].total_episodes = 30
+    await queries.syncEpisodesFromFilesystem('project-1', '/tmp/project', 30)
 
-    expect(tables.episodes.map((row) => row.episode_number)).toEqual([1])
-    expect(tables.reviews).toHaveLength(0)
-    expect(tables.assetReferences).toHaveLength(0)
-    expect(tables.executionLogs).toHaveLength(0)
+    expect(tables.episodes.map((row) => row.episode_number)).toEqual(
+      Array.from({ length: 30 }, (_, i) => i + 1)
+    )
+    expect(tables.episodes.find((row) => row.episode_number === 2)?.id).toBe(
+      'episode-2'
+    )
+    expect(tables.reviews).toEqual([
+      { id: 'review-2', episode_id: 'episode-2' }
+    ])
+    expect(tables.assetReferences).toEqual([
+      { id: 'asset-ref-2', episode_id: 'episode-2' }
+    ])
+    expect(tables.executionLogs).toEqual([
+      { id: 'log-2', episode_id: 'episode-2' }
+    ])
+    expect(tables.projects[0].total_episodes).toBe(30)
+  })
+
+  it('同项目并发全量同步共享扫描请求', async () => {
+    await Promise.all([
+      queries.syncEpisodesFromFilesystem('project-1', '/tmp/project', 2),
+      queries.syncEpisodesFromFilesystem('project-1', '/tmp/project', 2)
+    ])
+    expect(runProjectSyncWorker).toHaveBeenCalledTimes(1)
+    expect(tables.episodes).toHaveLength(2)
+  })
+
+  it('即使扫描只返回部分集数也绝不物理删除既有业务记录', async () => {
+    tables.projects[0].total_episodes = 30
+    vi.mocked(runProjectSyncWorker).mockResolvedValueOnce(mockProjectScanResult)
+    await queries.syncEpisodesFromFilesystem('project-1', '/tmp/project', 30)
+    expect(tables.episodes.map((row) => row.episode_number)).toEqual([1, 2])
+    expect(tables.reviews).toHaveLength(1)
+    expect(tables.assetReferences).toHaveLength(1)
+    expect(tables.executionLogs).toHaveLength(1)
+    expect(tables.projects[0].total_episodes).toBe(30)
   })
 
   it('导入已有项目时会合并前端推断配置并写回 project-config.json', async () => {
@@ -491,7 +544,9 @@ describe('queries syncEpisodesFromFilesystem', async () => {
     expect(normalizedNovel).toContain('## 第1章 穿成恶女')
     expect(existsSync(join(root, 'source', 'chapters'))).toBe(true)
     expect(
-      existsSync(join(root, 'source', 'chapters', 'chapter-001-第1章-穿成恶女.md'))
+      existsSync(
+        join(root, 'source', 'chapters', 'chapter-001-第1章-穿成恶女.md')
+      )
     ).toBe(true)
 
     rmSync(sourceNovel, { force: true })

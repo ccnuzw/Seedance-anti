@@ -221,18 +221,20 @@ export function buildProjectExperienceSummary(params: {
   const currentFocusStageLabel =
     activeTimelineIndex >= 0
       ? stageTimeline[activeTimelineIndex].label
-      : '全流程完成'
-  const resolvedStageTimeline = stageTimeline.map((item, index) => ({
-    ...item,
-    state:
-      activeTimelineIndex === -1
-        ? 'done'
-        : index < activeTimelineIndex
+      : '提示词制作完成'
+  const resolvedStageTimeline = stageTimeline.map<ProjectStageTimelineItem>(
+    (item, index) => ({
+      ...item,
+      state:
+        activeTimelineIndex === -1
           ? 'done'
-          : index === activeTimelineIndex
-            ? 'active'
-            : 'upcoming'
-  }))
+          : index < activeTimelineIndex
+            ? 'done'
+            : index === activeTimelineIndex
+              ? 'active'
+              : 'upcoming'
+    })
+  )
 
   const stageCoverage: StageCoverageItem[] = [
     {
@@ -334,7 +336,7 @@ export function buildProjectExperienceSummary(params: {
     projectPipelineState?.episodes || {}
   ).flatMap((ep) =>
     (ep.reviews || [])
-      .filter((review) => review.result === 'FAIL')
+      .filter((review) => review.result !== 'PASS')
       .map((review) => ({
         episodeNum: ep.episodeNum,
         stage: review.stage,

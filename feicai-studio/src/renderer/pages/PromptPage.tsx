@@ -23,6 +23,7 @@ import {
 } from '@renderer/utils/editor-workflow-actions'
 import { DevProfiler } from '@renderer/dev/render-profiler'
 import { useShallow } from 'zustand/react/shallow'
+import DocumentRecoveryNotice from '@renderer/components/editor/DocumentRecoveryNotice'
 import './PromptPage.css'
 
 export default function PromptPage() {
@@ -39,7 +40,7 @@ export default function PromptPage() {
   const [searchParams] = useSearchParams()
   const urlEp = parseInt(searchParams.get('ep') || '1')
   const urlTab = searchParams.get('tab')
-  const [currentEp, setCurrentEp] = useEpisodeParam(urlEp)
+  const [currentEp] = useEpisodeParam(urlEp)
   const [viewTab, setViewTab] = useState<'prompts' | 'director' | 'art'>(
     urlTab === 'director' || urlTab === 'art' ? urlTab : 'prompts'
   )
@@ -98,7 +99,14 @@ export default function PromptPage() {
     setSelectedIndex,
     startEditing,
     cancelEditing,
-    saveDraft
+    saveDraft,
+    saved,
+    loaded,
+    recovery,
+    draftReadError,
+    documentSession,
+    overwriteConflict,
+    reloadPrompts
   } = usePromptDocument({
     enabled: !!currentProject,
     episodeNum: currentEp,
@@ -110,7 +118,12 @@ export default function PromptPage() {
   })
 
   const artifactTab = viewTab === 'prompts' ? null : viewTab
-  const { content: tabContent, loading: tabLoading } = useArtifactDocument({
+  const {
+    content: tabContent,
+    loading: tabLoading,
+    error: tabError,
+    reload: reloadArtifact
+  } = useArtifactDocument({
     enabled: !!currentProject && !!artifactTab && currentEp > 0,
     filePath: artifactTab ? getFilePath(currentEp, artifactTab) : '',
     emptyContent: '',
@@ -126,16 +139,24 @@ export default function PromptPage() {
 
   const handleReReview = useCallback(async () => {
     if (!currentProject) return
+    if (!saved) {
+      addToast('warning', '请先保存当前提示词草稿并处理冲突，再执行生成或审核')
+      return
+    }
     await runStoryboardAction(async () => {
       await executeStoryboardReReviewAction(currentProject, currentEp, {
         startPipeline,
         addToast
       })
     })
-  }, [currentProject, currentEp, addToast, runStoryboardAction])
+  }, [currentProject, currentEp, saved, addToast, runStoryboardAction])
 
   const handleRunStoryboardReview = useCallback(async () => {
     if (!currentProject) return
+    if (!saved) {
+      addToast('warning', '请先保存当前提示词草稿并处理冲突，再执行审核')
+      return
+    }
     await runStoryboardAction(async () => {
       await executeStoryboardReviewAction(currentProject, currentEp, {
         runStoryboardReview,
@@ -147,6 +168,7 @@ export default function PromptPage() {
   }, [
     currentProject,
     currentEp,
+    saved,
     addToast,
     syncSingleEpisodeStatus,
     setReviewFeedback,
@@ -154,7 +176,6 @@ export default function PromptPage() {
   ])
 
   const handleEpClick = (ep: number) => {
-    setCurrentEp(ep)
     if (currentProject) {
       navigate(`/project/${currentProject.id}/prompts?ep=${ep}&tab=${viewTab}`)
     }
@@ -205,6 +226,7 @@ export default function PromptPage() {
         <div className="prompt-tabs">
           <button
             className={`tab-btn ${viewTab === 'prompts' ? 'active' : ''}`}
+            aria-pressed={viewTab === 'prompts'}
             onClick={() =>
               currentProject &&
               navigate(
@@ -216,6 +238,7 @@ export default function PromptPage() {
           </button>
           <button
             className={`tab-btn ${viewTab === 'director' ? 'active' : ''}`}
+            aria-pressed={viewTab === 'director'}
             onClick={() =>
               currentProject &&
               navigate(
@@ -227,6 +250,7 @@ export default function PromptPage() {
           </button>
           <button
             className={`tab-btn ${viewTab === 'art' ? 'active' : ''}`}
+            aria-pressed={viewTab === 'art'}
             onClick={() =>
               currentProject &&
               navigate(
@@ -240,13 +264,18 @@ export default function PromptPage() {
 
         {viewTab === 'prompts' ? (
           <>
+            <DocumentRecoveryNotice
+              session={documentSession}
+              onOverwriteConflict={overwriteConflict}
+              onRetry={reloadPrompts}
+            />
             <PromptHeader
               currentEp={currentEp}
               promptCount={actualPrompts.length}
               totalDuration={totalDuration}
               durationOk={durationOk}
               isEditing={isEditing}
-              canEdit={prompts.length > 0}
+              canEdit={loaded && !loading && !recovery && !draftReadError}
               runningStoryboardReview={runningStoryboardReview}
               onStartEditing={startEditing}
               onRunStoryboardReview={() => void handleRunStoryboardReview()}
@@ -259,6 +288,17 @@ export default function PromptPage() {
               <div className="prompt-editor">
                 <textarea
                   className="prompt-editor-textarea"
+                  aria-label={`EP${String(currentEp).padStart(2, '0')} 提示词 Markdown 编辑器`}
+                  readOnly={loading || !loaded || !!recovery || draftReadError}
+                  onKeyDown={(event) => {
+                    if (
+                      (event.metaKey || event.ctrlKey) &&
+                      event.key.toLowerCase() === 's'
+                    ) {
+                      event.preventDefault()
+                      void handleSave()
+                    }
+                  }}
                   value={rawMd}
                   onChange={(e) => setRawMd(e.target.value)}
                   spellCheck={false}
@@ -282,7 +322,14 @@ export default function PromptPage() {
                 {viewTab === 'director' ? '导演分析' : '服化道设计'}
               </h2>
             </div>
-            {tabLoading ? (
+            {tabError ? (
+              <div className="document-notice" role="alert">
+                <p>{tabError}</p>
+                <button className="btn" onClick={() => void reloadArtifact()}>
+                  重试读取
+                </button>
+              </div>
+            ) : tabLoading ? (
               <div className="prompt-empty text-secondary">加载中...</div>
             ) : tabContent ? (
               <pre className="product-content">{tabContent}</pre>

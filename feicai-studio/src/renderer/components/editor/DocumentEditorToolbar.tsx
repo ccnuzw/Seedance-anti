@@ -20,7 +20,9 @@ export default function DocumentEditorToolbar(
         <span className="text-secondary">{lineCount} 行</span>
         <span className="text-secondary">{description}</span>
         {!saved && (
-          <span className="editor-unsaved badge badge-warning">未保存</span>
+          <span className="editor-unsaved badge badge-warning" role="status">
+            未保存到磁盘
+          </span>
         )}
       </div>
       <div className="editor-actions">{actions}</div>

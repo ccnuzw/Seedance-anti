@@ -1,4 +1,5 @@
 import { safeStorage } from 'electron'
+import { LLMRequestError } from './endpoint-security'
 
 const ENCRYPTED_PREFIX = 'enc:v1:'
 const PLAINTEXT_PREFIX = 'plain:v1:'
@@ -7,11 +8,15 @@ export function encryptSecret(secret: string): string {
   if (!secret) return ''
 
   if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('当前系统不支持安全存储，无法保存 API Key')
+    throw new LLMRequestError('当前系统不支持安全存储，无法保存 API Key')
   }
 
-  const encrypted = safeStorage.encryptString(secret).toString('base64')
-  return `${ENCRYPTED_PREFIX}${encrypted}`
+  try {
+    const encrypted = safeStorage.encryptString(secret).toString('base64')
+    return `${ENCRYPTED_PREFIX}${encrypted}`
+  } catch {
+    throw new LLMRequestError('系统安全存储加密失败，密钥未保存')
+  }
 }
 
 export function decryptSecret(storedSecret: string): string {
@@ -19,7 +24,13 @@ export function decryptSecret(storedSecret: string): string {
 
   if (storedSecret.startsWith(ENCRYPTED_PREFIX)) {
     const payload = storedSecret.slice(ENCRYPTED_PREFIX.length)
-    return safeStorage.decryptString(Buffer.from(payload, 'base64'))
+    try {
+      return safeStorage.decryptString(Buffer.from(payload, 'base64'))
+    } catch {
+      throw new LLMRequestError(
+        '无法读取系统安全存储中的 API Key，请重新输入并保存'
+      )
+    }
   }
 
   // 兼容旧数据：历史版本直接明文保存。

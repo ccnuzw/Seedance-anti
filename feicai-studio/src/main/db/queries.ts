@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { getDatabase } from './database'
 import {
@@ -44,6 +44,8 @@ import {
   resolveProjectLayout
 } from '@shared/path-resolver'
 import type { Project } from '@shared/types'
+import { atomicWriteFile } from '../io/atomic-file'
+import { assertPathWithinProject } from '../security/access-control'
 export { migrateLegacyNovelDirectory } from '../project/project-migration'
 export { repairProjectIssues } from '../project/project-repair'
 
@@ -51,13 +53,9 @@ function readProjectConfigFromDisk(
   configPath: string
 ): Partial<Project['config']> | null {
   if (!existsSync(configPath)) return null
-  try {
-    return JSON.parse(readFileSync(configPath, 'utf-8')) as Partial<
-      Project['config']
-    >
-  } catch {
-    return null
-  }
+  return JSON.parse(readFileSync(configPath, 'utf-8')) as Partial<
+    Project['config']
+  >
 }
 
 function initializeProjectDirectories(
@@ -83,14 +81,16 @@ function initializeProjectDirectories(
   ]
 
   for (const dir of requiredDirs) {
-    mkdirSync(join(projectPath, dir), { recursive: true })
+    mkdirSync(assertPathWithinProject(projectPath, join(projectPath, dir)), {
+      recursive: true
+    })
   }
 }
 
-function initializeProjectTemplates(
+async function initializeProjectTemplates(
   projectPath: string,
   config: Project['config']
-): void {
+): Promise<void> {
   const sourcePath = resolveProjectArtifactPath(
     projectPath,
     'sourceNovel',
@@ -124,45 +124,40 @@ function initializeProjectTemplates(
     config
   )
 
-  if (config.entryStage === 'novel' && !existsSync(sourcePath)) {
-    writeFileSync(
+  const templates: Array<[string, () => string, boolean]> = [
+    [
       sourcePath,
-      buildDefaultSourceTemplate(config.projectName),
-      'utf-8'
-    )
-  }
-
-  if (!existsSync(plotBreakdownPath)) {
-    writeFileSync(
+      () => buildDefaultSourceTemplate(config.projectName),
+      config.entryStage === 'novel'
+    ],
+    [
       plotBreakdownPath,
-      buildDefaultPlotBreakdownTemplate({
-        projectName: config.projectName,
-        projectType: config.targetMedium || '待确定',
-        totalEpisodes: config.totalEpisodes,
-        chaptersPerEpisode: config.chaptersPerEpisode || 0
-      }),
-      'utf-8'
-    )
-  }
-
-  if (config.entryStage === 'story' && !existsSync(storyBeatPath)) {
-    writeFileSync(storyBeatPath, buildDefaultStoryBeatTemplate(1), 'utf-8')
-  }
-
-  if (config.entryStage === 'script' && !existsSync(scriptPath)) {
-    writeFileSync(scriptPath, buildDefaultScriptTemplate(1), 'utf-8')
-  }
-
-  if (!existsSync(characterPromptsPath)) {
-    writeFileSync(
-      characterPromptsPath,
-      buildDefaultCharacterPromptsTemplate(),
-      'utf-8'
-    )
-  }
-
-  if (!existsSync(scenePromptsPath)) {
-    writeFileSync(scenePromptsPath, buildDefaultScenePromptsTemplate(), 'utf-8')
+      () =>
+        buildDefaultPlotBreakdownTemplate({
+          projectName: config.projectName,
+          projectType: config.targetMedium || '待确定',
+          totalEpisodes: config.totalEpisodes,
+          chaptersPerEpisode: config.chaptersPerEpisode || 0
+        }),
+      true
+    ],
+    [
+      storyBeatPath,
+      () => buildDefaultStoryBeatTemplate(1),
+      config.entryStage === 'story'
+    ],
+    [
+      scriptPath,
+      () => buildDefaultScriptTemplate(1),
+      config.entryStage === 'script'
+    ],
+    [characterPromptsPath, buildDefaultCharacterPromptsTemplate, true],
+    [scenePromptsPath, buildDefaultScenePromptsTemplate, true]
+  ]
+  for (const [path, content, enabled] of templates) {
+    const safePath = assertPathWithinProject(projectPath, path)
+    if (enabled && !existsSync(safePath))
+      await atomicWriteFile(safePath, content())
   }
 }
 
@@ -178,11 +173,12 @@ export async function createProject(data: {
   const db = getDatabase()
   const id = uuid()
   const now = new Date().toISOString()
-  const configPath = resolveProjectArtifactPath(
-    data.projectPath,
-    'projectConfig'
-  )
   mkdirSync(data.projectPath, { recursive: true })
+  data.projectPath = assertPathWithinProject(data.projectPath, data.projectPath)
+  const configPath = assertPathWithinProject(
+    data.projectPath,
+    resolveProjectArtifactPath(data.projectPath, 'projectConfig')
+  )
 
   const diskConfig = readProjectConfigFromDisk(configPath)
   const normalizedConfig = normalizeProjectConfig({
@@ -217,17 +213,17 @@ export async function createProject(data: {
       data.config?.pipelineSettings || diskConfig?.pipelineSettings
   })
 
-  writeFileSync(configPath, JSON.stringify(normalizedConfig, null, 2), 'utf-8')
+  await atomicWriteFile(configPath, JSON.stringify(normalizedConfig, null, 2))
   initializeProjectDirectories(data.projectPath, normalizedConfig)
   if (data.sourceNovelFilePath && normalizedConfig.entryStage === 'novel') {
-    importWholeNovelFile({
+    await importWholeNovelFile({
       sourceFilePath: data.sourceNovelFilePath,
       projectPath: data.projectPath,
       config: normalizedConfig
     })
   }
   if (!diskConfig) {
-    initializeProjectTemplates(data.projectPath, normalizedConfig)
+    await initializeProjectTemplates(data.projectPath, normalizedConfig)
   }
   data.name = normalizedConfig.projectName
   data.visualStyle = normalizedConfig.visualStyle
@@ -266,10 +262,13 @@ export async function updateProject(data: {
   }
 
   const now = new Date().toISOString()
-  const configPath = resolveProjectArtifactPath(
+  const configPath = assertPathWithinProject(
     currentProject.projectPath,
-    'projectConfig',
-    currentProject.config
+    resolveProjectArtifactPath(
+      currentProject.projectPath,
+      'projectConfig',
+      currentProject.config
+    )
   )
   const diskConfig = readProjectConfigFromDisk(configPath)
   const normalizedConfig = normalizeProjectConfig({
@@ -311,7 +310,7 @@ export async function updateProject(data: {
       currentProject.config.pipelineSettings
   })
 
-  writeFileSync(configPath, JSON.stringify(normalizedConfig, null, 2), 'utf-8')
+  await atomicWriteFile(configPath, JSON.stringify(normalizedConfig, null, 2))
   initializeProjectDirectories(currentProject.projectPath, normalizedConfig)
 
   updateProjectRecord({

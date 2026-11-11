@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  invalidateCachedTextFile,
-  readCachedTextFile
-} from '@renderer/services/file-cache'
-import { writeTextFile } from '@renderer/services/file-io'
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
+import { readTextFile } from '@renderer/services/file-io'
+import { invalidateCachedTextFile } from '@renderer/services/file-cache'
+import {
+  DocumentSession,
+  TextDraftRepository,
+  registerDocumentSession
+} from '@renderer/stores/documentDraftStore'
 
 interface UseProjectTextFileParams {
   enabled: boolean
@@ -14,89 +22,111 @@ interface UseProjectTextFileParams {
 }
 
 export function useProjectTextFile(params: UseProjectTextFileParams) {
-  const { enabled, filePath, emptyContent, onLoadMissing, onSaveSuccess } =
-    params
+  const { enabled, filePath } = params
+  const callbacks = useRef(params)
+  callbacks.current = params
+  const [session] = useState(
+    () =>
+      new DocumentSession(
+        {
+          read: readTextFile,
+          write: async (path, text, expected) => {
+            const result = await window.feicaiAPI.writeTextFile(
+              path,
+              text,
+              expected
+            )
+            invalidateCachedTextFile(path)
+            return result
+          }
+        },
+        new TextDraftRepository()
+      )
+  )
+  const state = useSyncExternalStore(session.subscribe, session.getSnapshot)
+  const activePath = enabled ? filePath : ''
+  const pathRef = useRef(activePath)
+  pathRef.current = activePath
 
-  const [content, setContent] = useState(emptyContent)
-  const [saved, setSaved] = useState(true)
-  const [loading, setLoading] = useState(false)
-  const emptyContentRef = useRef(emptyContent)
-  const filePathRef = useRef(filePath)
-  const onLoadMissingRef = useRef(onLoadMissing)
-  const onSaveSuccessRef = useRef(onSaveSuccess)
+  useEffect(() => registerDocumentSession(session), [session])
+  useEffect(() => {
+    void session
+      .open(activePath, callbacks.current.emptyContent)
+      .then((result) => {
+        if (result === 'missing') callbacks.current.onLoadMissing?.()
+      })
+    return session.cancelLoad
+  }, [session, activePath])
 
   useEffect(() => {
-    emptyContentRef.current = emptyContent
-  }, [emptyContent])
-
-  useEffect(() => {
-    filePathRef.current = filePath
-  }, [filePath])
-
-  useEffect(() => {
-    onLoadMissingRef.current = onLoadMissing
-  }, [onLoadMissing])
-
-  useEffect(() => {
-    onSaveSuccessRef.current = onSaveSuccess
-  }, [onSaveSuccess])
+    const checkDisk = () => {
+      if (pathRef.current)
+        void session.open(pathRef.current, callbacks.current.emptyContent)
+    }
+    window.addEventListener('focus', checkDisk)
+    return () => window.removeEventListener('focus', checkDisk)
+  }, [session])
 
   const reload = useCallback(async () => {
-    if (!enabled || !filePathRef.current) return
-    invalidateCachedTextFile(filePathRef.current)
-    setLoading(true)
-    try {
-      const text = await readCachedTextFile(filePathRef.current)
-      if (text == null) {
-        throw new Error('missing text file')
-      }
-      setContent(text)
-    } catch {
-      setContent(emptyContentRef.current)
-      onLoadMissingRef.current?.()
-    }
-    setSaved(true)
-    setLoading(false)
-  }, [enabled])
-
-  useEffect(() => {
-    if (enabled && filePathRef.current) {
-      void reload()
-      return
-    }
-    setContent(emptyContentRef.current)
-    setSaved(true)
-  }, [enabled, filePath, reload])
+    const result = await session.open(
+      pathRef.current,
+      callbacks.current.emptyContent
+    )
+    if (result === 'missing') callbacks.current.onLoadMissing?.()
+  }, [session])
 
   const save = useCallback(
     async (nextContent?: string) => {
-      if (!enabled || !filePathRef.current) return false
-      try {
-        invalidateCachedTextFile(filePathRef.current)
-        await writeTextFile(filePathRef.current, nextContent ?? content)
-        invalidateCachedTextFile(filePathRef.current)
-        await onSaveSuccessRef.current?.()
-        setSaved(true)
-        return true
-      } catch {
-        return false
+      const path = pathRef.current
+      const onSuccess = callbacks.current.onSaveSuccess
+      if (!path || session.getSnapshot().filePath !== path) return false
+      const ok = await session.save(nextContent)
+      if (ok) {
+        try {
+          await onSuccess?.()
+        } catch {
+          /* The disk commit has already succeeded. */
+        }
       }
+      return ok
     },
-    [enabled, filePath, content, onSaveSuccess]
+    [session]
   )
 
-  const updateContent = useCallback((nextContent: string) => {
-    setContent(nextContent)
-    setSaved(false)
-  }, [])
+  const overwriteConflict = useCallback(async () => {
+    const onSuccess = callbacks.current.onSaveSuccess
+    if (
+      !window.confirm(
+        '磁盘原稿已更新。确定以当前草稿覆盖磁盘版本？原稿备份由写入服务保留。'
+      )
+    )
+      return false
+    const ok = await session.save(undefined, true)
+    if (ok) {
+      try {
+        await onSuccess?.()
+      } catch {
+        /* Disk is already committed. */
+      }
+    }
+    return ok
+  }, [session])
 
+  const matching = state.filePath === activePath
   return {
-    content,
-    setContent: updateContent,
-    setRawContent: setContent,
-    saved,
-    loading,
+    ...state,
+    content: matching ? state.content : '',
+    loading: !matching || state.loading,
+    setContent: session.update,
     reload,
-    save
+    saved:
+      matching &&
+      state.saved &&
+      !state.recovery &&
+      !state.draftReadError &&
+      state.loaded,
+    save,
+    documentSession: session,
+    overwriteConflict
   }
 }

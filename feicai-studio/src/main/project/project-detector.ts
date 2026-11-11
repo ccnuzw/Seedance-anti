@@ -14,6 +14,7 @@ import {
   resolveProjectLayout
 } from '@shared/path-resolver'
 import { scanProjectFilesystem } from '../project-sync/scan'
+import { assertPathWithinProject } from '../security/access-control'
 
 const CANDIDATE_CHILD_DIRS = ['小说', 'novel', 'project', '项目']
 
@@ -35,8 +36,14 @@ function countMatchingFiles(dirPath: string, pattern: RegExp): number {
 
 function detectScriptDir(projectPath: string, config: ProjectConfig): string {
   const currentScriptDir = config.directories?.scriptDir || 'script'
-  const currentScriptPath = join(projectPath, currentScriptDir)
-  const legacyScriptPath = join(projectPath, 'scripts')
+  const currentScriptPath = assertPathWithinProject(
+    projectPath,
+    join(projectPath, currentScriptDir)
+  )
+  const legacyScriptPath = assertPathWithinProject(
+    projectPath,
+    join(projectPath, 'scripts')
+  )
 
   const currentHasEpisodes =
     existsSync(currentScriptPath) && hasEpisodeMarkdownFiles(currentScriptPath)
@@ -79,8 +86,14 @@ function inferProjectConfig(
     }
   }
   const layout = resolveProjectLayout(configWithDetectedScriptDir)
-  const scriptDirPath = join(projectPath, layout.scriptDir)
-  const storyEpisodeDirPath = join(projectPath, layout.storyEpisodeBeatsDir)
+  const scriptDirPath = assertPathWithinProject(
+    projectPath,
+    join(projectPath, layout.scriptDir)
+  )
+  const storyEpisodeDirPath = assertPathWithinProject(
+    projectPath,
+    join(projectPath, layout.storyEpisodeBeatsDir)
+  )
   const hasSourceNovel = existsSync(
     resolveProjectArtifactPath(projectPath, 'sourceNovel', normalized)
   )
@@ -155,11 +168,7 @@ function buildIntegrityReport(
     })
   }
 
-  const scan = scanProjectFilesystem(
-    projectPath,
-    effectiveConfig,
-    effectiveConfig.totalEpisodes || 0
-  )
+  const scan = scanProjectFilesystem(projectPath, effectiveConfig, 0)
 
   const layout = resolveProjectLayout(effectiveConfig)
   const sourceNovelPath = resolveProjectArtifactPath(
@@ -178,7 +187,10 @@ function buildIntegrityReport(
   const reviewsDir = join(projectPath, layout.reviewsDir)
   const legacyStoryBreakdown = join(projectPath, 'plot-breakdown.md')
   const legacyScriptReview = join(projectPath, 'scripts', 'review-ep04-10.md')
-  const legacyNovelDir = join(projectPath, 'novel')
+  const legacyNovelDir = assertPathWithinProject(
+    projectPath,
+    join(projectPath, 'novel')
+  )
   const legacyNovelCount = countMatchingFiles(
     legacyNovelDir,
     /^chapter-\d+\.(txt|md)$/i
@@ -240,13 +252,15 @@ function buildIntegrityReport(
     },
     {
       id: 'plot_breakdown',
-      group: existsSync(legacyStoryBreakdown) && !existsSync(plotBreakdownPath)
-        ? 'legacy'
-        : 'content',
+      group:
+        existsSync(legacyStoryBreakdown) && !existsSync(plotBreakdownPath)
+          ? 'legacy'
+          : 'content',
       label: '剧情库存',
-      status: existsSync(plotBreakdownPath) || existsSync(legacyStoryBreakdown)
-        ? 'pass'
-        : 'warn',
+      status:
+        existsSync(plotBreakdownPath) || existsSync(legacyStoryBreakdown)
+          ? 'pass'
+          : 'warn',
       detail: existsSync(plotBreakdownPath)
         ? '已找到剧情库存 story/plot-breakdown.md'
         : existsSync(legacyStoryBreakdown)
@@ -384,8 +398,10 @@ function buildIntegrityReport(
 }
 
 function inspectDir(dirPath: string): DetectedProjectInfo {
+  assertPathWithinProject(dirPath, dirPath)
   const layout = resolveProjectLayout()
   const configPath = resolveProjectArtifactPath(dirPath, 'projectConfig')
+  assertPathWithinProject(dirPath, configPath)
   const outputsDir = join(dirPath, layout.outputsDir)
   let rawConfig: string | null = null
   let parsedConfig: Partial<ProjectConfig> | null = null
@@ -400,6 +416,12 @@ function inspectDir(dirPath: string): DetectedProjectInfo {
   }
 
   const effectiveConfig = inferProjectConfig(dirPath, parsedConfig)
+  for (const directory of Object.values(
+    resolveProjectLayout(effectiveConfig)
+  )) {
+    if (typeof directory === 'string')
+      assertPathWithinProject(dirPath, join(dirPath, directory))
+  }
   const integrity = buildIntegrityReport(
     dirPath,
     existsSync(configPath) ? configPath : null,
@@ -442,7 +464,10 @@ export function detectProjectDirectory(
   let bestScore = directScore
 
   for (const childName of CANDIDATE_CHILD_DIRS) {
-    const childPath = join(selectedPath, childName)
+    const childPath = assertPathWithinProject(
+      selectedPath,
+      join(selectedPath, childName)
+    )
     if (!existsSync(childPath)) continue
     const childInfo = inspectDir(childPath)
     const childScore = getDirScore(childInfo)
@@ -458,7 +483,10 @@ export function detectProjectDirectory(
   try {
     for (const entry of readdirSync(selectedPath, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
-      const childPath = join(selectedPath, entry.name)
+      const childPath = assertPathWithinProject(
+        selectedPath,
+        join(selectedPath, entry.name)
+      )
       const childInfo = inspectDir(childPath)
       const childScore = getDirScore(childInfo)
       if (childScore > bestScore && childInfo.configPath) {

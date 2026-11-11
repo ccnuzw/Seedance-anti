@@ -1,8 +1,27 @@
-import { basename, join } from 'path'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs'
+import { basename, join, sep } from 'path'
+import {
+  closeSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  statSync
+} from 'fs'
 import type { ProjectConfig } from '@shared/types'
-import { resolveProjectArtifactPath, resolveProjectLayout } from '@shared/path-resolver'
+import {
+  resolveProjectArtifactPath,
+  resolveProjectLayout
+} from '@shared/path-resolver'
 import type { SourceChapterItem } from '@shared/ipc-contracts'
+import { assertPathWithinProject } from '../security/access-control'
+import {
+  atomicWriteFile,
+  atomicWriteFileSync,
+  readRegularFile
+} from '../io/atomic-file'
 
 interface NovelChapter {
   index: number
@@ -40,7 +59,9 @@ function isChapterTitle(line: string): boolean {
 
 function startsWithRepeatedTitle(line: string, currentTitle: string): boolean {
   const trimmed = line.trim()
-  return trimmed.length > currentTitle.length && trimmed.startsWith(currentTitle)
+  return (
+    trimmed.length > currentTitle.length && trimmed.startsWith(currentTitle)
+  )
 }
 
 function sanitizeChapterFilename(title: string, index: number): string {
@@ -116,67 +137,128 @@ export function buildNormalizedNovelMarkdown(params: {
   return `${parts.join('\n').trim()}\n`
 }
 
-export function importWholeNovelFile(
-  params: ImportWholeNovelFileParams
-): { chapterCount: number; sourcePath: string; chaptersDir: string } {
-  const rawText = readFileSync(params.sourceFilePath, 'utf-8')
-  const chapters = splitNovelIntoChapters(rawText)
-  const layout = resolveProjectLayout(params.config)
-  const sourcePath = resolveProjectArtifactPath(
-    params.projectPath,
-    'sourceNovel',
-    params.config
-  )
-  const chaptersDir = join(params.projectPath, layout.sourceDir, 'chapters')
+interface ChapterMetadata extends SourceChapterItem {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+}
+interface ChapterIndex {
+  version: 1
+  chapters: ChapterMetadata[]
+}
+const CHAPTER_HEADER_BYTES = 4096
+const MAX_CHAPTER_INDEXES = 32
+const chapterIndexes = new Map<string, ChapterIndex>()
+const imports = new Map<
+  string,
+  Promise<{ chapterCount: number; sourcePath: string; chaptersDir: string }>
+>()
 
-  mkdirSync(chaptersDir, { recursive: true })
-  writeFileSync(
-    sourcePath,
-    buildNormalizedNovelMarkdown({
-      projectName: params.config.projectName,
-      sourceFileName: basename(params.sourceFilePath),
-      chapters
-    }),
-    'utf-8'
-  )
-
-  for (const chapter of chapters) {
-    const chapterPath = join(
-      chaptersDir,
-      sanitizeChapterFilename(chapter.title, chapter.index)
-    )
-    writeFileSync(
-      chapterPath,
-      `# ${chapter.title}\n\n${chapter.content.trim()}\n`,
-      'utf-8'
-    )
-  }
-
-  return {
-    chapterCount: chapters.length,
-    sourcePath,
-    chaptersDir
+export function invalidateSourceChapterCache(projectPath?: string): void {
+  if (projectPath)
+    projectPath = assertPathWithinProject(projectPath, projectPath)
+  for (const directory of chapterIndexes.keys()) {
+    if (
+      !projectPath ||
+      directory === projectPath ||
+      directory.startsWith(`${projectPath}${sep}`)
+    ) {
+      chapterIndexes.delete(directory)
+    }
   }
 }
 
-function getChapterIndexFromFileName(fileName: string): number {
-  const match = fileName.match(/^chapter-(\d+)/i)
-  return match ? Number(match[1]) : 0
+export function importWholeNovelFile(
+  params: ImportWholeNovelFileParams
+): Promise<{ chapterCount: number; sourcePath: string; chaptersDir: string }> {
+  const root = assertPathWithinProject(params.projectPath, params.projectPath)
+  // Serialize whole imports as well as individual writes: two imports must not
+  // publish a source document from one book with chapters from another.
+  const previous = imports.get(root) || Promise.resolve()
+  const operation = previous
+    .catch(() => {})
+    .then(async () => {
+      const rawText = (await readRegularFile(params.sourceFilePath)).toString(
+        'utf-8'
+      )
+      const chapters = splitNovelIntoChapters(rawText)
+      const layout = resolveProjectLayout(params.config)
+      const sourcePath = assertPathWithinProject(
+        root,
+        resolveProjectArtifactPath(root, 'sourceNovel', params.config)
+      )
+      const chaptersDir = assertPathWithinProject(
+        root,
+        join(root, layout.sourceDir, 'chapters')
+      )
+      const existing = listSourceChapters({
+        projectPath: root,
+        config: params.config
+      })
+      const fileByIndex = new Map(
+        existing.map((chapter) => [chapter.index, chapter.fileName])
+      )
+      mkdirSync(chaptersDir, { recursive: true })
+      for (const chapter of chapters) {
+        // Keep the same indexed filename even when an imported title changes.
+        const fileName =
+          fileByIndex.get(chapter.index) ||
+          sanitizeChapterFilename(chapter.title, chapter.index)
+        const chapterPath = assertPathWithinProject(
+          root,
+          join(chaptersDir, fileName)
+        )
+        await atomicWriteFile(
+          chapterPath,
+          `# ${chapter.title}\n\n${chapter.content.trim()}\n`
+        )
+      }
+      await atomicWriteFile(
+        sourcePath,
+        buildNormalizedNovelMarkdown({
+          projectName: params.config.projectName,
+          sourceFileName: basename(params.sourceFilePath),
+          chapters
+        })
+      )
+      invalidateSourceChapterCache(root)
+      listSourceChapters({ projectPath: root, config: params.config })
+      return { chapterCount: chapters.length, sourcePath, chaptersDir }
+    })
+  imports.set(root, operation)
+  void operation
+    .finally(() => {
+      if (imports.get(root) === operation) imports.delete(root)
+    })
+    .catch(() => {})
+  return operation
 }
 
 function getChapterTitleFromFile(filePath: string, fileName: string): string {
+  // Bound I/O even if a malformed chapter has no newline before its body.
+  const fd = openSync(
+    filePath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW || 0)
+  )
+  let firstLine: string
   try {
-    const firstLine = readFileSync(filePath, 'utf-8').split(/\r?\n/, 1)[0] || ''
-    const title = firstLine.replace(/^#\s*/, '').trim()
-    if (title) return title
-  } catch {
-    // 回退到文件名解析。
+    const buffer = Buffer.allocUnsafe(CHAPTER_HEADER_BYTES)
+    const length = readSync(fd, buffer, 0, buffer.length, 0)
+    firstLine = buffer.toString('utf-8', 0, length).split(/\r?\n/, 1)[0] || ''
+  } finally {
+    closeSync(fd)
   }
-  return fileName
-    .replace(/^chapter-\d+-?/i, '')
-    .replace(/\.md$/i, '')
-    .replace(/-/g, ' ')
-    .trim()
+  return (
+    firstLine
+      .replace(/^\uFEFF/, '')
+      .replace(/^#\s*/, '')
+      .trim() ||
+    fileName
+      .replace(/^chapter-\d+-?/i, '')
+      .replace(/\.md$/i, '')
+      .replace(/-/g, ' ')
+      .trim()
+  )
 }
 
 export function listSourceChapters(params: {
@@ -184,19 +266,93 @@ export function listSourceChapters(params: {
   config: ProjectConfig
 }): SourceChapterItem[] {
   const layout = resolveProjectLayout(params.config)
-  const chaptersDir = join(params.projectPath, layout.sourceDir, 'chapters')
-  if (!existsSync(chaptersDir)) return []
-
-  return readdirSync(chaptersDir)
-    .filter((fileName) => /^chapter-\d+.*\.md$/i.test(fileName))
-    .map((fileName) => {
-      const filePath = join(chaptersDir, fileName)
-      return {
-        index: getChapterIndexFromFileName(fileName),
+  const chaptersDir = assertPathWithinProject(
+    params.projectPath,
+    join(params.projectPath, layout.sourceDir, 'chapters')
+  )
+  if (!existsSync(chaptersDir)) {
+    chapterIndexes.delete(chaptersDir)
+    return []
+  }
+  const indexPath = assertPathWithinProject(
+    params.projectPath,
+    join(chaptersDir, '.chapter-index.json')
+  )
+  let index = chapterIndexes.get(chaptersDir)
+  if (!index && existsSync(indexPath)) {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(indexPath, 'utf-8')
+      ) as ChapterIndex
+      if (
+        parsed?.version === 1 &&
+        Array.isArray(parsed.chapters) &&
+        parsed.chapters.every(
+          (chapter) =>
+            chapter &&
+            typeof chapter.fileName === 'string' &&
+            typeof chapter.title === 'string' &&
+            Number.isFinite(chapter.mtimeMs) &&
+            Number.isFinite(chapter.ctimeMs) &&
+            Number.isFinite(chapter.size)
+        )
+      )
+        index = parsed
+    } catch {
+      // Derived metadata can be rebuilt without discarding source content.
+      console.warn('章节索引损坏，将从有限标题元数据重建')
+    }
+  }
+  const previous = new Map(
+    (index?.chapters || []).map((chapter) => [chapter.fileName, chapter])
+  )
+  const chapters: ChapterMetadata[] = []
+  let changed = !index
+  for (const fileName of readdirSync(chaptersDir)) {
+    const match = fileName.match(/^chapter-(\d+).*\.md$/i)
+    if (!match) continue
+    const filePath = assertPathWithinProject(
+      params.projectPath,
+      join(chaptersDir, fileName)
+    )
+    const stat = statSync(filePath)
+    if (!stat.isFile()) continue
+    const cached = previous.get(fileName)
+    if (
+      cached &&
+      cached.mtimeMs === stat.mtimeMs &&
+      cached.ctimeMs === stat.ctimeMs &&
+      cached.size === stat.size &&
+      typeof cached.title === 'string'
+    ) {
+      chapters.push({ ...cached, index: Number(match[1]), fileName, filePath })
+    } else {
+      changed = true
+      chapters.push({
+        index: Number(match[1]),
         title: getChapterTitleFromFile(filePath, fileName),
         fileName,
-        filePath
-      }
-    })
-    .sort((a, b) => a.index - b.index || a.fileName.localeCompare(b.fileName))
+        filePath,
+        mtimeMs: stat.mtimeMs,
+        ctimeMs: stat.ctimeMs,
+        size: stat.size
+      })
+    }
+  }
+  chapters.sort(
+    (a, b) => a.index - b.index || a.fileName.localeCompare(b.fileName)
+  )
+  if (previous.size !== chapters.length) changed = true
+  index = { version: 1, chapters }
+  chapterIndexes.delete(chaptersDir)
+  chapterIndexes.set(chaptersDir, index)
+  if (chapterIndexes.size > MAX_CHAPTER_INDEXES)
+    chapterIndexes.delete(chapterIndexes.keys().next().value!)
+  if (changed) atomicWriteFileSync(indexPath, JSON.stringify(index))
+  return chapters.map(({ index, title, fileName, filePath }) => ({
+    index,
+    title,
+    fileName,
+    filePath
+  }))
 }

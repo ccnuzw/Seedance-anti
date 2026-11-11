@@ -21,7 +21,7 @@ function PipelineCompleteBanner(props: Props) {
   return (
     <div className="pipeline-complete-banner">
       <span>
-        ✅ EP{String(episodeNum).padStart(2, '0')} 全流程完成！
+        EP{String(episodeNum).padStart(2, '0')} 提示词制作完成！
         {isEngineMatch && `总耗时 ${fmtTime(totalElapsed)}`}
       </span>
       {hasNextEpisode && (

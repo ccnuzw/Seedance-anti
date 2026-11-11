@@ -5,6 +5,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc-channels'
 import type { FeicaiAPI } from '@shared/ipc-contracts'
+import { BATCH_IPC } from '@shared/batch'
+import { DATA_IPC } from '@shared/data-management'
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -59,8 +61,8 @@ const api: FeicaiAPI = {
   listLLMModels: (payload) => invoke(IPC.LLM_LIST_MODELS, payload),
 
   readTextFile: (filePath: string) => invoke(IPC.FILE_READ, filePath),
-  writeTextFile: (filePath: string, content: string) =>
-    invoke(IPC.FILE_WRITE, filePath, content),
+  writeTextFile: (filePath, content, expectedContent) =>
+    invoke(IPC.FILE_WRITE, filePath, content, expectedContent),
   selectDirectory: () => invoke(IPC.FILE_SELECT_DIR),
   selectFile: (filters) => invoke(IPC.FILE_SELECT_FILE, filters),
 
@@ -92,6 +94,20 @@ const api: FeicaiAPI = {
 
   exportPrompts: (params) => invoke(IPC.EXPORT_PROMPTS, params),
   exportAllArtifacts: (params) => invoke(IPC.EXPORT_ALL, params),
+
+  backupProject: (projectId) => invoke(DATA_IPC.BACKUP_PROJECT, projectId),
+  restoreProject: () => invoke(DATA_IPC.RESTORE_PROJECT),
+  backupDatabase: () => invoke(DATA_IPC.BACKUP_DATABASE),
+  restoreDatabase: () => invoke(DATA_IPC.RESTORE_DATABASE),
+  rebuildProjectIndex: (projectId) => invoke(DATA_IPC.REBUILD_INDEX, projectId),
+  exportDiagnosticLogs: () => invoke(DATA_IPC.EXPORT_LOGS),
+  clearStoredCredentials: () => invoke(DATA_IPC.CLEAR_CREDENTIALS),
+  startBatch: (params) => invoke(BATCH_IPC.START, params),
+  getBatchState: () => invoke(BATCH_IPC.GET_STATE),
+  pauseBatch: () => invoke(BATCH_IPC.PAUSE),
+  resumeBatch: () => invoke(BATCH_IPC.RESUME),
+  stopBatch: () => invoke(BATCH_IPC.STOP),
+  onBatchState: (callback) => subscribe(BATCH_IPC.STATE_CHANGED, callback),
 
   onPipelineStateChanged: (callback) =>
     subscribe(IPC.PIPELINE_STATE_CHANGED, callback),

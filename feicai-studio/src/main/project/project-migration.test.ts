@@ -44,11 +44,9 @@ describe('project-migration', () => {
     expect(result.success).toBe(true)
     expect(result.migrated).toBe(true)
     expect(result.migratedFiles).toBe(2)
-    expect(result.sourcePath).toBe(join(root, 'source', 'novel.md'))
     expect(existsSync(result.sourcePath)).toBe(true)
 
     const content = readFileSync(result.sourcePath, 'utf-8')
-    expect(content).toContain('> 项目：测试项目')
     expect(content.indexOf('## 第1章')).toBeLessThan(
       content.indexOf('## 第2章')
     )

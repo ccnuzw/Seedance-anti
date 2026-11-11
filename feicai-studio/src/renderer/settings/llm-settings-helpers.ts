@@ -1,4 +1,27 @@
 import type { LLMConfig, LLMProviderType, ModelCategory } from '@shared/types'
+import type { LLMFormState } from './llm-config'
+
+export function updateCredentialDraft(
+  previous: LLMFormState,
+  next: LLMFormState,
+  hasStoredApiKey: boolean
+): { form: LLMFormState; hasStoredApiKey: boolean } {
+  if (
+    previous.provider !== next.provider ||
+    previous.baseUrl !== next.baseUrl
+  ) {
+    return { form: { ...next, apiKey: '' }, hasStoredApiKey: false }
+  }
+  return { form: next, hasStoredApiKey }
+}
+
+export function modelTestNotice(category: ModelCategory): string {
+  if (category === 'video')
+    return '视频配置仅供记录，尚未提供视频生成生产链或连接测试。'
+  if (category === 'image')
+    return '测试会发送真实图片生成请求，服务商可能收费。工作台尚未提供图片生成生产链。'
+  return '测试会发送真实文本生成请求，服务商可能收费。'
+}
 
 export function isOpenAIProvider(provider: LLMProviderType): boolean {
   return provider === 'openai' || provider === 'openai-compatible'

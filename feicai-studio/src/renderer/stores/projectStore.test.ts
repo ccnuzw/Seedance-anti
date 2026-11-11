@@ -57,6 +57,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -85,6 +86,69 @@ describe('useProjectStore', async () => {
       ],
       loading: false
     })
+  })
+
+  it('切换项目立即移除上一项目的集数', () => {
+    const nextProject = { ...baseProject, id: 'project-2' }
+    useProjectStore.getState().setCurrentProject(nextProject)
+    expect(useProjectStore.getState().currentProject?.id).toBe('project-2')
+    expect(useProjectStore.getState().episodes).toEqual([])
+  })
+
+  it('项目和集数一起发布，较早的项目请求不能覆盖新选择', async () => {
+    const first = Promise.withResolvers<Project>()
+    const secondEpisodes = Promise.withResolvers<Episode[]>()
+    const nextProject = { ...baseProject, id: 'project-2' }
+    const nextEpisodes = [
+      createEpisode({ id: 'p2-ep1', projectId: 'project-2' })
+    ]
+    getProject.mockImplementation((id: string) =>
+      id === 'project-1' ? first.promise : Promise.resolve(nextProject)
+    )
+    listProjectEpisodes.mockReturnValue(secondEpisodes.promise)
+    const oldLoad = useProjectStore.getState().loadProject('project-1')
+    const newLoad = useProjectStore.getState().loadProject('project-2')
+    await Promise.resolve()
+    expect(useProjectStore.getState().currentProject).toBeNull()
+    expect(useProjectStore.getState().episodes).toEqual([])
+    secondEpisodes.resolve(nextEpisodes)
+    await newLoad
+    first.resolve(baseProject)
+    await oldLoad
+    expect(useProjectStore.getState().currentProject?.id).toBe('project-2')
+    expect(useProjectStore.getState().episodes).toEqual(nextEpisodes)
+  })
+
+  it.each(['list', 'sync', 'single'] as const)(
+    '切走再返回同一项目时忽略上一轮 %s 结果',
+    async (operation) => {
+      const pending = Promise.withResolvers<Episode | Episode[]>()
+      listProjectEpisodes.mockReturnValue(pending.promise)
+      syncProjectStatus.mockReturnValue(pending.promise)
+      syncSingleEpisodeStatus.mockReturnValue(pending.promise)
+      const state = useProjectStore.getState()
+      const request =
+        operation === 'list'
+          ? state.refreshProject()
+          : operation === 'sync'
+            ? state.syncEpisodeStatus()
+            : state.syncSingleEpisodeStatus(1)
+      state.setCurrentProject({ ...baseProject, id: 'project-2' })
+      state.setCurrentProject(baseProject)
+      pending.resolve(
+        operation === 'single' ? createEpisode() : [createEpisode()]
+      )
+      await request
+      expect(useProjectStore.getState().currentProject?.id).toBe('project-1')
+      expect(useProjectStore.getState().episodes).toEqual([])
+    }
+  )
+
+  it('不存在的项目不保留旧项目的集数', async () => {
+    getProject.mockResolvedValue(null)
+    await useProjectStore.getState().loadProject('missing')
+    expect(useProjectStore.getState().currentProject).toBeNull()
+    expect(useProjectStore.getState().episodes).toEqual([])
   })
 
   it('同步单集状态时会先清理缓存并覆盖已有 episode', async () => {

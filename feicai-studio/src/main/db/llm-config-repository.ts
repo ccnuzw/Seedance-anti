@@ -8,6 +8,11 @@ import {
   migrateSecretIfNeeded
 } from '../llm/secret-store'
 import type { LLMConfig, ModelCategory, OpenAIWireApi } from '@shared/types'
+import {
+  endpointIdentity,
+  LLMRequestError,
+  normalizeBaseEndpoint
+} from '../llm/endpoint-security'
 
 function inferWireApi(row: Record<string, unknown>): OpenAIWireApi {
   const stored = row.wire_api as OpenAIWireApi | undefined
@@ -22,8 +27,7 @@ function inferReasoningEffort(
   row: Record<string, unknown>
 ): LLMConfig['reasoningEffort'] {
   const stored = row.reasoning_effort as
-    | LLMConfig['reasoningEffort']
-    | undefined
+    LLMConfig['reasoningEffort'] | undefined
   if (
     stored === 'none' ||
     stored === 'low' ||
@@ -65,8 +69,7 @@ function inferImageOutputFormat(
   row: Record<string, unknown>
 ): LLMConfig['imageOutputFormat'] {
   const stored = row.image_output_format as
-    | LLMConfig['imageOutputFormat']
-    | undefined
+    LLMConfig['imageOutputFormat'] | undefined
   if (stored === 'png' || stored === 'jpeg' || stored === 'webp') return stored
   return 'png'
 }
@@ -75,8 +78,7 @@ function inferImageBackground(
   row: Record<string, unknown>
 ): LLMConfig['imageBackground'] {
   const stored = row.image_background as
-    | LLMConfig['imageBackground']
-    | undefined
+    LLMConfig['imageBackground'] | undefined
   if (stored === 'auto' || stored === 'transparent' || stored === 'opaque')
     return stored
   return 'auto'
@@ -99,6 +101,9 @@ function migrateStoredSecretIfNeeded(id: string, storedSecret: string): string {
 }
 
 export function addLLMConfig(data: Omit<LLMConfig, 'id'>): LLMConfig {
+  normalizeBaseEndpoint(data.baseUrl)
+  if (!data.apiKey.trim())
+    throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
   const db = getDatabase()
   const id = uuid()
   const category = data.category || 'llm'
@@ -108,6 +113,7 @@ export function addLLMConfig(data: Omit<LLMConfig, 'id'>): LLMConfig {
   const imageQuality = data.imageQuality || 'auto'
   const imageOutputFormat = data.imageOutputFormat || 'png'
   const imageBackground = data.imageBackground || 'auto'
+  const storedSecret = encryptSecret(data.apiKey.trim())
 
   if (data.isDefault) {
     db.prepare('UPDATE llm_configs SET is_default = 0 WHERE category = ?').run(
@@ -130,7 +136,7 @@ export function addLLMConfig(data: Omit<LLMConfig, 'id'>): LLMConfig {
     category,
     data.provider,
     data.baseUrl,
-    encryptSecret(data.apiKey),
+    storedSecret,
     data.model,
     wireApi,
     reasoningEffort,
@@ -148,7 +154,7 @@ export function addLLMConfig(data: Omit<LLMConfig, 'id'>): LLMConfig {
     id,
     apiKey: '',
     hasStoredApiKey: true,
-    apiKeyMasked: maskSecret(encryptSecret(data.apiKey)),
+    apiKeyMasked: maskSecret(storedSecret),
     category,
     wireApi,
     reasoningEffort,
@@ -164,7 +170,32 @@ export function updateLLMConfig(
   data: Partial<Omit<LLMConfig, 'id'>>
 ): void {
   const db = getDatabase()
+  const existing = db
+    .prepare('SELECT * FROM llm_configs WHERE id = ?')
+    .get(id) as Record<string, unknown> | undefined
+  if (!existing) throw new LLMRequestError('模型配置不存在')
+  const nextProvider =
+    data.provider ?? (existing.provider as LLMConfig['provider'])
+  const nextBaseUrl = data.baseUrl ?? String(existing.base_url)
+  const nextIdentity = endpointIdentity(nextProvider, nextBaseUrl)
+  let changedEndpoint = true
+  try {
+    changedEndpoint =
+      nextIdentity !==
+      endpointIdentity(
+        existing.provider as LLMConfig['provider'],
+        String(existing.base_url)
+      )
+  } catch {
+    /* An insecure legacy endpoint requires explicit replacement credentials. */
+  }
+  if (changedEndpoint && !data.apiKey?.trim()) {
+    throw new LLMRequestError('Provider 或 API 端点已变更，请重新输入 API Key')
+  }
   if (data.isDefault) {
+    if (!data.apiKey?.trim() && !hasStoredSecret(getStoredSecret(existing))) {
+      throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
+    }
     const row = db
       .prepare('SELECT category FROM llm_configs WHERE id = ?')
       .get(id) as { category: string } | undefined
@@ -193,7 +224,7 @@ export function updateLLMConfig(
   }
   if (data.apiKey !== undefined && data.apiKey.trim() !== '') {
     fields.push('api_key_encrypted = ?')
-    values.push(encryptSecret(data.apiKey))
+    values.push(encryptSecret(data.apiKey.trim()))
   }
   if (data.model !== undefined) {
     fields.push('model = ?')
@@ -282,6 +313,9 @@ export function getDefaultLLMConfig(
     .prepare('SELECT * FROM llm_configs WHERE is_default = 1 AND category = ?')
     .get(category) as Record<string, unknown> | undefined
   if (!row) return null
+  normalizeBaseEndpoint(String(row.base_url))
+  if (!hasStoredSecret(getStoredSecret(row)))
+    throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
   const storedSecret = migrateStoredSecretIfNeeded(
     row.id as string,
     getStoredSecret(row)
@@ -312,12 +346,13 @@ export function deleteLLMConfig(id: string): void {
 }
 
 export function resolveLLMConfigForExecution(config: LLMConfig): LLMConfig {
+  if (config.baseUrl) normalizeBaseEndpoint(config.baseUrl)
   if (config.apiKey.trim()) {
     return config
   }
 
   if (!config.id) {
-    throw new Error('缺少 API Key')
+    throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
   }
 
   const db = getDatabase()
@@ -325,7 +360,20 @@ export function resolveLLMConfigForExecution(config: LLMConfig): LLMConfig {
     .prepare('SELECT * FROM llm_configs WHERE id = ?')
     .get(config.id) as Record<string, unknown> | undefined
   if (!row) {
-    throw new Error('模型配置不存在')
+    throw new LLMRequestError('模型配置不存在')
+  }
+  const baseUrl = config.baseUrl || String(row.base_url)
+  if (
+    endpointIdentity(config.provider, baseUrl) !==
+    endpointIdentity(
+      row.provider as LLMConfig['provider'],
+      String(row.base_url)
+    )
+  ) {
+    throw new LLMRequestError('Provider 或 API 端点已变更，请重新输入 API Key')
+  }
+  if (!hasStoredSecret(getStoredSecret(row))) {
+    throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
   }
   const storedSecret = migrateStoredSecretIfNeeded(
     row.id as string,
@@ -355,12 +403,29 @@ export function resolveLLMConfigForExecution(config: LLMConfig): LLMConfig {
 
 export function setDefaultLLMConfig(id: string): void {
   const db = getDatabase()
-  const row = db
-    .prepare('SELECT category FROM llm_configs WHERE id = ?')
-    .get(id) as { category: string } | undefined
-  const category = row?.category || 'llm'
+  const row = db.prepare('SELECT * FROM llm_configs WHERE id = ?').get(id) as
+    Record<string, unknown> | undefined
+  if (!row) throw new LLMRequestError('模型配置不存在')
+  normalizeBaseEndpoint(String(row.base_url))
+  if (!hasStoredSecret(getStoredSecret(row)))
+    throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
+  const category = row.category || 'llm'
   db.prepare('UPDATE llm_configs SET is_default = 0 WHERE category = ?').run(
     category
   )
   db.prepare('UPDATE llm_configs SET is_default = 1 WHERE id = ?').run(id)
+}
+
+/** Removes only credentials; model configuration records remain available for re-entry. */
+export function clearStoredLLMCredentials(): number {
+  const db = getDatabase()
+  const result = db
+    .prepare(
+      "UPDATE llm_configs SET api_key_encrypted = '', is_default = 0 WHERE api_key_encrypted <> ''"
+    )
+    .run()
+  db.prepare(
+    'UPDATE llm_configs SET is_default = 0 WHERE is_default <> 0'
+  ).run()
+  return result.changes
 }

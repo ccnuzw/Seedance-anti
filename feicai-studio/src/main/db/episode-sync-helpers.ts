@@ -1,5 +1,4 @@
 import { v4 as uuid } from 'uuid'
-import type Database from 'better-sqlite3'
 import type { EpisodeScanResult } from '../project-sync/scan'
 
 export interface SqlStatement {
@@ -78,16 +77,6 @@ export function applyEpisodeSnapshot(
     now,
     episodeId
   )
-}
-
-export function deleteEpisodeRecord(
-  db: Database.Database,
-  episodeId: string
-): void {
-  db.prepare('DELETE FROM reviews WHERE episode_id = ?').run(episodeId)
-  db.prepare('DELETE FROM asset_references WHERE episode_id = ?').run(episodeId)
-  db.prepare('DELETE FROM execution_logs WHERE episode_id = ?').run(episodeId)
-  db.prepare('DELETE FROM episodes WHERE id = ?').run(episodeId)
 }
 
 export function isEpisodeSnapshotChanged(

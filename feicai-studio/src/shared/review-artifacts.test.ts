@@ -37,6 +37,60 @@ describe('review-artifacts', () => {
     expect(parsed?.issues[0].location).toBe('第二幕')
   })
 
+  it.each(['PASS', 'FAIL', 'INVALID'] as const)(
+    '保留%s与全部来源hash，不把INVALID变回FAIL/PASS',
+    (result) => {
+      const review: ReviewResult = {
+        ...sampleReview,
+        result,
+        passed: result === 'PASS',
+        artifactHash: 'a'.repeat(64),
+        inputHashes: { script: 'b'.repeat(64), plotBreakdown: 'c'.repeat(64) }
+      }
+      expect(
+        parseReviewMarkdown(
+          formatReviewMarkdown('审核', review),
+          'script_review'
+        )
+      ).toEqual(review)
+    }
+  )
+
+  it('legacy无hash仍可展示，但不凭空附加来源绑定', () => {
+    const parsed = parseReviewMarkdown(
+      formatReviewMarkdown('历史审核', sampleReview),
+      'script_review'
+    )
+    expect(parsed?.artifactHash).toBeUndefined()
+    expect(parsed?.inputHashes).toBeUndefined()
+  })
+
+  it('拒绝损坏来源绑定、冲突结论与越界分数', () => {
+    const markdown = formatReviewMarkdown('审核', {
+      ...sampleReview,
+      artifactHash: 'a'.repeat(64),
+      inputHashes: { script: 'b'.repeat(64) }
+    })
+    expect(
+      parseReviewMarkdown(
+        markdown.replace('a'.repeat(64), 'bad-hash'),
+        'script_review'
+      )
+    ).toBeNull()
+    expect(
+      parseReviewMarkdown(
+        markdown.replace('- 评分：6.5/10', '- 评分：11/10'),
+        'script_review'
+      )
+    ).toBeNull()
+    expect(
+      parseReviewMarkdown(
+        markdown.replace('- 结果：FAIL', '- 结果：FAIL\n- 结果：PASS'),
+        'script_review'
+      )
+    ).toBeNull()
+  })
+
   it('缺少关键段落时返回 null', () => {
     const parsed = parseReviewMarkdown(
       '# bad file\n- 结果：PASS',

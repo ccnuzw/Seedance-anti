@@ -48,6 +48,16 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
 
   const handleExportPrompts = async () => {
     if (!currentProject) return
+    if (
+      !Number.isInteger(epStart) ||
+      !Number.isInteger(epEnd) ||
+      epStart < 1 ||
+      epEnd < epStart ||
+      epEnd > Math.min(episodeCount, 10000)
+    ) {
+      addToast('error', '请选择项目范围内有效的起止集数')
+      return
+    }
     setExporting(true)
     try {
       const range: number[] = []
@@ -63,7 +73,10 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
       if (result.canceled) {
         // 用户取消
       } else if (isServiceSuccess(result)) {
-        addToast('success', `提示词已导出到 ${result.path}`)
+        addToast(
+          'success',
+          `已导出 ${result.count ?? 0} 集当前审核有效提示词到 ${result.path}`
+        )
         onClose()
       } else {
         const toast = getServiceFailureToast(result, '导出失败')
@@ -87,7 +100,10 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
       if (result.canceled) {
         // 用户取消
       } else if (isServiceSuccess(result)) {
-        addToast('success', `全部产出已导出到 ${result.path}`)
+        addToast(
+          'success',
+          `已导出 ${result.count ?? 0} 个当前审核有效文件到 ${result.path}`
+        )
         onClose()
       } else {
         const toast = getServiceFailureToast(result, '导出失败')
@@ -100,14 +116,27 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div
+      className="modal-overlay"
+      onClick={() => {
+        if (!exporting) onClose()
+      }}
+    >
       <div
         className="modal-content export-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2>📦 导出</h2>
-          <button className="modal-close" onClick={onClose}>
+          <h2 id="export-title">📦 导出</h2>
+          <button
+            className="modal-close"
+            aria-label="关闭导出对话框"
+            disabled={exporting}
+            onClick={onClose}
+          >
             ✕
           </button>
         </div>
@@ -122,6 +151,7 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
               <div className="export-range">
                 <input
                   type="number"
+                  aria-label="起始集数"
                   className="input input-sm"
                   min={1}
                   max={episodeCount || 30}
@@ -131,6 +161,7 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
                 <span className="text-secondary">~</span>
                 <input
                   type="number"
+                  aria-label="结束集数"
                   className="input input-sm"
                   min={1}
                   max={episodeCount || 30}
@@ -148,6 +179,7 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
                     key={opt.value}
                     className={`btn btn-sm ${format === opt.value ? 'btn-primary' : ''}`}
                     onClick={() => setFormat(opt.value)}
+                    aria-pressed={format === opt.value}
                   >
                     {opt.label}
                   </button>
@@ -158,7 +190,7 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
             <button
               className="btn btn-primary"
               onClick={handleExportPrompts}
-              disabled={exporting}
+              disabled={exporting || episodeCount === 0}
             >
               {exporting ? '⏳ 导出中...' : '📄 导出提示词'}
             </button>
@@ -168,9 +200,9 @@ export default function ExportModal({ open, onClose }: ExportModalProps) {
 
           {/* 全部导出 */}
           <div className="export-section">
-            <h3>📁 导出全部产出</h3>
+            <h3>导出已审核产出</h3>
             <p className="text-secondary export-desc">
-              将 outputs/ 和 assets/ 目录完整复制到指定位置
+              仅导出当前审核有效的产物，不包含未审核或已失效内容。这不是项目备份；完整备份请前往设置中的数据管理。
             </p>
             <button
               className="btn"

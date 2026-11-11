@@ -6,7 +6,6 @@ const getProject = vi.fn()
 const listEpisodes = vi.fn()
 const listProjects = vi.fn()
 const migrateLegacyNovelDirectoryRecord = vi.fn()
-const repairProjectIssuesRecord = vi.fn()
 const syncEpisodeStatus = vi.fn()
 const syncSingleEpisodeStatus = vi.fn()
 
@@ -17,7 +16,6 @@ vi.mock('../db/queries', () => ({
   listEpisodes,
   listProjects,
   migrateLegacyNovelDirectory: migrateLegacyNovelDirectoryRecord,
-  repairProjectIssues: repairProjectIssuesRecord,
   syncEpisodeStatus,
   syncSingleEpisodeStatus
 }))
@@ -186,20 +184,5 @@ describe('project-service', async () => {
       '/tmp/project'
     )
     expect(result).toEqual({ moved: true })
-  })
-
-  it('repairProjectIssues 会透传修复参数', async () => {
-    const params = {
-      projectPath: '/tmp/project',
-      issueType: 'missing_source' as const
-    }
-    repairProjectIssuesRecord.mockResolvedValue({
-      repaired: true
-    })
-
-    const result = await service.repairProjectIssues(params)
-
-    expect(repairProjectIssuesRecord).toHaveBeenCalledWith(params)
-    expect(result).toEqual({ repaired: true })
   })
 })

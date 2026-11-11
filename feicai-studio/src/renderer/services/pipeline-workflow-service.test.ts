@@ -50,9 +50,7 @@ function createProject(): Project {
 describe('pipeline-workflow-service', () => {
   it('可以返回阶段中文标签', () => {
     expect(getPipelineWorkflowStageLabel('story')).toBe('剧情批次拆解')
-    expect(getPipelineWorkflowStageLabel('story_review')).toBe(
-      '剧情批次审核'
-    )
+    expect(getPipelineWorkflowStageLabel('story_review')).toBe('剧情批次审核')
     expect(getPipelineWorkflowStageLabel('storyboard_review')).toBe('分镜审核')
   })
 

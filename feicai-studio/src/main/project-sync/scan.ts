@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
-import { join } from 'path'
+import { join, sep } from 'path'
 import { deriveEpisodeStatus } from '@shared/workflow'
 import { parseReviewMarkdown } from '@shared/review-artifacts'
 import {
@@ -7,7 +7,18 @@ import {
   resolveProjectArtifactPath,
   resolveProjectLayout
 } from '@shared/path-resolver'
-import type { EpisodeStatus, Project, ReviewResult } from '@shared/types'
+import type {
+  EpisodeStatus,
+  Project,
+  ProjectPipelineState,
+  ReviewResult
+} from '@shared/types'
+import type { EpisodeArtifactId } from '@shared/artifact-registry'
+import { isReviewCurrent } from '../engine/artifact-provenance'
+import {
+  assertEpisodeNumber,
+  assertPathWithinProject
+} from '../security/access-control'
 
 export interface EpisodeScanResult {
   episodeNumber: number
@@ -47,48 +58,87 @@ export function hasProjectSourceNovel(
   projectPath: string,
   config: Project['config'] | undefined
 ): boolean {
-  const sourceNovelPath = resolveProjectArtifactPath(
+  const sourceNovelPath = assertPathWithinProject(
     projectPath,
-    'sourceNovel',
-    config
+    resolveProjectArtifactPath(projectPath, 'sourceNovel', config)
   )
   return existsSync(sourceNovelPath)
 }
 
-const reviewResultCache = new Map<
-  string,
-  {
-    mtimeMs: number
-    result: ReviewResult | null
-  }
->()
-
+const MAX_SCAN_CACHE_ENTRIES = 256
+interface FileCacheEntry<T> {
+  signature: string
+  value: T
+}
+const reviewResultCache = new Map<string, FileCacheEntry<ReviewResult | null>>()
 const promptStatsCache = new Map<
   string,
-  {
-    mtimeMs: number
+  FileCacheEntry<{
     totalPrompts: number
     totalDuration: number
-  }
+  }>
 >()
+const stateCache = new Map<
+  string,
+  FileCacheEntry<ProjectPipelineState | null>
+>()
+export function invalidateProjectScanCache(projectPath?: string): void {
+  if (projectPath)
+    projectPath = assertPathWithinProject(projectPath, projectPath)
+  for (const cache of [reviewResultCache, promptStatsCache, stateCache]) {
+    for (const path of cache.keys()) {
+      if (
+        !projectPath ||
+        path === projectPath ||
+        path.startsWith(`${projectPath}${sep}`)
+      )
+        cache.delete(path)
+    }
+  }
+}
+
+function readCached<T>(
+  filePath: string,
+  cache: Map<string, FileCacheEntry<T>>,
+  load: () => T
+): T {
+  const stat = statSync(filePath)
+  const signature = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`
+  const cached = cache.get(filePath)
+  if (cached?.signature === signature) {
+    cache.delete(filePath)
+    cache.set(filePath, cached)
+    return cached.value
+  }
+  const value = load()
+  cache.delete(filePath)
+  cache.set(filePath, { signature, value })
+  if (cache.size > MAX_SCAN_CACHE_ENTRIES)
+    cache.delete(cache.keys().next().value!)
+  return value
+}
+
+function loadPipelineState(filePath: string): ProjectPipelineState | null {
+  try {
+    return readCached(
+      filePath,
+      stateCache,
+      () => JSON.parse(readFileSync(filePath, 'utf-8')) as ProjectPipelineState
+    )
+  } catch {
+    stateCache.delete(filePath)
+    return null
+  }
+}
 
 function loadReviewResult(
   filePath: string,
   stage: 'story_review' | 'script_review' | 'storyboard_review'
 ): ReviewResult | null {
   try {
-    const stat = statSync(filePath)
-    const cached = reviewResultCache.get(filePath)
-    if (cached && cached.mtimeMs === stat.mtimeMs) {
-      return cached.result
-    }
-    const raw = readFileSync(filePath, 'utf-8')
-    const result = parseReviewMarkdown(raw, stage)
-    reviewResultCache.set(filePath, {
-      mtimeMs: stat.mtimeMs,
-      result
-    })
-    return result
+    return readCached(filePath, reviewResultCache, () =>
+      parseReviewMarkdown(readFileSync(filePath, 'utf-8'), stage)
+    )
   } catch {
     reviewResultCache.delete(filePath)
     return null
@@ -100,34 +150,19 @@ function loadPromptStats(filePath: string): {
   totalDuration: number
 } {
   try {
-    const stat = statSync(filePath)
-    const cached = promptStatsCache.get(filePath)
-    if (cached && cached.mtimeMs === stat.mtimeMs) {
-      return {
-        totalPrompts: cached.totalPrompts,
-        totalDuration: cached.totalDuration
+    return readCached(filePath, promptStatsCache, () => {
+      const sections = readFileSync(filePath, 'utf-8').split(/^## /m).slice(1)
+      const totalPrompts = sections.filter((s) => s.trim().length > 0).length
+      let totalDuration = 0
+      for (const section of sections) {
+        const match =
+          section.match(/时长[：:]\s*(\d+)\s*[秒s]/i) ||
+          section.match(/建议时长[：:]\s*(\d+)/i) ||
+          section.match(/(\d+)\s*[秒s]/i)
+        if (match) totalDuration += Number(match[1])
       }
-    }
-
-    const raw = readFileSync(filePath, 'utf-8')
-    const sections = raw.split(/^## /m).slice(1)
-    const totalPrompts = sections.filter((s) => s.trim().length > 0).length
-    let totalDuration = 0
-    for (const section of sections) {
-      const durMatch =
-        section.match(/时长[：:]\s*(\d+)\s*[秒s]/i) ||
-        section.match(/建议时长[：:]\s*(\d+)/i) ||
-        section.match(/(\d+)\s*[秒s]/i)
-      if (durMatch) totalDuration += parseInt(durMatch[1])
-    }
-
-    promptStatsCache.set(filePath, {
-      mtimeMs: stat.mtimeMs,
-      totalPrompts,
-      totalDuration
+      return { totalPrompts, totalDuration }
     })
-
-    return { totalPrompts, totalDuration }
   } catch {
     promptStatsCache.delete(filePath)
     return { totalPrompts: 0, totalDuration: 0 }
@@ -140,87 +175,69 @@ export function scanEpisodeFilesystem(
   episodeNumber: number,
   hasSourceNovel: boolean
 ): EpisodeScanResult {
-  const storyBeatPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'storyBeat',
-    episodeNumber,
-    config
-  )
-  const scriptPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'script',
-    episodeNumber,
-    config
-  )
-  const storyReviewPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'storyReview',
-    episodeNumber,
-    config
-  )
-  const scriptReviewPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'scriptReview',
-    episodeNumber,
-    config
-  )
-  const directorPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'directorAnalysis',
-    episodeNumber,
-    config
-  )
-  const characterPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'characterDesign',
-    episodeNumber,
-    config
-  )
-  const artPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'artDesign',
-    episodeNumber,
-    config
-  )
-  const storyboardPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'storyboard',
-    episodeNumber,
-    config
-  )
-  const promptsPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'seedancePrompts',
-    episodeNumber,
-    config
-  )
-  const storyboardReviewPath = resolveEpisodeArtifactPath(
-    projectPath,
-    'storyboardReview',
-    episodeNumber,
-    config
-  )
+  assertEpisodeNumber(episodeNumber)
+  const artifactPath = (artifact: EpisodeArtifactId): string =>
+    assertPathWithinProject(
+      projectPath,
+      resolveEpisodeArtifactPath(projectPath, artifact, episodeNumber, config)
+    )
+  const storyBeatPath = artifactPath('storyBeat')
+  const scriptPath = artifactPath('script')
+  const storyReviewPath = artifactPath('storyReview')
+  const scriptReviewPath = artifactPath('scriptReview')
+  const directorPath = artifactPath('directorAnalysis')
+  const characterPath = artifactPath('characterDesign')
+  const artPath = artifactPath('artDesign')
+  const storyboardPath = artifactPath('storyboard')
+  const promptsPath = artifactPath('seedancePrompts')
+  const storyboardReviewPath = artifactPath('storyboardReview')
+  const current = (review: ReviewResult | null | undefined): boolean =>
+    !!review?.passed &&
+    review.result === 'PASS' &&
+    isReviewCurrent(review, projectPath, episodeNumber, config)
 
   const hasStoryBeat = existsSync(storyBeatPath)
   const storyReview = existsSync(storyReviewPath)
     ? loadReviewResult(storyReviewPath, 'story_review')
     : null
-  const hasStoryReview = !!storyReview?.passed
+  const hasStoryReview = current(storyReview)
   const hasScript = existsSync(scriptPath)
   const scriptReview = existsSync(scriptReviewPath)
     ? loadReviewResult(scriptReviewPath, 'script_review')
     : null
-  const hasScriptReview = !!scriptReview?.passed
-  const hasDirector = existsSync(directorPath)
-  const hasCharacter = existsSync(characterPath)
-  const hasArt = existsSync(artPath)
-  const hasStoryboard = existsSync(storyboardPath)
-  const hasPrompts = existsSync(promptsPath)
+  const hasScriptReview = hasScript && current(scriptReview)
+  const statePath = assertPathWithinProject(
+    projectPath,
+    resolveProjectArtifactPath(projectPath, 'pipelineState', config)
+  )
+  const state = existsSync(statePath)
+    ? loadPipelineState(statePath)?.episodes?.[episodeNumber]
+    : undefined
+  const directorExists = existsSync(directorPath)
+  const characterExists = existsSync(characterPath)
+  const artExists = existsSync(artPath)
+  const storyboardExists = existsSync(storyboardPath)
+  const promptsExist = existsSync(promptsPath)
+  // Physical paths stay available for editing/review. Completion flags require
+  // current upstream approvals, not merely artifacts left by a previous run.
+  const hasDirector = directorExists && hasScriptReview
+  const directorApproved =
+    hasDirector &&
+    state?.stageStates?.director?.status === 'passed' &&
+    current(state.stageStates.director.lastReview)
+  const hasCharacter = characterExists && directorApproved
+  const hasArt = artExists && directorApproved
+  const artApproved =
+    hasArt &&
+    state?.stageStates?.art?.status === 'passed' &&
+    current(state.stageStates.art.lastReview)
+  const hasStoryboard = storyboardExists && artApproved
+  const hasPrompts = promptsExist && artApproved
   const storyboardReview = existsSync(storyboardReviewPath)
     ? loadReviewResult(storyboardReviewPath, 'storyboard_review')
     : null
-  const hasStoryboardReview = !!storyboardReview?.passed
-  const promptStats = hasPrompts
+  const hasStoryboardReview = hasPrompts && current(storyboardReview)
+  const promptStats = promptsExist
     ? loadPromptStats(promptsPath)
     : { totalPrompts: 0, totalDuration: 0 }
 
@@ -246,11 +263,11 @@ export function scanEpisodeFilesystem(
     storyReviewPath: storyReview ? storyReviewPath : null,
     scriptPath: hasScript ? scriptPath : null,
     scriptReviewPath: scriptReview ? scriptReviewPath : null,
-    directorAnalysisPath: hasDirector ? directorPath : null,
-    characterDesignPath: hasCharacter ? characterPath : null,
-    artDesignPath: hasArt ? artPath : null,
-    storyboardPath: hasStoryboard ? storyboardPath : null,
-    seedancePromptsPath: hasPrompts ? promptsPath : null,
+    directorAnalysisPath: directorExists ? directorPath : null,
+    characterDesignPath: characterExists ? characterPath : null,
+    artDesignPath: artExists ? artPath : null,
+    storyboardPath: storyboardExists ? storyboardPath : null,
+    seedancePromptsPath: promptsExist ? promptsPath : null,
     storyboardReviewPath: storyboardReview ? storyboardReviewPath : null,
     hasStoryBeat,
     hasStoryReview,
@@ -275,46 +292,43 @@ export function scanProjectFilesystem(
   totalEpisodes: number
 ): ProjectScanResult {
   const layout = resolveProjectLayout(config)
-  const outputsDir = join(projectPath, layout.outputsDir)
-  const scriptDir = join(projectPath, layout.scriptDir)
-  const storyDir = join(projectPath, layout.storyEpisodeBeatsDir)
-  const hasSourceNovel = hasProjectSourceNovel(projectPath, config)
-
-  const episodeNums = new Set<number>()
-
-  if (existsSync(outputsDir)) {
-    for (const entry of readdirSync(outputsDir)) {
-      const match = entry.match(/^ep(\d+)$/)
-      if (match) episodeNums.add(parseInt(match[1]))
-    }
-  }
-
-  if (existsSync(scriptDir)) {
-    for (const entry of readdirSync(scriptDir)) {
-      const match = entry.match(/^ep(\d+)\.md$/)
-      if (match) episodeNums.add(parseInt(match[1]))
-    }
-  }
-
-  if (existsSync(storyDir)) {
-    for (const entry of readdirSync(storyDir)) {
-      const match = entry.match(/^ep(\d+)\.md$/)
-      if (match) episodeNums.add(parseInt(match[1]))
-    }
-  }
-
-  if (episodeNums.size === 0 && totalEpisodes > 0) {
-    for (let i = 1; i <= totalEpisodes; i++) episodeNums.add(i)
-  }
-
-  const sortedNums = [...episodeNums].sort((a, b) => a - b)
-  const episodes = sortedNums.map((episodeNumber) =>
-    scanEpisodeFilesystem(projectPath, config, episodeNumber, hasSourceNovel)
+  const outputsDir = assertPathWithinProject(
+    projectPath,
+    join(projectPath, layout.outputsDir)
   )
+  const scriptDir = assertPathWithinProject(
+    projectPath,
+    join(projectPath, layout.scriptDir)
+  )
+  const storyDir = assertPathWithinProject(
+    projectPath,
+    join(projectPath, layout.storyEpisodeBeatsDir)
+  )
+  const hasSourceNovel = hasProjectSourceNovel(projectPath, config)
+  const episodeNums = new Set<number>()
+  for (let i = 1; i <= Math.min(totalEpisodes, 10000); i++) episodeNums.add(i)
 
+  for (const [directory, pattern] of [
+    [outputsDir, /^ep(\d+)$/],
+    [scriptDir, /^ep(\d+)\.md$/],
+    [storyDir, /^ep(\d+)\.md$/]
+  ] as const) {
+    if (!existsSync(directory)) continue
+    for (const entry of readdirSync(directory)) {
+      const match = entry.match(pattern)
+      if (!match) continue
+      const number = Number(match[1])
+      if (Number.isInteger(number) && number > 0 && number <= 10000)
+        episodeNums.add(number)
+    }
+  }
+
+  const episodeNumbers = [...episodeNums].sort((a, b) => a - b)
   return {
     hasSourceNovel,
-    episodeNumbers: sortedNums,
-    episodes
+    episodeNumbers,
+    episodes: episodeNumbers.map((number) =>
+      scanEpisodeFilesystem(projectPath, config, number, hasSourceNovel)
+    )
   }
 }

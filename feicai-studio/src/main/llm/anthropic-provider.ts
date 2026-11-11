@@ -1,40 +1,105 @@
-// ============================================================
-// Anthropic Provider — Claude API 实现
-// ============================================================
-
-import Anthropic from '@anthropic-ai/sdk'
 import { BaseLLMProvider } from './types'
+import { LLMRequestError, normalizeBaseEndpoint } from './endpoint-security'
+import {
+  assertNonEmpty,
+  assertResponseOK,
+  modelEvents,
+  providerFailure,
+  requestJSON,
+  RequestScope
+} from './request-transport'
 import type { AssembledPrompt, GenerateOptions, LLMConfig } from '@shared/types'
 
+interface AnthropicEvent {
+  type?: string
+  error?: unknown
+  content?: Array<{ type?: string; text?: string }>
+  content_block?: { type?: string; text?: string }
+  delta?: { type?: string; text?: string }
+}
+
 export class AnthropicProvider extends BaseLLMProvider {
-  private client: Anthropic
+  private readonly endpoint: string
 
   constructor(config: LLMConfig) {
     super(config)
-    this.client = new Anthropic({
-      apiKey: config.apiKey,
-      baseURL: config.baseUrl || undefined
-    })
+    const base = normalizeBaseEndpoint(config.baseUrl)
+    this.endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/messages`
+  }
+
+  private async *execute(
+    prompt: AssembledPrompt,
+    options: GenerateOptions | undefined,
+    stream: boolean
+  ): AsyncGenerator<string> {
+    const scope = new RequestScope(options)
+    let output = ''
+    try {
+      const response = await requestJSON(
+        this.endpoint,
+        {
+          'x-api-key': this.config.apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json'
+        },
+        {
+          model: this.config.model,
+          max_tokens: this.getMaxTokens(options),
+          temperature: this.getTemperature(options),
+          system: prompt.system,
+          messages: [{ role: 'user', content: prompt.user }],
+          stream
+        },
+        scope
+      )
+      assertResponseOK(response)
+      for await (const event of modelEvents(response, scope)) {
+        const data = event.data as AnthropicEvent | null
+        if (!data || typeof data !== 'object')
+          throw new LLMRequestError('模型响应结构无效')
+        const type = data.type || event.event
+        if (event.event === 'error' || type === 'error' || data.error)
+          throw new LLMRequestError('Anthropic 模型流返回错误')
+        let text = ''
+        if (event.event === 'json')
+          text = (data.content || [])
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text || '')
+            .join('')
+        else if (
+          type === 'content_block_delta' &&
+          data.delta?.type === 'text_delta'
+        )
+          text = data.delta.text || ''
+        else if (
+          type === 'content_block_start' &&
+          data.content_block?.type === 'text'
+        )
+          text = data.content_block.text || ''
+        if (text) {
+          scope.throwIfAborted()
+          output += text
+          options?.onChunk?.(text)
+          yield text
+        }
+        if (type === 'message_stop') break
+      }
+      scope.throwIfAborted()
+      assertNonEmpty(output)
+    } catch (error) {
+      throw providerFailure(error, scope)
+    } finally {
+      scope.dispose()
+    }
   }
 
   async generate(
     prompt: AssembledPrompt,
     options?: GenerateOptions
   ): Promise<string> {
-    const response = await this.client.messages.create({
-      model: this.config.model,
-      max_tokens: this.getMaxTokens(options),
-      temperature: this.getTemperature(options),
-      system: prompt.system,
-      messages: [{ role: 'user', content: prompt.user }]
-    })
-
-    const text = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => (block as { type: 'text'; text: string }).text)
-      .join('')
-
-    options?.onChunk?.(text)
+    let text = ''
+    for await (const chunk of this.execute(prompt, options, false))
+      text += chunk
     return text
   }
 
@@ -42,51 +107,6 @@ export class AnthropicProvider extends BaseLLMProvider {
     prompt: AssembledPrompt,
     options?: GenerateOptions
   ): AsyncGenerator<string, void, unknown> {
-    const stream = this.client.messages.stream({
-      model: this.config.model,
-      max_tokens: this.getMaxTokens(options),
-      temperature: this.getTemperature(options),
-      system: prompt.system,
-      messages: [{ role: 'user', content: prompt.user }]
-    })
-
-    for await (const event of stream) {
-      if (
-        event.type === 'content_block_delta' &&
-        event.delta.type === 'text_delta'
-      ) {
-        const text = event.delta.text
-        if (text) {
-          options?.onChunk?.(text)
-          yield text
-        }
-      }
-    }
-  }
-
-  async testConnection(): Promise<{
-    success: boolean
-    message: string
-    model?: string
-  }> {
-    try {
-      const response = await this.client.messages.create({
-        model: this.config.model,
-        max_tokens: 10,
-        messages: [{ role: 'user', content: 'Reply with: OK' }]
-      })
-      const text = response.content
-        .filter((block) => block.type === 'text')
-        .map((block) => (block as { type: 'text'; text: string }).text)
-        .join('')
-      return {
-        success: true,
-        message: `连接成功，模型响应: ${text.substring(0, 50)}`,
-        model: this.config.model
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      return { success: false, message: `连接失败: ${msg}` }
-    }
+    yield* this.execute(prompt, options, true)
   }
 }

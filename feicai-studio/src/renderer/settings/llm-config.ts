@@ -60,14 +60,14 @@ export const CATEGORY_TABS: CategoryTab[] = [
     value: 'image',
     label: '图像生成',
     emoji: '🎨',
-    desc: 'AI 生图模型',
+    desc: '真实生图测试；未提供图片生产链',
     color: 'green'
   },
   {
     value: 'video',
     label: '视频生成',
     emoji: '🎬',
-    desc: 'AI 生视频模型',
+    desc: '仅配置记录；未提供视频生产链',
     color: 'purple'
   }
 ]

@@ -15,6 +15,12 @@ vi.mock('./project-state', () => ({
     load = vi.fn().mockResolvedValue(undefined)
   }
 }))
+vi.mock('../security/access-control', () => ({
+  assertEpisodeNumber: (value: number) => {
+    if (!Number.isInteger(value) || value < 1) throw new Error('无效集数')
+  },
+  assertPathWithinProject: (_root: string, path: string) => path
+}))
 
 describe('state-machine-lifecycle', () => {
   beforeEach(() => {
@@ -150,13 +156,13 @@ describe('state-machine-lifecycle', () => {
     expect(onStateChange).toHaveBeenCalledWith('episode_complete')
   })
 
-  it('performSkipReview 会切换完成态并回写持久化', () => {
+  it('performSkipReview 会在持久化完成后切换完成态', async () => {
     const onLog = vi.fn()
     const onStateChange = vi.fn()
     const markStageSkipped = vi.fn().mockResolvedValue(undefined)
     const updateEpisodeStatus = vi.fn().mockResolvedValue(undefined)
 
-    performSkipReview({
+    await performSkipReview({
       stage: 'director',
       episodeNum: 3,
       statePersistence: {

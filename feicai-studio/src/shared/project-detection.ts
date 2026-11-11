@@ -2,10 +2,7 @@ import type { ProjectConfig } from './types'
 
 export type ProjectIntegrityStatus = 'pass' | 'warn' | 'fail'
 export type ProjectIntegrityGroup =
-  | 'config'
-  | 'directories'
-  | 'content'
-  | 'legacy'
+  'config' | 'directories' | 'content' | 'legacy'
 export type ProjectRepairActionId =
   | 'apply_suggested_config'
   | 'create_missing_directories'

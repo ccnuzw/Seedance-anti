@@ -38,11 +38,11 @@ describe('script-quality', () => {
     })
 
     expect(result.passed).toBe(false)
-    expect(result.issues.map((issue) => issue.description).join('\n')).toContain(
-      '最后一行必须是【卡黑】'
-    )
-    expect(result.issues.map((issue) => issue.description).join('\n')).toContain(
-      '动作指示数量不合规'
-    )
+    expect(
+      result.issues.map((issue) => issue.description).join('\n')
+    ).toContain('最后一行必须是【卡黑】')
+    expect(
+      result.issues.map((issue) => issue.description).join('\n')
+    ).toContain('动作指示数量不合规')
   })
 })
