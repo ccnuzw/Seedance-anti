@@ -317,7 +317,8 @@ export class ReviewEngine {
       params.directorAnalysis,
       params.plotBreakdown,
       params.artDesign,
-      normalizeProjectConfig(params.projectConfig).entryStage
+      normalizeProjectConfig(params.projectConfig).entryStage,
+      params.stage
     )
     const aborted = Promise.withResolvers<never>()
     const rejectAbort = () =>

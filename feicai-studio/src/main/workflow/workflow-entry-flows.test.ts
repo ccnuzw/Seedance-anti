@@ -141,6 +141,52 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('three entry flows with real skills, review parser and controlled provider', () => {
+  it('first novel batch prompts allow empty inventory while script prompts require bound inventory', async () => {
+    put(project('sourceNovel'), '# 原著\n林舟闯入院子，逼问守卫。')
+    expect(existsSync(project('plotBreakdown'))).toBe(false)
+    await create(
+      'story',
+      '【剧情1】院落，林舟逼问守卫，反击，第1集，状态：未用'
+    )
+    expect(existsSync(project('plotBreakdown'))).toBe(false)
+    await review('story_review')
+    // Inspect the actual generation + business/compliance prompts, including
+    // real builtin skills. Fixed provider PASS alone cannot detect conflicts.
+    expect(generate.mock.calls).toHaveLength(3)
+    for (const [prompt] of generate.mock.calls) {
+      const scope = prompt.system.split('# 项目入口适用范围')[1]
+      expect(scope).toContain('当前阶段为剧情拆解/批次审核')
+      expect(scope).toContain('必须使用当前批次真实小说原文并核验适用批次身份')
+      expect(scope).toContain('缺少原文不得生成或通过审核')
+      expect(scope).toContain(
+        '已有剧情库存可为空，首次拆解不要求现成本集绑定库存'
+      )
+      expect(scope).toContain('当前草稿只有审核通过后才发布到库存')
+      expect(scope).toContain('已有库存存在时必须对照其编号、批次和分集规划')
+      expect(scope).not.toContain('剧本生成/剧本审核要求')
+      expect(prompt.system).not.toContain(
+        '小说章节和本集绑定剧情库存是必需上游'
+      )
+      expect(prompt.user).toContain('林舟闯入院子，逼问守卫')
+    }
+    expect(existsSync(project('plotBreakdown'))).toBe(true)
+    generate.mockClear()
+    await create('script', script)
+    await review('script_review')
+    expect(generate.mock.calls).toHaveLength(3)
+    for (const [prompt] of generate.mock.calls) {
+      const scope = prompt.system.split('# 项目入口适用范围')[1]
+      expect(scope).toContain(
+        '剧本生成/剧本审核要求真实小说章节和本集绑定剧情库存'
+      )
+      expect(scope).toContain('缺少必需来源不得生成剧本或通过剧审')
+      expect(scope).not.toContain('已有剧情库存可为空')
+      expect(scope).not.toContain('首次拆解不要求现成本集绑定库存')
+      expect(prompt.user).toContain('【剧情1】')
+      expect(prompt.user).toContain('林舟闯入院子，逼问守卫')
+    }
+  })
+
   it.each(['novel', 'story', 'script'] as const)(
     '%s reaches current storyboard review without inventing upstream artifacts',
     async (stage) => {
