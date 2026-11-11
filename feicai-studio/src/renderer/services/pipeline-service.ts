@@ -1,4 +1,5 @@
 import type { AutomatedPipelineStage } from '@shared/types'
+import type { PipelineControlTarget } from '@shared/pipeline-task'
 import type { PipelineStartParams } from './workflow-actions'
 import type {
   ServicePipelineContext,
@@ -17,22 +18,49 @@ export async function runPipelineAndWait(
   return await window.feicaiAPI.runPipelineAndWait(params)
 }
 
-export async function pausePipeline(): Promise<void> {
-  await window.feicaiAPI.pausePipeline()
+function assertControlResult(
+  result: { success: boolean; error?: string } | void
+): void {
+  if (result && !result.success) throw new Error(result.error || '任务控制失败')
 }
 
-export async function abortPipeline(): Promise<void> {
-  await window.feicaiAPI.abortPipeline()
+export async function pausePipeline(
+  target?: PipelineControlTarget
+): Promise<void> {
+  assertControlResult(
+    await (target
+      ? window.feicaiAPI.pausePipeline(target)
+      : window.feicaiAPI.pausePipeline())
+  )
+}
+
+export async function abortPipeline(
+  target?: PipelineControlTarget
+): Promise<void> {
+  assertControlResult(
+    await (target
+      ? window.feicaiAPI.abortPipeline(target)
+      : window.feicaiAPI.abortPipeline())
+  )
 }
 
 export async function retryPipeline(
-  stage?: AutomatedPipelineStage
+  stage?: AutomatedPipelineStage,
+  target?: PipelineControlTarget
 ): Promise<void> {
-  await window.feicaiAPI.retryPipeline(stage)
+  assertControlResult(
+    await window.feicaiAPI.retryPipeline(target ? { stage, target } : stage)
+  )
 }
 
-export async function skipPipeline(): Promise<void> {
-  await window.feicaiAPI.skipPipeline()
+export async function skipPipeline(
+  target?: PipelineControlTarget
+): Promise<void> {
+  assertControlResult(
+    await (target
+      ? window.feicaiAPI.skipPipeline({ target })
+      : window.feicaiAPI.skipPipeline())
+  )
 }
 
 export async function getPipelineState(): Promise<ServicePipelineContext> {
@@ -40,6 +68,7 @@ export async function getPipelineState(): Promise<ServicePipelineContext> {
 }
 
 export const pipelineEvents = {
+  onTaskChanged: window.feicaiAPI.onPipelineTaskChanged,
   onStateChanged: window.feicaiAPI.onPipelineStateChanged,
   onLog: window.feicaiAPI.onPipelineLog,
   onStream: window.feicaiAPI.onPipelineStream,

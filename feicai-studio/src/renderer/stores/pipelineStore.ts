@@ -3,6 +3,11 @@
 // ============================================================
 
 import { create } from 'zustand'
+import { samePipelineRun } from '@shared/pipeline-task'
+import type {
+  PipelineControlTarget,
+  PipelineRunIdentity
+} from '@shared/pipeline-task'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import {
   abortPipeline,
@@ -32,6 +37,7 @@ interface PipelineStore {
   // 状态
   state: PipelineState
   context: PipelineContext | null
+  runIdentity: PipelineRunIdentity | null
   logs: LogEntry[]
   streamBuffer: string
   isRunning: boolean
@@ -74,6 +80,7 @@ function detectStage(state: PipelineState): AutomatedPipelineStage | null {
 // ---- 引用计数事件监听 ----
 // 页面切换时避免重复注册/意外取消
 let _listenerRefCount = 0
+let _syncEpoch = 0
 let _cleanupFn: (() => void) | null = null
 let _pendingLogs: LogEntry[] = []
 let _pendingStreamChunks: string[] = []
@@ -114,12 +121,85 @@ function _flushPendingStream(set: Function): void {
   }))
 }
 
+function identityFromContext(
+  context: PipelineContext | null
+): PipelineRunIdentity | null {
+  if (!context?.taskId || !context.runId) return null
+  return {
+    projectId: context.projectId,
+    taskId: context.taskId,
+    runId: context.runId,
+    episodeNum: context.episodeNum,
+    stage: context.currentStage
+  }
+}
+
+function controlTarget(
+  store: PipelineStore
+): PipelineControlTarget | undefined {
+  const identity = store.runIdentity ?? identityFromContext(store.context)
+  const project = useProjectStore.getState().currentProject
+  const projectId = identity?.projectId ?? store.context?.projectId
+  if (project && projectId && projectId !== project.id)
+    throw new Error('当前项目与制作任务不匹配')
+  if (identity) return identity
+  if (!store.context) throw new Error('没有可控制的制作任务')
+  // Legacy backend compatibility, only until a run identity has been observed.
+  return undefined
+}
+
+function acceptsEvent(store: PipelineStore, payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const data = payload as {
+    identity?: PipelineRunIdentity
+    runId?: string
+    context?: PipelineContext
+  }
+  const identity = data.identity ?? identityFromContext(data.context ?? null)
+  const expected = store.runIdentity ?? identityFromContext(store.context)
+  const project = useProjectStore.getState().currentProject
+  const projectId = identity?.projectId ?? data.context?.projectId
+  if (projectId && project && projectId !== project.id) return false
+  if (expected) return !!identity && samePipelineRun(expected, identity)
+  if (data.runId && store.context?.runId && data.runId !== store.context.runId)
+    return false
+  return true
+}
+
+function clearPendingEvents(): void {
+  _pendingLogs = []
+  _pendingStreamChunks = []
+  if (_logFlushTimer) clearTimeout(_logFlushTimer)
+  if (_streamFlushTimer) clearTimeout(_streamFlushTimer)
+  _logFlushTimer = null
+  _streamFlushTimer = null
+}
+
 function _registerListeners(set: Function, get: Function): () => void {
   const unsubscribers: Array<() => void> = []
+
+  // Task announcements trigger an authoritative read, so a delayed announcement
+  // cannot replace the current run with its stale payload.
+  if (pipelineEvents.onTaskChanged) {
+    unsubscribers.push(
+      pipelineEvents.onTaskChanged((task) => {
+        const project = useProjectStore.getState().currentProject
+        if (
+          task.kind === 'pipeline' &&
+          task.status === 'running' &&
+          (!project || project.id === task.identity.projectId) &&
+          get().runIdentity?.runId !== task.identity.runId
+        ) {
+          void get().syncFromBackend()
+        }
+      })
+    )
+  }
 
   // 状态变更 + 计时
   unsubscribers.push(
     pipelineEvents.onStateChanged((data: unknown) => {
+      if (!acceptsEvent(get(), data)) return
       const { newState, context } = data as {
         newState: PipelineState
         context: PipelineContext
@@ -198,6 +278,7 @@ function _registerListeners(set: Function, get: Function): () => void {
       set({
         state: newState,
         context,
+        runIdentity: identityFromContext(context),
         isRunning,
         stageTimings,
         currentStageName: newStage,
@@ -205,7 +286,11 @@ function _registerListeners(set: Function, get: Function): () => void {
       })
 
       // Pipeline 完成时自动刷新 episode 状态
-      if (newState === 'episode_complete') {
+      const project = useProjectStore.getState().currentProject
+      if (
+        newState === 'episode_complete' &&
+        (!project || project.id === context.projectId)
+      ) {
         const episodeNum = context?.episodeNum
         if (episodeNum) {
           useProjectStore.getState().syncSingleEpisodeStatus(episodeNum)
@@ -218,8 +303,7 @@ function _registerListeners(set: Function, get: Function): () => void {
 
   unsubscribers.push(
     pipelineEvents.onLog((entry: unknown) => {
-      const runId = (entry as LogEntry & { runId?: string }).runId
-      if (runId && get().context?.runId && runId !== get().context.runId) return
+      if (!acceptsEvent(get(), entry)) return
       _pendingLogs.push(entry as LogEntry)
       if (_logFlushTimer) return
       _logFlushTimer = setTimeout(() => _flushPendingLogs(set), 80)
@@ -229,8 +313,8 @@ function _registerListeners(set: Function, get: Function): () => void {
   // 流式输出
   unsubscribers.push(
     pipelineEvents.onStream((data: unknown) => {
-      const { chunk, runId } = data as { chunk: string; runId?: string }
-      if (runId && get().context?.runId && runId !== get().context.runId) return
+      if (!acceptsEvent(get(), data)) return
+      const { chunk } = data as { chunk: string }
       _pendingStreamChunks.push(chunk)
       if (_streamFlushTimer) return
       _streamFlushTimer = setTimeout(() => _flushPendingStream(set), 80)
@@ -240,8 +324,8 @@ function _registerListeners(set: Function, get: Function): () => void {
   // 审核结果
   unsubscribers.push(
     pipelineEvents.onReviewResult((data: unknown) => {
-      const { result, runId } = data as { result: ReviewResult; runId?: string }
-      if (runId && get().context?.runId && runId !== get().context.runId) return
+      if (!acceptsEvent(get(), data)) return
+      const { result } = data as { result: ReviewResult }
       set({ currentReview: result })
     })
   )
@@ -249,8 +333,7 @@ function _registerListeners(set: Function, get: Function): () => void {
   // 错误
   unsubscribers.push(
     pipelineEvents.onError((data: unknown) => {
-      const runId = (data as { runId?: string } | null)?.runId
-      if (runId && get().context?.runId && runId !== get().context.runId) return
+      if (!acceptsEvent(get(), data)) return
       set({ state: 'error' })
     })
   )
@@ -271,6 +354,7 @@ function _registerListeners(set: Function, get: Function): () => void {
 export const usePipelineStore = create<PipelineStore>((set, get) => ({
   state: 'idle',
   context: null,
+  runIdentity: null,
   logs: [],
   streamBuffer: '',
   isRunning: false,
@@ -282,7 +366,12 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
 
   startPipeline: async (params) => {
     const now = Date.now()
+    _syncEpoch++
+    clearPendingEvents()
     set({
+      context: null,
+      runIdentity: null,
+      currentReview: null,
       logs: [],
       streamBuffer: '',
       isRunning: true,
@@ -293,6 +382,7 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
     })
     try {
       const result = await startPipeline(params)
+      if (result.identity) set({ runIdentity: result.identity })
       if (result.error)
         set({ isRunning: false, state: 'idle', pipelineStartedAt: null })
       return result
@@ -303,11 +393,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
   },
 
   pausePipeline: async () => {
-    await pausePipeline()
+    await pausePipeline(controlTarget(get()))
   },
 
   stopPipeline: async () => {
-    await abortPipeline()
+    await abortPipeline(controlTarget(get()))
     // 立即完整重置 UI 状态，不等后端事件广播，避免闪烁
     set({
       isRunning: false,
@@ -317,6 +407,7 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
   },
 
   retryPipeline: async (stage) => {
+    const target = controlTarget(get())
     const now = Date.now()
     // 重置计时器和 streamBuffer，确保数据准确
     set({
@@ -326,11 +417,17 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       currentStageName: null,
       streamBuffer: ''
     })
-    await retryPipeline(stage)
+    try {
+      await retryPipeline(stage, target)
+      await get().syncFromBackend()
+    } catch (error) {
+      set({ isRunning: false })
+      throw error
+    }
   },
 
   skipReviewPipeline: async () => {
-    await skipPipeline()
+    await skipPipeline(controlTarget(get()))
   },
 
   clearLogs: () => {
@@ -348,7 +445,9 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
   },
 
   /** 重置 UI 显示状态（切换集数时使用），不中断后台运行 */
-  resetDisplay: () =>
+  resetDisplay: () => {
+    _syncEpoch++
+    clearPendingEvents()
     set({
       logs: [],
       streamBuffer: '',
@@ -358,13 +457,22 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       currentReview: null,
       state: 'idle',
       context: null,
+      runIdentity: null,
       isRunning: false
-    }),
+    })
+  },
 
   /** 从后端同步当前引擎状态到 store */
   syncFromBackend: async () => {
+    const epoch = ++_syncEpoch
+    const projectId = useProjectStore.getState().currentProject?.id
     try {
       const ctx = await getPipelineState()
+      if (
+        epoch !== _syncEpoch ||
+        projectId !== useProjectStore.getState().currentProject?.id
+      )
+        return
       const isTerminal = [
         'idle',
         'error',
@@ -372,9 +480,23 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
         'director_done',
         'art_done'
       ].includes(ctx.state)
+      const project = useProjectStore.getState().currentProject
+      if (project && ctx.projectId && ctx.projectId !== project.id) return
+      const changedRun = get().runIdentity?.runId !== ctx.runId
+      if (changedRun) clearPendingEvents()
       set({
+        ...(changedRun
+          ? {
+              logs: [],
+              streamBuffer: '',
+              currentReview: null,
+              stageTimings: [],
+              currentStageName: null
+            }
+          : {}),
         state: ctx.state,
         context: ctx,
+        runIdentity: identityFromContext(ctx),
         isRunning: ctx.running ?? !isTerminal
       })
     } catch {
@@ -389,7 +511,10 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       _cleanupFn = _registerListeners(set, get)
     }
 
+    let subscribed = true
     return () => {
+      if (!subscribed) return
+      subscribed = false
       _listenerRefCount--
       if (_listenerRefCount <= 0) {
         _listenerRefCount = 0

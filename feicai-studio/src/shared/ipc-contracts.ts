@@ -1,4 +1,12 @@
 import type { BatchAPI } from './batch'
+import type {
+  PipelineControlTarget,
+  PipelineRunIdentity,
+  PipelineEventIdentity,
+  PipelineStageControl,
+  PipelineTaskControl,
+  PipelineTaskSnapshot
+} from './pipeline-task'
 import type { DataManagementAPI } from './data-management'
 import type {
   DetectedProjectInfo,
@@ -137,6 +145,7 @@ export interface PipelineStartParams {
 }
 
 export interface PipelineStartResult {
+  identity?: PipelineRunIdentity
   success?: boolean
   message?: string
   error?: string
@@ -145,6 +154,7 @@ export interface PipelineStartResult {
 }
 
 export interface WorkflowActionParams {
+  projectId?: string
   projectPath: string
   episodeNum: number
   batchNumber?: number
@@ -189,29 +199,29 @@ export interface ExportResult {
   error?: string
 }
 
-export interface PipelineStateChangedEvent {
+export interface PipelineStateChangedEvent extends PipelineEventIdentity {
   oldState: PipelineState
   newState: PipelineState
   context: PipelineContext
 }
 
-export interface PipelineStreamEvent {
+export interface PipelineStreamEvent extends PipelineEventIdentity {
   stage: AutomatedPipelineStage
   chunk: string
   totalLength: number
 }
 
-export interface PipelineStageCompleteEvent {
+export interface PipelineStageCompleteEvent extends PipelineEventIdentity {
   stage: AutomatedPipelineStage
   result: ReviewResult
 }
 
-export interface PipelineReviewResultEvent {
+export interface PipelineReviewResultEvent extends PipelineEventIdentity {
   stage: AutomatedPipelineStage
   result: ReviewResult
 }
 
-export interface PipelineErrorEvent {
+export interface PipelineErrorEvent extends PipelineEventIdentity {
   message: string
   error: string
 }
@@ -263,16 +273,30 @@ export interface FeicaiAPI extends BatchAPI, DataManagementAPI {
 
   startPipeline(params: PipelineStartParams): Promise<PipelineStartResult>
   runPipelineAndWait(params: PipelineStartParams): Promise<PipelineStartResult>
-  pausePipeline(): Promise<BasicSuccessResult | void>
-  abortPipeline(): Promise<BasicSuccessResult | void>
-  resumePipeline(): Promise<BasicSuccessResult | void>
+  pausePipeline(
+    target?: PipelineControlTarget
+  ): Promise<BasicSuccessResult | void>
+  abortPipeline(
+    target?: PipelineControlTarget
+  ): Promise<BasicSuccessResult | void>
+  resumePipeline(
+    target?: PipelineControlTarget
+  ): Promise<BasicSuccessResult | void>
   retryPipeline(
-    stage?: AutomatedPipelineStage
+    input?: AutomatedPipelineStage | PipelineStageControl
   ): Promise<BasicSuccessResult | void>
   skipPipeline(
-    stage?: AutomatedPipelineStage
+    input?: AutomatedPipelineStage | PipelineStageControl
   ): Promise<BasicSuccessResult | void>
-  getPipelineState(): Promise<PipelineContext>
+  getPipelineState(target?: PipelineControlTarget): Promise<PipelineContext>
+  listPipelineTasks(): Promise<PipelineTaskSnapshot[]>
+  getPipelineTask(taskId: string): Promise<PipelineTaskSnapshot | null>
+  controlPipelineTask(
+    request: PipelineTaskControl
+  ): Promise<BasicSuccessResult & { error?: string }>
+  onPipelineTaskChanged(
+    callback: (snapshot: PipelineTaskSnapshot) => void
+  ): () => void
 
   runStoryGeneration(
     params: WorkflowActionParams
@@ -301,7 +325,9 @@ export interface FeicaiAPI extends BatchAPI, DataManagementAPI {
   onPipelineStateChanged(
     callback: (payload: PipelineStateChangedEvent) => void
   ): () => void
-  onPipelineLog(callback: (payload: LogEntry) => void): () => void
+  onPipelineLog(
+    callback: (payload: LogEntry & PipelineEventIdentity) => void
+  ): () => void
   onPipelineStream(callback: (payload: PipelineStreamEvent) => void): () => void
   onPipelineStageComplete(
     callback: (payload: PipelineStageCompleteEvent) => void
