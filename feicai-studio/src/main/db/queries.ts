@@ -37,6 +37,7 @@ import {
   buildDefaultStoryBeatTemplate
 } from '@shared/project-bootstrap'
 import { importWholeNovelFile } from '../project/novel-importer'
+import { mergePipelineSettings } from '@shared/pipeline-settings'
 import { normalizeProjectConfig } from '@shared/workflow'
 import {
   resolveEpisodeArtifactPath,
@@ -53,9 +54,10 @@ function readProjectConfigFromDisk(
   configPath: string
 ): Partial<Project['config']> | null {
   if (!existsSync(configPath)) return null
-  return JSON.parse(readFileSync(configPath, 'utf-8')) as Partial<
-    Project['config']
-  >
+  const config: unknown = JSON.parse(readFileSync(configPath, 'utf-8'))
+  if (!config || typeof config !== 'object' || Array.isArray(config))
+    throw new Error('项目配置必须为对象')
+  return config as Partial<Project['config']>
 }
 
 function initializeProjectDirectories(
@@ -209,8 +211,10 @@ export async function createProject(data: {
       ...(diskConfig?.directories || {}),
       ...(data.config?.directories || {})
     },
-    pipelineSettings:
-      data.config?.pipelineSettings || diskConfig?.pipelineSettings
+    pipelineSettings: mergePipelineSettings(
+      diskConfig?.pipelineSettings,
+      data.config?.pipelineSettings
+    )
   })
 
   await atomicWriteFile(configPath, JSON.stringify(normalizedConfig, null, 2))
@@ -304,10 +308,12 @@ export async function updateProject(data: {
       ...(diskConfig?.directories || {}),
       ...(data.config?.directories || {})
     },
-    pipelineSettings:
-      data.config?.pipelineSettings ||
-      diskConfig?.pipelineSettings ||
-      currentProject.config.pipelineSettings
+    pipelineSettings: mergePipelineSettings(
+      diskConfig
+        ? diskConfig.pipelineSettings
+        : currentProject.config.pipelineSettings,
+      data.config?.pipelineSettings
+    )
   })
 
   await atomicWriteFile(configPath, JSON.stringify(normalizedConfig, null, 2))

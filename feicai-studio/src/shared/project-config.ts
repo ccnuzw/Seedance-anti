@@ -1,3 +1,4 @@
+import { mergePipelineSettings } from './pipeline-settings'
 import type { ProjectConfig } from './types'
 
 function sanitizeProjectDirectory(
@@ -76,7 +77,9 @@ export function mergeProjectConfig(
       ...(baseConfig?.directories || {}),
       ...(overrideConfig?.directories || {})
     },
-    pipelineSettings:
-      overrideConfig?.pipelineSettings || baseConfig?.pipelineSettings
+    pipelineSettings: mergePipelineSettings(
+      baseConfig?.pipelineSettings,
+      overrideConfig?.pipelineSettings
+    )
   })
 }

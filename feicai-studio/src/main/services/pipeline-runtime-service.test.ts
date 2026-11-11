@@ -5,6 +5,19 @@ const pipelineOn = vi.fn()
 const runnerConstructor = vi.fn()
 const pipelineConstructor = vi.fn()
 const eventHandlers = new Map<string, (data: unknown) => void>()
+let describeProject: (id: string, path: string) => { maxRetries: number }
+const loadPipelineSettings = vi.fn()
+
+vi.mock('./batch-queue-service', () => ({
+  BatchQueue: class {
+    constructor(
+      _path: string,
+      deps: { describeProject: typeof describeProject }
+    ) {
+      describeProject = deps.describeProject
+    }
+  }
+}))
 
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -38,7 +51,8 @@ vi.mock('../workflow/workflow-step-runner', () => ({
 }))
 
 vi.mock('./pipeline-service', () => ({
-  getSkillsDir: vi.fn(() => '/tmp/skills')
+  getSkillsDir: vi.fn(() => '/tmp/skills'),
+  loadPipelineSettings
 }))
 vi.mock('./project-service', () => ({
   getRegisteredProject: vi.fn(),
@@ -54,6 +68,38 @@ describe('pipeline-runtime-service', async () => {
     vi.clearAllMocks()
     eventHandlers.clear()
     service.resetPipelineRuntime()
+  })
+
+  it('uses validated disk settings for batch retries and propagates invalid config errors', async () => {
+    const { mkdtempSync, rmSync, realpathSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const { registerProjectRoot, resetAccessControl } =
+      await import('../security/access-control')
+    const { getRegisteredProject, listProjectEpisodes } =
+      await import('./project-service')
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'batch-settings-')))
+    try {
+      registerProjectRoot(root)
+      vi.mocked(getRegisteredProject).mockReturnValue({
+        projectPath: root,
+        config: { pipelineSettings: { maxRetries: 99 } }
+      } as ReturnType<typeof getRegisteredProject>)
+      vi.mocked(listProjectEpisodes).mockReturnValue([])
+      loadPipelineSettings.mockReturnValue({ maxRetries: 4 })
+      service.getBatchQueueRuntime()
+      expect(describeProject('project-1', root).maxRetries).toBe(4)
+      expect(loadPipelineSettings).toHaveBeenCalledWith(root)
+      loadPipelineSettings.mockImplementation(() => {
+        throw new Error('流水线参数无效')
+      })
+      expect(() => describeProject('project-1', root)).toThrow('流水线参数无效')
+      expect(pipelineConstructor).not.toHaveBeenCalled()
+      expect(runnerConstructor).not.toHaveBeenCalled()
+    } finally {
+      resetAccessControl()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('会缓存 pipeline 实例并在首次创建时绑定事件转发', () => {

@@ -29,7 +29,7 @@ import type {
   PipelineSettings,
   ProjectConfig
 } from '@shared/types'
-import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
+import { parsePipelineSettings } from '@shared/pipeline-settings'
 import { type ProjectContext } from './prompt-assembler'
 import { createProvider } from '../llm/provider-factory'
 import type { ILLMProvider } from '../llm/types'
@@ -61,7 +61,7 @@ export class PipelineStateMachine extends EventEmitter {
   private pausedState: PipelineState | null = null
   private projectContext: ProjectContext | null = null
   private statePersistence: ProjectStatePersistence | null = null
-  private pipelineSettings: PipelineSettings = { ...DEFAULT_PIPELINE_SETTINGS }
+  private pipelineSettings: PipelineSettings = parsePipelineSettings()
   private _aborted = false
   private _reviewSkipped = false
   private projectConfig: Partial<ProjectConfig> | null = null
@@ -127,7 +127,7 @@ export class PipelineStateMachine extends EventEmitter {
 
   /** 设置项目级流水线参数 */
   setPipelineSettings(settings: Partial<PipelineSettings>): void {
-    this.pipelineSettings = { ...DEFAULT_PIPELINE_SETTINGS, ...settings }
+    this.pipelineSettings = parsePipelineSettings(settings)
   }
 
   // ==================== 状态转换 ====================
@@ -162,6 +162,11 @@ export class PipelineStateMachine extends EventEmitter {
     waitUntilResumed?: () => Promise<void>
   }): Promise<void> {
     if (this.activeTask) throw new Error('任务仍在执行或停止中')
+    this.pipelineSettings = parsePipelineSettings(
+      params.projectConfig?.pipelineSettings === undefined
+        ? this.pipelineSettings
+        : params.projectConfig.pipelineSettings
+    )
     this.controller = new AbortController()
     this.runId = params.runId || randomUUID()
     this.operationId = params.operationId
@@ -215,7 +220,7 @@ export class PipelineStateMachine extends EventEmitter {
         this.context = context
       },
       onProjectContextAssigned: (projectContext) => {
-        this.projectContext = projectContext
+        this.projectContext = { ...projectContext, ...this.pipelineSettings }
       },
       onProjectConfigAssigned: (projectConfig) => {
         this.projectConfig = {

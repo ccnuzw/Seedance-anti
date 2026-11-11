@@ -70,6 +70,19 @@ afterEach(() => {
 })
 
 describe('observable pipeline lifecycle', () => {
+  it('rejects invalid settings before occupying the machine or generating', () => {
+    const { machine, params, generate } = fixture()
+    expect(() => machine.setPipelineSettings({ maxRetries: -1 })).toThrow()
+    expect(() =>
+      machine.start({
+        ...params,
+        projectConfig: { pipelineSettings: { durationMin: 200 } }
+      })
+    ).toThrow('不能大于')
+    expect(machine.isRunning()).toBe(false)
+    expect(generate).not.toHaveBeenCalled()
+  })
+
   it('completes a stage only after durable status and permits the next task', async () => {
     const { machine, root, params } = fixture()
     await machine.start(params)

@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
-import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
+import { parsePipelineSettings } from '@shared/pipeline-settings'
 import type { ProjectConfig, ReviewResult, ReviewStage } from '@shared/types'
 import type { EpisodeArtifactId } from '@shared/artifact-registry'
 import {
@@ -101,10 +101,7 @@ export function captureReviewProvenance(
       totalEpisodes: config?.totalEpisodes ?? null,
       // Workflow actions read partial disk settings; pipeline launches fill defaults.
       // Hash the same effective values in a fixed key order for both paths.
-      pipelineSettings: {
-        ...DEFAULT_PIPELINE_SETTINGS,
-        ...config?.pipelineSettings
-      }
+      pipelineSettings: parsePipelineSettings(config?.pipelineSettings)
     })
   )
 
@@ -268,8 +265,11 @@ export function isReviewCurrent(
     !review.inputHashes
   )
     return false
-  if (review.score < (config?.pipelineSettings?.passScore ?? 7)) return false
   try {
+    if (
+      review.score < parsePipelineSettings(config?.pipelineSettings).passScore
+    )
+      return false
     const current = captureReviewProvenance(
       projectPath,
       review.stage,

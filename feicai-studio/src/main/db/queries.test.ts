@@ -670,6 +670,104 @@ describe('queries syncEpisodesFromFilesystem', async () => {
     expect(Number(tables.projects[0].total_episodes)).toBe(6)
   })
 
+  it('merges pipeline patches with disk values before validation and leaves disk/DB untouched on failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'feicai-settings-patch-'))
+    tempDirs.push(root)
+    const configPath = join(root, 'project-config.json')
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        pipelineSettings: { durationMin: 100, durationMax: 300, passScore: 9 }
+      })
+    )
+    tables.projects[0] = { ...tables.projects[0], project_path: root }
+    const updated = await queries.updateProject({
+      id: 'project-1',
+      config: { pipelineSettings: { durationMin: 200 } }
+    })
+    expect(updated.config.pipelineSettings).toMatchObject({
+      durationMin: 200,
+      durationMax: 300,
+      passScore: 9
+    })
+    for (const patch of [{}, { pipelineSettings: {} }]) {
+      const preserved = await queries.updateProject({
+        id: 'project-1',
+        config: patch
+      })
+      expect(preserved.config.pipelineSettings).toEqual(
+        updated.config.pipelineSettings
+      )
+    }
+    const disk = readFileSync(configPath, 'utf8')
+    const database = JSON.stringify(tables.projects)
+    await expect(
+      queries.updateProject({
+        id: 'project-1',
+        config: { pipelineSettings: { durationMax: 150 } }
+      })
+    ).rejects.toThrow('不能大于')
+    expect(readFileSync(configPath, 'utf8')).toBe(disk)
+    expect(JSON.stringify(tables.projects)).toBe(database)
+    // A real disk config that removed settings is authoritative over stale DB settings.
+    writeFileSync(configPath, '{}')
+    const reset = await queries.updateProject({
+      id: 'project-1',
+      config: { pipelineSettings: {} }
+    })
+    expect(reset.config.pipelineSettings).toMatchObject({
+      durationMin: 90,
+      durationMax: 120,
+      passScore: 7
+    })
+    // When the file itself is missing, the registered config remains the base.
+    rmSync(configPath)
+    const fallback = await queries.updateProject({
+      id: 'project-1',
+      config: { pipelineSettings: { passScore: 8 } }
+    })
+    expect(fallback.config.pipelineSettings).toMatchObject({
+      durationMin: 90,
+      durationMax: 120,
+      passScore: 8
+    })
+  })
+
+  it('validates imported disk settings plus create patches before writing or inserting', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'feicai-settings-create-'))
+    tempDirs.push(root)
+    const configPath = join(root, 'project-config.json')
+    const disk = JSON.stringify({
+      pipelineSettings: { durationMin: 100, durationMax: 300, passScore: 9 }
+    })
+    writeFileSync(configPath, disk)
+    const data = {
+      name: '导入',
+      visualStyle: '写实',
+      targetMedium: '短剧',
+      projectPath: root,
+      totalEpisodes: 1
+    }
+    const count = tables.projects.length
+    await expect(
+      queries.createProject({
+        ...data,
+        config: { pipelineSettings: { durationMax: 99 } }
+      })
+    ).rejects.toThrow('不能大于')
+    expect(readFileSync(configPath, 'utf8')).toBe(disk)
+    expect(tables.projects).toHaveLength(count)
+    const created = await queries.createProject({
+      ...data,
+      config: { pipelineSettings: { durationMin: 200 } }
+    })
+    expect(created.config.pipelineSettings).toMatchObject({
+      durationMin: 200,
+      durationMax: 300,
+      passScore: 9
+    })
+  })
+
   it('修复项目配置时会同步更新数据库中的项目记录', async () => {
     const root = mkdtempSync(join(tmpdir(), 'feicai-repair-sync-'))
     tempDirs.push(root)

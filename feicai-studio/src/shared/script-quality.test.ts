@@ -21,6 +21,17 @@ function buildValidScript(): string {
 }
 
 describe('script-quality', () => {
+  it.each([
+    { scriptWordCountMin: NaN },
+    { scriptWordCountMax: 0 },
+    { scriptWordCountMin: 2001 }
+  ])(
+    'rejects invalid word limits instead of applying defaults: %j',
+    (settings) => {
+      expect(() => validateScriptHardRules('正文', settings)).toThrow()
+    }
+  )
+
   it('会通过符合硬性规格的剧本', () => {
     const result = validateScriptHardRules(buildValidScript(), {
       scriptWordCountMin: 100,
