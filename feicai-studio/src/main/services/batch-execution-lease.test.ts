@@ -3,7 +3,8 @@ import {
   acquireExecutionLease,
   getExecutionLease,
   releaseExecutionLease,
-  shutdownExecution
+  shutdownExecution,
+  withExecutionLease
 } from './batch-execution-lease'
 
 describe('global execution ownership', () => {
@@ -30,6 +31,32 @@ describe('global execution ownership', () => {
     lease.resume()
     await checkpoint
     expect(advanced).toBe(true)
+    releaseExecutionLease(lease)
+  })
+  it.each(['return', 'throw', 'reject'] as const)(
+    'mutation acquisition is synchronous and releases after %s',
+    async (result) => {
+      const action = () => {
+        expect(getExecutionLease()?.owner).toBe('mutation')
+        expect(() => acquireExecutionLease('pipeline')).toThrow('请等待')
+        if (result === 'throw') throw new Error('sync failure')
+        if (result === 'reject')
+          return Promise.reject(new Error('async failure'))
+        return 42
+      }
+      const pending = withExecutionLease('mutation', action)
+      if (result === 'return') await expect(pending).resolves.toBe(42)
+      else await expect(pending).rejects.toThrow('failure')
+      expect(getExecutionLease()).toBeNull()
+    }
+  )
+  it('an unrelated mutation cannot reuse workflow ownership; legitimate children still can', async () => {
+    const lease = acquireExecutionLease('workflow')
+    await expect(withExecutionLease('manual-write', () => 1)).rejects.toThrow(
+      '请等待'
+    )
+    expect(acquireExecutionLease('internal-write', lease)).toBe(lease)
+    expect(getExecutionLease()).toBe(lease)
     releaseExecutionLease(lease)
   })
   it('shutdown waits even for non-cancellable management transactions and blocks new work', async () => {

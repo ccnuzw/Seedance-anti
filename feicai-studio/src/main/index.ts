@@ -22,6 +22,7 @@ let mainWindow: BrowserWindow | null = null
 let quitRequested = false
 let quitReady = false
 let draining = false
+let runtimeReady = false
 
 async function drainAndQuit(): Promise<void> {
   if (draining) return
@@ -110,55 +111,74 @@ function createWindow(): void {
   void mainWindow.loadURL(rendererUrl)
 }
 
-// 初始化
-app
-  .whenReady()
-  .then(async () => {
-    electronApp.setAppUserModelId('com.feicai.studio')
-
-    app.on('browser-window-created', (_, window) => {
-      optimizer.watchWindowShortcuts(window)
-    })
-
-    // 初始化数据库
-    initDatabase()
-
-    // 注册所有 IPC handlers
-    registerAllHandlers()
-    registerBatchHandlers()
-    registerDataManagementHandlers()
-    await initializeRuntimeQueue()
-
-    // 创建窗口
-    createWindow()
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
-    })
-  })
-  .catch((error: unknown) => {
-    dialog.showErrorBox(
-      '启动失败',
-      error instanceof Error ? error.message : '应用初始化失败'
-    )
-    closeDatabase()
-    quitReady = true
-    app.quit()
+// Claim process ownership before registering drain hooks or initializing any data.
+// A rejected instance must quit directly: it has no runtime to drain.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (quitRequested) return
+    if (!mainWindow) {
+      // Startup will create the first window after runtime recovery completes.
+      if (runtimeReady) createWindow()
+      return
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
   })
 
-app.on('window-all-closed', () => {
-  if (quitRequested) void drainAndQuit()
-  else if (process.platform !== 'darwin') app.quit()
-})
+  // 初始化
+  app
+    .whenReady()
+    .then(async () => {
+      electronApp.setAppUserModelId('com.feicai.studio')
 
-app.on('before-quit', (event) => {
-  if (quitReady) return
-  event.preventDefault()
-  if (quitRequested) return
-  quitRequested = true
-  const windows = BrowserWindow.getAllWindows()
-  if (windows.length === 0) void drainAndQuit()
-  else for (const window of windows) window.close()
-})
+      app.on('browser-window-created', (_, window) => {
+        optimizer.watchWindowShortcuts(window)
+      })
+
+      // 初始化数据库
+      initDatabase()
+
+      // 注册所有 IPC handlers
+      registerAllHandlers()
+      registerBatchHandlers()
+      registerDataManagementHandlers()
+      await initializeRuntimeQueue()
+
+      // 创建窗口
+      runtimeReady = true
+      createWindow()
+
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      })
+    })
+    .catch((error: unknown) => {
+      dialog.showErrorBox(
+        '启动失败',
+        error instanceof Error ? error.message : '应用初始化失败'
+      )
+      closeDatabase()
+      quitReady = true
+      app.quit()
+    })
+
+  app.on('window-all-closed', () => {
+    if (quitRequested) void drainAndQuit()
+    else if (process.platform !== 'darwin') app.quit()
+  })
+
+  app.on('before-quit', (event) => {
+    if (quitReady) return
+    event.preventDefault()
+    if (quitRequested) return
+    quitRequested = true
+    const windows = BrowserWindow.getAllWindows()
+    if (windows.length === 0) void drainAndQuit()
+    else for (const window of windows) window.close()
+  })
+}
 
 export { mainWindow }

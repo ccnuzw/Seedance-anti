@@ -274,7 +274,8 @@ export async function flushPendingWrites(): Promise<void> {
 }
 
 export async function readJsonWithRecovery<T>(
-  filePath: string
+  filePath: string,
+  options: { readOnly?: boolean } = {}
 ): Promise<T | null> {
   let result: T | null = null
   await enqueue(filePath, async (target) => {
@@ -305,8 +306,12 @@ export async function readJsonWithRecovery<T>(
         `主文件和备份均已损坏: ${target}`
       )
     }
-    await commit(target, backup)
-    console.warn(`主文件缺失或损坏，已从备份恢复: ${target}`)
+    // Public queries may fall back to validated backup bytes without repairing
+    // the project behind an active execution/backup lease.
+    if (!options.readOnly) {
+      await commit(target, backup)
+      console.warn(`主文件缺失或损坏，已从备份恢复: ${target}`)
+    }
   })
   return result
 }

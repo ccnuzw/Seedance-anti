@@ -50,6 +50,8 @@ import {
   rememberSelectedFile
 } from '../security/access-control'
 import { registerSafeIpcHandler as handle } from '../security/safe-ipc'
+import { registerMutationHandler as mutate } from './mutation-handler'
+import { withExecutionLease } from '../services/batch-execution-lease'
 import {
   assertAllowedKeys,
   assertLLMConfig,
@@ -157,7 +159,7 @@ export function registerAllHandlers(): void {
     assertNonEmptyString(path, '项目目录')
     return inspectProject(assertRegisteredProjectRoot(path))
   })
-  handle(IPC.PROJECT_MIGRATE_LEGACY_NOVEL, async (_event, path: unknown) => {
+  mutate(IPC.PROJECT_MIGRATE_LEGACY_NOVEL, async (_event, path: unknown) => {
     assertNonEmptyString(path, '项目目录')
     const root = assertRegisteredProjectRoot(path)
     await inspectProject(root)
@@ -187,17 +189,24 @@ export function registerAllHandlers(): void {
       throw new Error('无效修复动作')
     if (params.dryRun !== undefined && typeof params.dryRun !== 'boolean')
       throw new Error('dryRun必须为布尔值')
-    const root =
-      params.trustMode === 'registered'
-        ? assertRegisteredProjectRoot(params.projectPath)
-        : assertTrustedProjectSelection(params.projectPath)
-    await inspectProject(root)
-    return repairProjectIssues({
-      projectPath: root,
-      actionIds: params.actionIds,
-      trustMode: params.trustMode,
-      dryRun: params.dryRun
-    })
+    const { projectPath, actionIds, trustMode, dryRun } = params
+    const repair = async () => {
+      const root =
+        trustMode === 'registered'
+          ? assertRegisteredProjectRoot(projectPath)
+          : assertTrustedProjectSelection(projectPath)
+      await inspectProject(root)
+      return repairProjectIssues({
+        projectPath: root,
+        actionIds,
+        trustMode,
+        dryRun
+      })
+    }
+    // A repair preview reads only; real repair owns the lease before lookup/I/O.
+    return dryRun === true
+      ? repair()
+      : withExecutionLease(IPC.PROJECT_REPAIR, repair)
   })
   handle(IPC.PROJECT_LIST_SOURCE_CHAPTERS, async (_event, id: unknown) => {
     const { project } = registeredProject(id)
@@ -210,7 +219,7 @@ export function registerAllHandlers(): void {
       return getRegisteredProjectPlotBreakdownSummary(project.id)
     }
   )
-  handle(IPC.PROJECT_CREATE, async (_event, value: unknown) => {
+  mutate(IPC.PROJECT_CREATE, async (_event, value: unknown) => {
     const data = parseProjectInput(value)
     const root = assertTrustedProjectSelection(data.projectPath)
     if (
@@ -234,7 +243,7 @@ export function registerAllHandlers(): void {
     registerProjectRoot(root)
     return project
   })
-  handle(IPC.PROJECT_UPDATE, async (_event, id: unknown, value: unknown) => {
+  mutate(IPC.PROJECT_UPDATE, async (_event, id: unknown, value: unknown) => {
     const { project, root } = registeredProject(id)
     const data = parseProjectUpdate(value)
     assertLayoutPaths(root, data.config || project.config)
@@ -246,7 +255,7 @@ export function registerAllHandlers(): void {
       throw new Error('更新结果项目身份不一致')
     return updated
   })
-  handle(IPC.PROJECT_DELETE, async (_event, id: unknown) => {
+  mutate(IPC.PROJECT_DELETE, async (_event, id: unknown) => {
     assertNonEmptyString(id, '项目ID')
     const project = getRegisteredProject(id)
     if (!project) throw new Error('项目不存在')
@@ -258,17 +267,17 @@ export function registerAllHandlers(): void {
   })
 
   handle(IPC.LLM_LIST_CONFIGS, async () => listLLMConfigs())
-  handle(IPC.LLM_ADD_CONFIG, async (_event, data: unknown) => {
+  mutate(IPC.LLM_ADD_CONFIG, async (_event, data: unknown) => {
     assertLLMConfig(data)
     if (data.id !== undefined) throw new Error('新增配置不能指定ID')
     return addLLMConfig(data)
   })
-  handle(IPC.LLM_DELETE_CONFIG, async (_event, id: unknown) => {
+  mutate(IPC.LLM_DELETE_CONFIG, async (_event, id: unknown) => {
     assertNonEmptyString(id, '配置ID')
     deleteLLMConfig(id)
     return { success: true }
   })
-  handle(IPC.LLM_UPDATE_CONFIG, async (_event, id: unknown, data: unknown) => {
+  mutate(IPC.LLM_UPDATE_CONFIG, async (_event, id: unknown, data: unknown) => {
     assertNonEmptyString(id, '配置ID')
     assertLLMConfig(data, true)
     if (data.id !== undefined && data.id !== id) throw new Error('配置ID不一致')
@@ -281,7 +290,7 @@ export function registerAllHandlers(): void {
     assertLLMConfig(data)
     return testLLMConnection(data)
   })
-  handle(IPC.LLM_SET_DEFAULT, async (_event, id: unknown) => {
+  mutate(IPC.LLM_SET_DEFAULT, async (_event, id: unknown) => {
     assertNonEmptyString(id, '配置ID')
     setDefaultLLM(id)
     return { success: true }
@@ -311,7 +320,7 @@ export function registerAllHandlers(): void {
       throw error
     }
   })
-  handle(
+  mutate(
     IPC.FILE_WRITE,
     async (
       _event,
@@ -383,7 +392,7 @@ export function registerAllHandlers(): void {
     if (!getRegisteredProject(id)) throw new Error('项目不存在')
     return listProjectEpisodes(id)
   })
-  handle(
+  mutate(
     IPC.PROJECT_SYNC_STATUS,
     async (_event, id: unknown, path: unknown) => {
       assertNonEmptyString(path, '项目目录')
@@ -394,7 +403,7 @@ export function registerAllHandlers(): void {
       })
     }
   )
-  handle(IPC.PROJECT_SYNC_EPISODE_STATUS, async (_event, params: unknown) => {
+  mutate(IPC.PROJECT_SYNC_EPISODE_STATUS, async (_event, params: unknown) => {
     assertRecord(params)
     assertAllowedKeys(params, ['projectId', 'projectPath', 'episodeNum'])
     assertNonEmptyString(params.projectPath, '项目目录')
