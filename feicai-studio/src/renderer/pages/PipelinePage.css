@@ -5,6 +5,17 @@
   gap: var(--spacing-md);
 }
 
+.pipeline-empty-state {
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--spacing-lg);
+}
+
+.pipeline-command-center button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
 .pipeline-command-center {
   position: relative;
   overflow: hidden;
@@ -118,13 +129,10 @@
 .command-summary p {
   position: relative;
   z-index: 1;
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
   margin-bottom: 8px;
   font-size: var(--font-size-sm);
   line-height: 1.55;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 .command-meter {
@@ -141,7 +149,6 @@
 .command-meter span {
   display: block;
   height: 100%;
-  min-width: 4px;
   background: linear-gradient(
     90deg,
     var(--color-success),
@@ -179,11 +186,8 @@
 
 .command-stats strong {
   display: block;
-  overflow: hidden;
   font-size: 14px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .command-next {
@@ -209,12 +213,9 @@
 }
 
 .command-next h3 {
-  overflow: hidden;
   margin-bottom: 7px;
   font-size: 26px;
-  line-height: 1.12;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
 }
 
 .command-state-chip {
@@ -249,14 +250,11 @@
 }
 
 .command-next-reason {
-  display: -webkit-box;
-  overflow: hidden;
   margin: 0 0 10px;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.55;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
 }
 
 .command-primary-actions,
@@ -275,7 +273,7 @@
 
 .story-step-panel {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--story-step-count, 3), minmax(0, 1fr));
   gap: 8px;
   align-content: start;
   padding: 10px;
@@ -362,6 +360,7 @@
 
 .story-step-title-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -369,21 +368,16 @@
 }
 
 .story-step-title-row strong {
-  overflow: hidden;
   font-size: var(--font-size-sm);
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
-.story-step-main p {
-  display: -webkit-box;
-  overflow: hidden;
+.story-step-description {
+  display: block;
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   line-height: 1.55;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
 }
 
 .story-step-action-label {
@@ -1050,17 +1044,13 @@
 
   .story-step-panel {
     grid-column: 1 / -1;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--story-step-count, 3), minmax(0, 1fr));
     padding: 8px;
   }
 
   .story-step {
     min-height: 88px;
     padding: 10px 11px;
-  }
-
-  .story-step-main p {
-    -webkit-line-clamp: 2;
   }
 
   .command-summary h2 {

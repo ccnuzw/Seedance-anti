@@ -3,6 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { normalizeProjectConfig } from '@shared/project-config'
 import { AUTO_STAGES } from '@renderer/utils/pipeline-view'
 import {
+  buildStoryPipelineSteps,
+  FLOW_STATE_LABELS,
+  pickNextWorkflowCard
+} from '@renderer/components/pipeline/command-center-view'
+import {
   resolvePipelineDisplayState,
   resolvePipelineSummary
 } from '@renderer/utils/pipeline-page-view'
@@ -10,7 +15,6 @@ import type { AutomatedPipelineStage } from '@shared/types'
 import type {
   FlowCardState,
   WorkflowCard,
-  WorkflowCardActionMeta,
   WorkflowActionId,
   WorkflowActionResult
 } from '@renderer/utils/pipeline-view'
@@ -25,36 +29,6 @@ import { usePipelineKeyboardShortcuts } from '@renderer/hooks/usePipelineKeyboar
 import { usePipelineEventLifecycle } from '@renderer/hooks/usePipelineEventLifecycle'
 import { usePipelineEpisodeSync } from '@renderer/hooks/usePipelineEpisodeSync'
 import { useShallow } from 'zustand/react/shallow'
-
-const NEXT_STEP_STATE_TEXT: Record<FlowCardState, string> = {
-  done: '已完成',
-  active: '执行中',
-  ready: '可执行',
-  blocked: '被阻塞',
-  skipped: '已跳过',
-  warning: '需补齐'
-}
-
-function pickNextWorkflowCard(cards: WorkflowCard[]): WorkflowCard {
-  const coreCards = cards.filter((card) =>
-    ['novel', 'story', 'story_review', 'script', 'script_review'].includes(
-      card.id
-    )
-  )
-  const orderedCards = coreCards.length > 0 ? coreCards : cards
-  return (
-    orderedCards.find((card) => card.state === 'active') ||
-    orderedCards.find((card) => card.state === 'ready') ||
-    orderedCards.find((card) => card.state === 'warning') ||
-    orderedCards.find((card) => card.state === 'blocked') ||
-    orderedCards.find((card) => card.state !== 'skipped') ||
-    cards[cards.length - 1]
-  )
-}
-
-function getActionOrNoop(meta: WorkflowCardActionMeta | undefined): () => void {
-  return meta?.primaryAction || (() => {})
-}
 
 export function usePipelinePageController() {
   const [searchParams] = useSearchParams()
@@ -118,7 +92,7 @@ export function usePipelinePageController() {
     (episode) => episode.episodeNumber === episodeNum
   )
   const projectConfig = normalizeProjectConfig(currentProject?.config)
-  const isNovelEntry = projectConfig.entryStage === 'novel'
+  const entryStage = projectConfig.entryStage || 'novel'
 
   const isEngineMatch =
     context?.episodeNum === episodeNum &&
@@ -195,8 +169,7 @@ export function usePipelinePageController() {
   )
 
   const {
-    hasSourceNovel,
-    workflowCards,
+    workflowCards: baseWorkflowCards,
     workflowCardActionMetaMap,
     stageAvailability,
     workflowAvailability,
@@ -223,6 +196,20 @@ export function usePipelinePageController() {
     addToast,
     handleStart: launchStage
   })
+
+  const workflowCards = useMemo<WorkflowCard[]>(
+    () =>
+      baseWorkflowCards.map((card) =>
+        card.id === workflowAction
+          ? {
+              ...card,
+              state: 'active',
+              note: '正在执行当前阶段，请等待任务结束。'
+            }
+          : card
+      ),
+    [baseWorkflowCards, workflowAction]
+  )
 
   const automationGate = stageAvailability.director.canStart
     ? '已开放自动执行段'
@@ -325,116 +312,23 @@ export function usePipelinePageController() {
     [handleStart]
   )
 
-  const storyPipelineSteps = useMemo(() => {
-    const cardMap = Object.fromEntries(
-      workflowCards.map((card) => [card.id, card])
-    ) as Partial<Record<WorkflowCard['id'], WorkflowCard>>
-    const novelMeta = workflowCardActionMetaMap.novel
-    const storyMeta = workflowCardActionMetaMap.story
-    const storyReviewMeta = workflowCardActionMetaMap.story_review
-    const scriptMeta = workflowCardActionMetaMap.script
-    const scriptReviewMeta = workflowCardActionMetaMap.script_review
-
-    const openStoryPath = storyMeta?.openPath || storyReviewMeta?.openPath
-    const openScriptPath = scriptMeta?.openPath || scriptReviewMeta?.openPath
-
-    return [
-      {
-        id: 'novel' as const,
-        label: '小说原文',
-        description: hasSourceNovel
-          ? '原文已就绪，可以继续拆解下一批剧情库存。'
-          : '先导入或整理小说原文，后续剧情和剧本都从这里开始。',
-        state: cardMap.novel?.state || ('blocked' as FlowCardState),
-        stateLabel: hasSourceNovel ? '已就绪' : '待导入',
-        primaryLabel: hasSourceNovel ? '查看原文' : '录入原文',
-        primaryDisabled: !novelMeta?.openPath,
-        primaryAction: novelMeta?.openPath
-          ? () => openWorkflowPath(novelMeta.openPath!)
-          : getActionOrNoop(novelMeta),
-        secondaryLabel: workflowAvailability.story.canStart
-          ? isNovelEntry
-            ? '拆解一批'
-            : '生成剧情'
-          : undefined,
-        secondaryAction: workflowAvailability.story.canStart
-          ? storyMeta?.primaryAction
-          : undefined
-      },
-      {
-        id: 'story' as const,
-        label: isNovelEntry ? '剧情库存批次' : '剧情拆解',
-        description: currentEpisode?.hasStoryBeat
-          ? isNovelEntry
-            ? '当前批次已有剧情拆解草稿，审核通过后才会写入剧情库存。'
-            : '当前集已有剧情拆解，审核通过后再生成剧本。'
-          : isNovelEntry
-            ? '按旧版规则读取 6 章，拆成可供后续剧本消耗的剧情库存。'
-            : '把小说内容拆成当前集剧情节奏、关键转折和可拍内容。',
-        state: cardMap.story?.state || ('blocked' as FlowCardState),
-        stateLabel: currentEpisode?.hasStoryBeat ? '已生成' : '待生成',
-        primaryLabel: currentEpisode?.hasStoryBeat
-          ? storyReviewMeta?.primaryLabel ||
-            (isNovelEntry ? '审核批次' : '审核剧情')
-          : storyMeta?.primaryLabel || (isNovelEntry ? '拆解一批' : '生成剧情'),
-        primaryDisabled: currentEpisode?.hasStoryBeat
-          ? storyReviewMeta?.primaryDisabled
-          : storyMeta?.primaryDisabled,
-        primaryAction: currentEpisode?.hasStoryBeat
-          ? getActionOrNoop(storyReviewMeta)
-          : getActionOrNoop(storyMeta),
-        secondaryLabel: openStoryPath
-          ? isNovelEntry
-            ? '查看批次草稿'
-            : '查看剧情'
-          : undefined,
-        secondaryAction: openStoryPath
-          ? () => openWorkflowPath(openStoryPath)
-          : undefined,
-        reviewLabel: currentEpisode?.hasStoryReview
-          ? '剧情审核已通过'
-          : currentEpisode?.hasStoryBeat
-            ? isNovelEntry
-              ? '等待批次审核'
-              : '等待剧情审核'
-            : undefined
-      },
-      {
-        id: 'script' as const,
-        label: '剧本',
-        description: currentEpisode?.hasScript
-          ? '当前集已有剧本，审核通过后即可进入后续制作。'
-          : '基于已通过的剧情拆解生成可进入制作段的完整剧本。',
-        state: cardMap.script?.state || ('blocked' as FlowCardState),
-        stateLabel: currentEpisode?.hasScript ? '已生成' : '待生成',
-        primaryLabel: currentEpisode?.hasScript
-          ? scriptReviewMeta?.primaryLabel || '审核剧本'
-          : scriptMeta?.primaryLabel || '生成剧本',
-        primaryDisabled: currentEpisode?.hasScript
-          ? scriptReviewMeta?.primaryDisabled
-          : scriptMeta?.primaryDisabled,
-        primaryAction: currentEpisode?.hasScript
-          ? getActionOrNoop(scriptReviewMeta)
-          : getActionOrNoop(scriptMeta),
-        secondaryLabel: openScriptPath ? '查看剧本' : undefined,
-        secondaryAction: openScriptPath
-          ? () => openWorkflowPath(openScriptPath)
-          : undefined,
-        reviewLabel: currentEpisode?.hasScriptReview
-          ? '剧本审核已通过'
-          : currentEpisode?.hasScript
-            ? '等待剧本审核'
-            : undefined
-      }
+  const storyPipelineSteps = useMemo(
+    () =>
+      buildStoryPipelineSteps({
+        entryStage,
+        episode: currentEpisode,
+        cards: workflowCards,
+        actionMetaMap: workflowCardActionMetaMap,
+        onOpen: openWorkflowPath
+      }),
+    [
+      entryStage,
+      currentEpisode,
+      workflowCards,
+      workflowCardActionMetaMap,
+      openWorkflowPath
     ]
-  }, [
-    workflowCards,
-    workflowCardActionMetaMap,
-    hasSourceNovel,
-    workflowAvailability,
-    currentEpisode,
-    openWorkflowPath
-  ])
+  )
 
   const nextWorkflowCard = useMemo(
     () => pickNextWorkflowCard(workflowCards),
@@ -472,33 +366,64 @@ export function usePipelinePageController() {
       return {
         label: '等待项目数据',
         status: '未就绪',
-        reason: '项目状态仍在同步，请稍后再试。',
+        reason: '当前没有可用的阶段操作，请返回项目页检查项目和集数。',
         state: 'blocked' as FlowCardState,
         primaryAction: {
-          label: '等待同步',
+          label: '暂无可用操作',
           disabled: true,
           action: () => {}
         }
       }
     }
 
+    if (workflowAction) {
+      return {
+        label: nextWorkflowCard.label,
+        status: '执行中',
+        reason:
+          '正在执行当前阶段，完成后会更新产物和审核状态。请等待任务结束。',
+        state: 'active' as FlowCardState,
+        primaryAction: {
+          label: '正在执行，请稍候',
+          disabled: true,
+          action: () => {}
+        }
+      }
+    }
+
+    const unavailableReason = isRunning
+      ? '其他集或项目的流水线正在执行，请等待该任务结束后再启动制作。'
+      : displayState === 'error'
+        ? '上次执行失败。可展开执行日志查看具体原因，修正后重试。'
+        : displayState === 'paused'
+          ? '流水线已暂停。可检查现有产物，再通过可用阶段操作继续制作。'
+          : ''
+
     return {
       label: nextWorkflowCard.label,
-      status: NEXT_STEP_STATE_TEXT[nextWorkflowCard.state],
-      reason: nextWorkflowCard.note,
-      state: nextWorkflowCard.state,
+      status: isRunning
+        ? '等待其他任务结束'
+        : FLOW_STATE_LABELS[nextWorkflowCard.state],
+      reason: [unavailableReason, nextWorkflowCard.note]
+        .filter(Boolean)
+        .join(' '),
+      state: isRunning ? ('blocked' as FlowCardState) : nextWorkflowCard.state,
       primaryAction: {
         label: nextActionMeta.primaryLabel,
-        disabled: nextActionMeta.primaryDisabled,
+        disabled: isRunning || nextActionMeta.primaryDisabled,
         action: nextActionMeta.primaryAction
       },
       secondaryLabel: nextActionMeta.secondaryLabel,
+      secondaryDisabled: isRunning || nextActionMeta.secondaryDisabled,
       secondaryAction: nextActionMeta.secondaryAction,
       openLabel: nextActionMeta.openLabel,
       openPath: nextActionMeta.openPath
     }
   }, [
     displayIsRunning,
+    displayState,
+    isRunning,
+    workflowAction,
     workflowCards,
     nextWorkflowCard,
     nextActionMeta,
@@ -532,13 +457,16 @@ export function usePipelinePageController() {
       },
       commandCenter: {
         episodeNum,
+        entryStage,
         entryLabel: summary.entryLabel,
         workflowMode: summary.workflowMode || '未设置',
-        currentStageLabel: summary.currentStageLabel || '待开始',
-        progress: summary.progress,
+        currentStageLabel:
+          displayIsRunning || workflowAction
+            ? nextStep.label
+            : summary.currentStageLabel || '待开始',
         displayState,
         displayIsRunning,
-        isRunning,
+        isRunning: isRunning || workflowAction !== null,
         currentEpisode,
         nextStep,
         storyPipelineSteps,
@@ -600,6 +528,7 @@ export function usePipelinePageController() {
     }),
     [
       currentProject,
+      entryStage,
       episodes,
       episodeNum,
       totalElapsed,
