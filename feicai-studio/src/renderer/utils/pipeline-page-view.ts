@@ -1,7 +1,21 @@
 import { getEpisodeProgress, getEpisodeStageMeta } from '@shared/workflow'
 import { isEpisodeComplete } from '@shared/episode-status'
-import type { Episode, PipelineState, ProjectConfig } from '@shared/types'
+import type {
+  Episode,
+  PipelineContext,
+  PipelineState,
+  ProjectConfig
+} from '@shared/types'
 import { mapEpisodeStatusToDisplayState } from './pipeline-view'
+
+export function getProjectPipelineEpisodeNum(
+  projectId: string | undefined,
+  context: Pick<PipelineContext, 'projectId' | 'episodeNum'> | null
+): number | undefined {
+  return projectId && context?.projectId === projectId
+    ? context.episodeNum
+    : undefined
+}
 
 export function resolvePipelineDisplayState(params: {
   isEngineMatch: boolean

@@ -8,6 +8,7 @@ import {
   pickNextWorkflowCard
 } from '@renderer/components/pipeline/command-center-view'
 import {
+  getProjectPipelineEpisodeNum,
   resolvePipelineDisplayState,
   resolvePipelineSummary
 } from '@renderer/utils/pipeline-page-view'
@@ -74,16 +75,21 @@ export function usePipelinePageController() {
     }))
   )
 
-  const urlEp = searchParams.get('ep')
-  const episodeNum = parseInt(
-    urlEp || (context?.episodeNum ? String(context.episodeNum) : '1')
-  )
   const { currentProject, episodes, syncSingleEpisodeStatus } = useProjectStore(
     useShallow((s) => ({
       currentProject: s.currentProject,
       episodes: s.episodes,
       syncSingleEpisodeStatus: s.syncSingleEpisodeStatus
     }))
+  )
+  const projectPipelineEpisodeNum = getProjectPipelineEpisodeNum(
+    currentProject?.id,
+    context
+  )
+  const urlEp = searchParams.get('ep')
+  const episodeNum = parseInt(
+    urlEp ||
+      (projectPipelineEpisodeNum ? String(projectPipelineEpisodeNum) : '1')
   )
   const { addToast } = useToastStore()
   const setReviewFeedback = useReviewFeedbackStore((s) => s.setReview)
@@ -94,9 +100,7 @@ export function usePipelinePageController() {
   const projectConfig = normalizeProjectConfig(currentProject?.config)
   const entryStage = projectConfig.entryStage || 'novel'
 
-  const isEngineMatch =
-    context?.episodeNum === episodeNum &&
-    context?.projectId === currentProject?.id
+  const isEngineMatch = projectPipelineEpisodeNum === episodeNum
 
   const displayState = resolvePipelineDisplayState({
     isEngineMatch,
