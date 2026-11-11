@@ -264,6 +264,7 @@ function getChapterTitleFromFile(filePath: string, fileName: string): string {
 export function listSourceChapters(params: {
   projectPath: string
   config: ProjectConfig
+  readOnly?: boolean
 }): SourceChapterItem[] {
   const layout = resolveProjectLayout(params.config)
   const chaptersDir = assertPathWithinProject(
@@ -344,11 +345,15 @@ export function listSourceChapters(params: {
   )
   if (previous.size !== chapters.length) changed = true
   index = { version: 1, chapters }
-  chapterIndexes.delete(chaptersDir)
-  chapterIndexes.set(chaptersDir, index)
-  if (chapterIndexes.size > MAX_CHAPTER_INDEXES)
-    chapterIndexes.delete(chapterIndexes.keys().next().value!)
-  if (changed) atomicWriteFileSync(indexPath, JSON.stringify(index))
+  // Queries must not rewrite the index during execution/backup. Do not publish
+  // their refreshed cache either: the next owned scan still needs to persist it.
+  if (!params.readOnly) {
+    if (changed) atomicWriteFileSync(indexPath, JSON.stringify(index))
+    chapterIndexes.delete(chaptersDir)
+    chapterIndexes.set(chaptersDir, index)
+    if (chapterIndexes.size > MAX_CHAPTER_INDEXES)
+      chapterIndexes.delete(chapterIndexes.keys().next().value!)
+  }
   return chapters.map(({ index, title, fileName, filePath }) => ({
     index,
     title,

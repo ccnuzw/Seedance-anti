@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => {
     projects: [] as Project[],
     showOpenDialog: vi.fn(),
     createProject: vi.fn(),
+    deleteProject: vi.fn(),
+    repairProject: vi.fn(),
+    migrateProject: vi.fn(),
     updateProject: vi.fn(),
     sync: vi.fn(),
     syncEpisode: vi.fn(),
@@ -55,12 +58,12 @@ vi.mock('../services/project-service', () => ({
     mocks.projects.find((project) => project.id === id) || null,
   createProject: mocks.createProject,
   updateProject: mocks.updateProject,
-  deleteProject: vi.fn(),
+  deleteProject: mocks.deleteProject,
   listProjectEpisodes: vi.fn(() => []),
   listRegisteredProjectSourceChapters: vi.fn(() => []),
   getRegisteredProjectPlotBreakdownSummary: vi.fn(),
-  migrateLegacyNovelDirectory: vi.fn(),
-  repairProjectIssues: vi.fn(),
+  migrateLegacyNovelDirectory: mocks.migrateProject,
+  repairProjectIssues: mocks.repairProject,
   syncRegisteredProjectStatus: mocks.sync,
   syncRegisteredProjectEpisodeStatus: mocks.syncEpisode
 }))
@@ -89,6 +92,12 @@ import {
   resetAccessControl
 } from '../security/access-control'
 import { flushPendingWrites } from '../io/atomic-file'
+import {
+  acquireExecutionLease,
+  getExecutionLease,
+  releaseExecutionLease,
+  stopExecution
+} from '../services/batch-execution-lease'
 
 const directories: string[] = []
 function temporary(): string {
@@ -134,6 +143,8 @@ beforeEach(() => {
   registerAllHandlers()
 })
 afterEach(async () => {
+  const lease = getExecutionLease()
+  if (lease) releaseExecutionLease(lease)
   await flushPendingWrites()
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true })
@@ -221,6 +232,133 @@ describe('IPC真实文件能力边界', () => {
         )
       )
     ).rejects.toThrow('frame')
+  })
+})
+
+describe('项目变更与制作/备份共用租约', () => {
+  it.each(['running', 'paused', 'stopping', 'backup', 'restore'])(
+    '%s 期间拒绝所有项目变更，普通读取与修复预览仍可用',
+    async (phase) => {
+      const root = temporary()
+      mocks.projects.push(project(root))
+      registerProjectRoot(root)
+      rememberSelectedDirectory(root)
+      const path = join(root, 'draft.md')
+      writeFileSync(path, 'original')
+      const lease = acquireExecutionLease(`test:${phase}`)
+      if (phase === 'paused') lease.pause()
+      const stopped = phase === 'stopping' ? stopExecution() : undefined
+      const requests: Array<[string, ...unknown[]]> = [
+        [IPC.FILE_WRITE, path, 'changed', 'original'],
+        [IPC.PROJECT_CREATE, { ...project(root), config: {} }],
+        [IPC.PROJECT_UPDATE, 'project-1', { name: 'changed' }],
+        [IPC.PROJECT_DELETE, 'project-1'],
+        [IPC.PROJECT_MIGRATE_LEGACY_NOVEL, root],
+        [
+          IPC.PROJECT_REPAIR,
+          {
+            projectPath: root,
+            actionIds: ['create_missing_directories'],
+            trustMode: 'registered'
+          }
+        ],
+        [IPC.PROJECT_SYNC_STATUS, 'project-1', root],
+        [
+          IPC.PROJECT_SYNC_EPISODE_STATUS,
+          {
+            projectId: 'project-1',
+            projectPath: root,
+            episodeNum: 1
+          }
+        ],
+        [IPC.LLM_ADD_CONFIG, {}],
+        [IPC.LLM_UPDATE_CONFIG, 'model', {}],
+        [IPC.LLM_DELETE_CONFIG, 'model'],
+        [IPC.LLM_SET_DEFAULT, 'model']
+      ]
+      for (const [channel, ...args] of requests)
+        await expect(invoke(channel, ...args)).rejects.toThrow(
+          '请等待当前操作结束后重试'
+        )
+      expect(await invoke(IPC.FILE_READ, path)).toBe('original')
+      expect(await invoke(IPC.PROJECT_LIST)).toHaveLength(1)
+      await invoke(IPC.PROJECT_REPAIR, {
+        projectPath: root,
+        actionIds: [],
+        trustMode: 'registered',
+        dryRun: true
+      })
+      expect(mocks.repairProject).toHaveBeenCalledWith(
+        expect.objectContaining({ dryRun: true })
+      )
+      for (const method of [
+        mocks.createProject,
+        mocks.updateProject,
+        mocks.deleteProject,
+        mocks.migrateProject,
+        mocks.sync,
+        mocks.syncEpisode
+      ])
+        expect(method).not.toHaveBeenCalled()
+      expect(getExecutionLease()).toBe(lease)
+      expect(readFileSync(path, 'utf8')).toBe('original')
+      releaseExecutionLease(lease)
+      await stopped
+      expect(await invoke(IPC.FILE_WRITE, path, 'changed', 'original')).toEqual(
+        { success: true }
+      )
+      expect(getExecutionLease()).toBeNull()
+    }
+  )
+
+  it.each([false, true])(
+    '异步变更持锁直到完成（失败=%s），阻止制作/备份启动并最终释放',
+    async (fails) => {
+      const root = temporary()
+      const existing = project(root)
+      mocks.projects.push(existing)
+      const pending = Promise.withResolvers<Project>()
+      const started = Promise.withResolvers<void>()
+      mocks.updateProject.mockImplementationOnce(() => {
+        started.resolve()
+        return pending.promise
+      })
+      const updating = invoke(IPC.PROJECT_UPDATE, existing.id, {
+        name: 'changed'
+      })
+      await started.promise
+      expect(getExecutionLease()?.owner).toBe(IPC.PROJECT_UPDATE)
+      for (const owner of [
+        'pipeline',
+        'batch',
+        'data:backup-project',
+        'data:restore-database'
+      ])
+        expect(() => acquireExecutionLease(owner)).toThrow('请等待')
+      if (fails) {
+        const rejected = expect(updating).rejects.toThrow('disk failure')
+        pending.reject(new Error('disk failure'))
+        await rejected
+      } else {
+        pending.resolve({ ...existing, name: 'changed' })
+        await expect(updating).resolves.toMatchObject({ name: 'changed' })
+      }
+      expect(getExecutionLease()).toBeNull()
+      releaseExecutionLease(acquireExecutionLease('pipeline'))
+    }
+  )
+
+  it('同步验证失败释放租约，未授权 sender 在取得租约之前被拒绝', async () => {
+    await expect(invoke(IPC.PROJECT_DELETE, 'missing')).rejects.toThrow(
+      '不存在'
+    )
+    expect(getExecutionLease()).toBeNull()
+    const lease = acquireExecutionLease('batch')
+    mocks.frame.url = 'https://evil.example/'
+    await expect(
+      invoke(IPC.FILE_WRITE, '/tmp/forbidden.md', 'x')
+    ).rejects.toThrow('frame')
+    expect(getExecutionLease()).toBe(lease)
   })
 })
 

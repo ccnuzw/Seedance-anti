@@ -119,6 +119,45 @@ describe('durable atomic file API', () => {
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ version: 3 })
   })
 
+  it.each(['valid', 'missing', 'broken'])(
+    '只读恢复在主文件 %s 时不创建或更改文件',
+    async (primary) => {
+      const root = temporary()
+      const path = join(root, 'state.json')
+      const original = primary === 'valid' ? '{"version":2}' : '{broken'
+      if (primary !== 'missing') writeFileSync(path, original)
+      writeFileSync(`${path}.bak`, '{"version":1}')
+      const entries = readdirSync(root).sort()
+      expect(await readJsonWithRecovery(path, { readOnly: true })).toEqual({
+        version: primary === 'valid' ? 2 : 1
+      })
+      expect(readdirSync(root).sort()).toEqual(entries)
+      expect(existsSync(path)).toBe(primary !== 'missing')
+      if (primary !== 'missing')
+        expect(readFileSync(path, 'utf8')).toBe(original)
+      expect(readFileSync(`${path}.bak`, 'utf8')).toBe('{"version":1}')
+    }
+  )
+
+  it('只读恢复不会创建父目录，双损坏仍抛错且保留字节', async () => {
+    const root = temporary()
+    expect(
+      await readJsonWithRecovery(join(root, 'absent', 'state.json'), {
+        readOnly: true
+      })
+    ).toBeNull()
+    expect(readdirSync(root)).toEqual([])
+    const path = join(root, 'state.json')
+    writeFileSync(path, '{broken')
+    writeFileSync(`${path}.bak`, 'broken-backup')
+    await expect(
+      readJsonWithRecovery(path, { readOnly: true })
+    ).rejects.toThrow('均已损坏')
+    expect(readFileSync(path, 'utf8')).toBe('{broken')
+    expect(readFileSync(`${path}.bak`, 'utf8')).toBe('broken-backup')
+    expect(readdirSync(root).sort()).toEqual(['state.json', 'state.json.bak'])
+  })
+
   it('主文件与备份都损坏会抛错，真正缺失返回null', async () => {
     const root = temporary()
     expect(await readJsonWithRecovery(join(root, 'missing.json'))).toBeNull()

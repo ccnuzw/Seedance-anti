@@ -48,6 +48,12 @@ import {
 } from '../security/access-control'
 import { setTrustedIpcRendererUrl } from '../security/safe-ipc'
 import { flushPendingWrites } from '../io/atomic-file'
+import { AssetManager } from '../asset/asset-manager'
+import {
+  acquireExecutionLease,
+  getExecutionLease,
+  releaseExecutionLease
+} from '../services/batch-execution-lease'
 
 const directories: string[] = []
 function temporary(): string {
@@ -95,12 +101,82 @@ beforeEach(() => {
   registerAssetHandlers()
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
+  const lease = getExecutionLease()
+  if (lease) releaseExecutionLease(lease)
   await flushPendingWrites()
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true })
 })
 
 describe('资产IPC真实边界', () => {
+  it.each(['running', 'paused', 'stopping', 'backup', 'restore'])(
+    '%s 时禁止提示词和图片写入，素材读取可用',
+    async (phase) => {
+      const root = temporary()
+      addProject(root)
+      mkdirSync(join(root, 'custom-assets'))
+      const file = join(root, 'custom-assets/character-prompts.md')
+      writeFileSync(file, '## 主角\n\n原提示词')
+      const source = join(temporary(), 'source.png')
+      writeFileSync(source, Buffer.from([1, 2, 3]))
+      rememberSelectedFile(source)
+      const lease = acquireExecutionLease(phase)
+      if (phase === 'paused') lease.pause()
+      if (phase === 'stopping') lease.abort()
+      const params = {
+        projectPath: root,
+        assetType: 'character',
+        assetName: '主角'
+      }
+      await expect(
+        invoke(IPC.ASSET_UPDATE_PROMPT, { ...params, newPromptText: '新稿' })
+      ).rejects.toThrow('请等待')
+      await expect(
+        invoke('asset:upload-image', { ...params, sourcePath: source })
+      ).rejects.toThrow('请等待')
+      expect(await invoke(IPC.ASSET_LIST_CHARACTERS, root)).toEqual([
+        expect.objectContaining({ promptText: '原提示词' })
+      ])
+      expect(readFileSync(file, 'utf8')).toBe('## 主角\n\n原提示词')
+      expect(getExecutionLease()).toBe(lease)
+    }
+  )
+
+  it.each([false, true])(
+    '素材异步写入完成前不能启动制作，异常也释放（失败=%s）',
+    async (fails) => {
+      const root = temporary()
+      addProject(root)
+      const started = Promise.withResolvers<void>()
+      const pending = Promise.withResolvers<{ success: boolean }>()
+      vi.spyOn(
+        AssetManager.prototype,
+        'updateAssetPrompt'
+      ).mockImplementationOnce(() => {
+        started.resolve()
+        return pending.promise
+      })
+      const saving = invoke(IPC.ASSET_UPDATE_PROMPT, {
+        projectPath: root,
+        assetType: 'character',
+        assetName: '主角',
+        newPromptText: '草稿'
+      })
+      await started.promise
+      expect(() => acquireExecutionLease('pipeline')).toThrow('请等待')
+      if (fails) {
+        const rejected = expect(saving).rejects.toThrow('disk failure')
+        pending.reject(new Error('disk failure'))
+        await rejected
+      } else {
+        pending.resolve({ success: true })
+        await expect(saving).resolves.toEqual({ success: true })
+      }
+      expect(getExecutionLease()).toBeNull()
+    }
+  )
+
   it('从数据库注册配置而非硬编码assets目录读取和编辑资产', async () => {
     const root = temporary()
     addProject(root)

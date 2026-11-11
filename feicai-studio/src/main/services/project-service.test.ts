@@ -1,4 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import { normalizeProjectConfig } from '@shared/project-config'
+import {
+  invalidateSourceChapterCache,
+  listSourceChapters
+} from '../project/novel-importer'
+import { withExecutionLease } from './batch-execution-lease'
 
 const createProjectRecord = vi.fn()
 const deleteProjectRecord = vi.fn()
@@ -26,6 +43,61 @@ describe('project-service', async () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
+
+  it.each(['missing', 'broken', 'stale'])(
+    '公开章节与水位查询在备份租约内不写入 %s 索引，之后持锁扫描仍会更新磁盘',
+    async (mode) => {
+      const projectPath = mkdtempSync(
+        join(tmpdir(), 'feicai-readonly-chapters-')
+      )
+      const config = normalizeProjectConfig({
+        projectName: '只读查询',
+        totalEpisodes: 1
+      })
+      const chapters = join(projectPath, 'source', 'chapters')
+      const chapter = join(chapters, 'chapter-001.md')
+      const index = join(chapters, '.chapter-index.json')
+      try {
+        mkdirSync(chapters, { recursive: true })
+        writeFileSync(chapter, '# 旧标题\n正文')
+        if (mode === 'stale') {
+          await withExecutionLease('fixture:index', () =>
+            listSourceChapters({ projectPath, config })
+          )
+          writeFileSync(chapter, '# 新的章节标题\n新的正文')
+        } else if (mode === 'broken') writeFileSync(index, '{broken')
+        const before = existsSync(index) ? readFileSync(index, 'utf8') : null
+        const entries = readdirSync(chapters).sort()
+        getProject.mockReturnValue({ id: 'project-1', projectPath, config })
+        const title = mode === 'stale' ? '新的章节标题' : '旧标题'
+        await withExecutionLease('data:backup-project', () => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            expect(
+              service.listRegisteredProjectSourceChapters('project-1')[0].title
+            ).toBe(title)
+            expect(
+              service.getRegisteredProjectPlotBreakdownSummary('project-1')
+                .totalSourceChapters
+            ).toBe(1)
+          }
+          expect(readdirSync(chapters).sort()).toEqual(entries)
+          expect(existsSync(index) ? readFileSync(index, 'utf8') : null).toBe(
+            before
+          )
+        })
+        await withExecutionLease('workflow', () =>
+          listSourceChapters({ projectPath, config })
+        )
+        expect(JSON.parse(readFileSync(index, 'utf8')).chapters[0].title).toBe(
+          title
+        )
+        expect(readFileSync(index, 'utf8')).not.toBe(before)
+      } finally {
+        invalidateSourceChapterCache(projectPath)
+        rmSync(projectPath, { recursive: true, force: true })
+      }
+    }
+  )
 
   it('在 projectId 和 projectPath 都缺失时返回 null', () => {
     expect(service.findRegisteredProject({})).toBeNull()

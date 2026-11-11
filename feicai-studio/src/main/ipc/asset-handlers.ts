@@ -8,6 +8,7 @@ import {
 } from '../security/access-control'
 import { assertAllowedKeys, assertRecord } from '../security/input-validation'
 import { registerSafeIpcHandler as handle } from '../security/safe-ipc'
+import { registerMutationHandler as mutate } from './mutation-handler'
 import { listRegisteredProjects } from '../services/project-service'
 
 function getManager(projectPath: unknown): AssetManager {
@@ -41,7 +42,7 @@ export function registerAssetHandlers(): void {
       return getManager(path).getPromptStats(episode)
     }
   )
-  handle('asset:upload-image', async (_event, params: unknown) => {
+  mutate('asset:upload-image', async (_event, params: unknown) => {
     assertRecord(params)
     assertAllowedKeys(params, [
       'projectPath',
@@ -62,7 +63,7 @@ export function registerAssetHandlers(): void {
     assertAssetType(type)
     return getManager(path).listReferenceImages(type)
   })
-  handle(IPC.ASSET_UPDATE_PROMPT, async (_event, params: unknown) => {
+  mutate(IPC.ASSET_UPDATE_PROMPT, async (_event, params: unknown) => {
     assertRecord(params)
     assertAllowedKeys(params, [
       'projectPath',

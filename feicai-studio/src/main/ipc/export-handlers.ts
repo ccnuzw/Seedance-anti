@@ -35,6 +35,7 @@ import {
   isReviewCurrent
 } from '../engine/artifact-provenance'
 import { listRegisteredProjects } from '../services/project-service'
+import { withExecutionLease } from '../services/batch-execution-lease'
 
 const gate = 'current-reviewed-only' as const
 const reviewArtifacts: Partial<Record<ReviewStage, EpisodeArtifactId>> = {
@@ -130,7 +131,9 @@ async function loadReviewState(
       project.config
     )
   )
-  const state = await readJsonWithRecovery<ProjectPipelineState>(path)
+  const state = await readJsonWithRecovery<ProjectPipelineState>(path, {
+    readOnly: true
+  })
   if (state) {
     assertRecord(state)
     assertRecord(state.episodes, '流水线集数状态')
@@ -213,7 +216,13 @@ async function revalidate(
   project: Project,
   artifacts: ApprovedArtifact[]
 ): Promise<void> {
-  const state = await loadReviewState(project)
+  const current = registeredProject(project.projectPath)
+  if (
+    current.id !== project.id ||
+    JSON.stringify(current.config) !== JSON.stringify(project.config)
+  )
+    throw new Error('项目身份或配置在导出期间发生变化，请重试')
+  const state = await loadReviewState(current)
   for (const artifact of artifacts) {
     assertPathWithinProject(project.projectPath, artifact.path)
     for (const previous of artifact.reviews) {
@@ -301,49 +310,55 @@ export function registerExportHandlers(): void {
         ]
       })
       if (result.canceled || !result.filePath) return { canceled: true, gate }
-      let output: string
-      if (params.format === 'markdown') {
-        output = artifacts
-          .map(
-            (artifact) =>
-              `# EP${String(artifact.episode).padStart(2, '0')}\n\n${artifact.content}`
+      return await withExecutionLease(IPC.EXPORT_PROMPTS, async () => {
+        let output: string
+        if (params.format === 'markdown') {
+          output = artifacts
+            .map(
+              (artifact) =>
+                `# EP${String(artifact.episode).padStart(2, '0')}\n\n${artifact.content}`
+            )
+            .join('\n\n---\n\n')
+        } else if (params.format === 'json') {
+          output = JSON.stringify(
+            artifacts.map((artifact) => ({
+              episode: artifact.episode,
+              content: artifact.content
+            })),
+            null,
+            2
           )
-          .join('\n\n---\n\n')
-      } else if (params.format === 'json') {
-        output = JSON.stringify(
-          artifacts.map((artifact) => ({
-            episode: artifact.episode,
-            content: artifact.content
-          })),
-          null,
-          2
-        )
-      } else {
-        const rows: Array<Array<string | number>> = [['集数', '标题', '内容']]
-        for (const artifact of artifacts) {
-          const sections = artifact.content.split(/^## /m).slice(1)
-          if (!sections.length)
-            rows.push([artifact.episode, '提示词', artifact.content])
-          for (const section of sections) {
-            const [title, ...body] = section.split('\n')
-            rows.push([artifact.episode, title.trim(), body.join('\n').trim()])
+        } else {
+          const rows: Array<Array<string | number>> = [['集数', '标题', '内容']]
+          for (const artifact of artifacts) {
+            const sections = artifact.content.split(/^## /m).slice(1)
+            if (!sections.length)
+              rows.push([artifact.episode, '提示词', artifact.content])
+            for (const section of sections) {
+              const [title, ...body] = section.split('\n')
+              rows.push([
+                artifact.episode,
+                title.trim(),
+                body.join('\n').trim()
+              ])
+            }
           }
+          output = rows
+            .map((row) => row.map(escapeCsvField).join(','))
+            .join('\r\n')
         }
-        output = rows
-          .map((row) => row.map(escapeCsvField).join(','))
-          .join('\r\n')
-      }
-      await revalidate(project, artifacts)
-      // The native save dialog grants only this exact target. Atomic I/O rejects
-      // existing final/parent links, including .bak links, before replacement.
-      await atomicWriteFile(result.filePath, output)
-      return {
-        success: true,
-        path: result.filePath,
-        count: artifacts.length,
-        skipped: episodes.length - artifacts.length,
-        gate
-      }
+        await revalidate(project, artifacts)
+        // The native save dialog grants only this exact target. Atomic I/O rejects
+        // existing final/parent links, including .bak links, before replacement.
+        await atomicWriteFile(result.filePath, output)
+        return {
+          success: true,
+          path: result.filePath,
+          count: artifacts.length,
+          skipped: episodes.length - artifacts.length,
+          gate
+        }
+      })
     } catch (error) {
       return exportError(error)
     }
@@ -401,61 +416,64 @@ export function registerExportHandlers(): void {
       })
       if (result.canceled || !result.filePaths.length)
         return { canceled: true, gate }
-      const selectedRoot = assertPathWithinProject(
-        result.filePaths[0],
-        result.filePaths[0]
-      )
-      const name = `${safeExportName(project.name)}-export`
-      let directory = ''
-      for (let suffix = 0; !directory; suffix++) {
-        const candidate = assertPathWithinProject(
-          selectedRoot,
-          join(selectedRoot, `${name}${suffix ? `-${suffix + 1}` : ''}`)
+      return await withExecutionLease(IPC.EXPORT_ALL, async () => {
+        await revalidate(project, artifacts)
+        const selectedRoot = assertPathWithinProject(
+          result.filePaths[0],
+          result.filePaths[0]
         )
-        try {
-          await mkdir(candidate)
-          directory = candidate
-        } catch (error) {
-          if (
-            !error ||
-            typeof error !== 'object' ||
-            !('code' in error) ||
-            error.code !== 'EEXIST'
+        const name = `${safeExportName(project.name)}-export`
+        let directory = ''
+        for (let suffix = 0; !directory; suffix++) {
+          const candidate = assertPathWithinProject(
+            selectedRoot,
+            join(selectedRoot, `${name}${suffix ? `-${suffix + 1}` : ''}`)
           )
-            throw error
+          try {
+            await mkdir(candidate)
+            directory = candidate
+          } catch (error) {
+            if (
+              !error ||
+              typeof error !== 'object' ||
+              !('code' in error) ||
+              error.code !== 'EEXIST'
+            )
+              throw error
+          }
         }
-      }
-      await revalidate(project, artifacts)
-      for (const artifact of artifacts) {
-        const destination = assertPathWithinProject(
-          directory,
-          join(directory, relative(project.projectPath, artifact.path))
+        await revalidate(project, artifacts)
+        for (const artifact of artifacts) {
+          const destination = assertPathWithinProject(
+            directory,
+            join(directory, relative(project.projectPath, artifact.path))
+          )
+          await atomicWriteFile(destination, artifact.content)
+        }
+        await atomicWriteFile(
+          join(directory, 'export-manifest.json'),
+          JSON.stringify(
+            {
+              gate,
+              backup: false,
+              description:
+                '仅当前审核有效产物；不是项目备份。未审核或失效内容、源文、状态与全局素材库不在此导出范围。',
+              projectName: project.name,
+              exportedAt: new Date().toISOString(),
+              count: artifacts.length,
+              artifacts: artifacts.map((artifact) => ({
+                episode: artifact.episode,
+                stage: artifact.stage,
+                path: relative(project.projectPath, artifact.path),
+                artifactHash: hashReviewContent(artifact.content)
+              }))
+            },
+            null,
+            2
+          )
         )
-        await atomicWriteFile(destination, artifact.content)
-      }
-      await atomicWriteFile(
-        join(directory, 'export-manifest.json'),
-        JSON.stringify(
-          {
-            gate,
-            backup: false,
-            description:
-              '仅当前审核有效产物；不是项目备份。未审核或失效内容、源文、状态与全局素材库不在此导出范围。',
-            projectName: project.name,
-            exportedAt: new Date().toISOString(),
-            count: artifacts.length,
-            artifacts: artifacts.map((artifact) => ({
-              episode: artifact.episode,
-              stage: artifact.stage,
-              path: relative(project.projectPath, artifact.path),
-              artifactHash: hashReviewContent(artifact.content)
-            }))
-          },
-          null,
-          2
-        )
-      )
-      return { success: true, path: directory, count: artifacts.length, gate }
+        return { success: true, path: directory, count: artifacts.length, gate }
+      })
     } catch (error) {
       return exportError(error)
     }

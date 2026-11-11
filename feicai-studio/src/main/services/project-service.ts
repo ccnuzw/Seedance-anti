@@ -47,7 +47,8 @@ export function listRegisteredProjectSourceChapters(
   if (!project) return []
   return listSourceChapters({
     projectPath: project.projectPath,
-    config: project.config
+    config: project.config,
+    readOnly: true
   })
 }
 
