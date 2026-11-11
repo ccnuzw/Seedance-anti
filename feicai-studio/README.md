@@ -112,6 +112,7 @@ docs           架构说明与测试矩阵
 
 - 架构与路线图：`docs/feicai-studio-architecture-and-roadmap.md`
 - 测试分层说明：`docs/testing-matrix.md`
+- [并发调度、数据规范与产品优化实施路线](docs/optimization-roadmap.md)
 
 ## 安全说明
 
