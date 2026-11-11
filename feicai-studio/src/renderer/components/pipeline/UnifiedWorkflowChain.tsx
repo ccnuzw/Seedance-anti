@@ -4,20 +4,12 @@ import type {
   WorkflowCardActionMeta
 } from '@renderer/utils/pipeline-view'
 import { DevProfiler } from '@renderer/dev/render-profiler'
+import { FLOW_STATE_LABELS } from './command-center-view'
 
 interface UnifiedWorkflowChainProps {
   cards: WorkflowCard[]
   actionMetaMap: Record<WorkflowCard['id'], WorkflowCardActionMeta>
   onOpen: (path: string) => void
-}
-
-const STATE_LABELS: Record<WorkflowCard['state'], string> = {
-  done: '已完成',
-  active: '执行中',
-  ready: '可执行',
-  blocked: '未开放',
-  skipped: '已跳过',
-  warning: '需补齐'
 }
 
 const MODE_LABELS: Record<WorkflowCard['mode'], string> = {
@@ -68,7 +60,11 @@ function UnifiedWorkflowChain(props: UnifiedWorkflowChainProps) {
                       <span
                         className={`unified-chain-state unified-chain-state--${card.state}`}
                       >
-                        {STATE_LABELS[card.state]}
+                        {card.state === 'done' && card.mode === 'gate'
+                          ? '审核有效'
+                          : card.state === 'done' && card.mode !== 'final'
+                            ? '产物已就绪'
+                            : FLOW_STATE_LABELS[card.state]}
                       </span>
                     </div>
                   </div>
@@ -84,32 +80,35 @@ function UnifiedWorkflowChain(props: UnifiedWorkflowChainProps) {
                   )}
                 </div>
 
-                <div className="unified-chain-actions">
-                  <button
-                    className="btn btn-sm btn-primary"
-                    onClick={actionMeta.primaryAction}
-                    disabled={actionMeta.primaryDisabled}
-                  >
-                    {actionMeta.primaryLabel}
-                  </button>
-                  {actionMeta.secondaryLabel && actionMeta.secondaryAction && (
+                {card.state !== 'skipped' && (
+                  <div className="unified-chain-actions">
                     <button
-                      className="btn btn-sm"
-                      onClick={actionMeta.secondaryAction}
-                      disabled={actionMeta.secondaryDisabled}
+                      className="btn btn-sm btn-primary"
+                      onClick={actionMeta.primaryAction}
+                      disabled={actionMeta.primaryDisabled}
                     >
-                      {actionMeta.secondaryLabel}
+                      {actionMeta.primaryLabel}
                     </button>
-                  )}
-                  {actionMeta.openPath && (
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => onOpen(actionMeta.openPath!)}
-                    >
-                      {actionMeta.openLabel}
-                    </button>
-                  )}
-                </div>
+                    {actionMeta.secondaryLabel &&
+                      actionMeta.secondaryAction && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={actionMeta.secondaryAction}
+                          disabled={actionMeta.secondaryDisabled}
+                        >
+                          {actionMeta.secondaryLabel}
+                        </button>
+                      )}
+                    {actionMeta.openPath && (
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => onOpen(actionMeta.openPath!)}
+                      >
+                        {actionMeta.openLabel}
+                      </button>
+                    )}
+                  </div>
+                )}
               </article>
             )
           })}

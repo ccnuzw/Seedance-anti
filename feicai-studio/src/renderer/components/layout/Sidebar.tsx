@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
+import { getProjectPipelineEpisodeNum } from '@renderer/utils/pipeline-page-view'
 import { countCompletedEpisodes } from '@shared/episode-status'
 import { useShallow } from 'zustand/react/shallow'
 import './Sidebar.css'
@@ -15,7 +16,9 @@ export default function Sidebar() {
       episodes: s.episodes
     }))
   )
-  const pipelineEpisodeNum = usePipelineStore((s) => s.context?.episodeNum)
+  const pipelineEpisodeNum = usePipelineStore((s) =>
+    getProjectPipelineEpisodeNum(currentProject?.id, s.context)
+  )
   const [showExport, setShowExport] = useState(false)
 
   // 计算进度
@@ -25,7 +28,7 @@ export default function Sidebar() {
       ? Math.round((completedCount / episodes.length) * 100)
       : 0
 
-  // 流水线链接自动带上当前运行/上次运行的集数
+  // 仅带上属于当前项目的运行/上次运行集数，不改变全局任务上下文。
   const pipelineEp = pipelineEpisodeNum
   const pipelinePath = currentProject
     ? `/project/${currentProject.id}/pipeline${pipelineEp ? `?ep=${pipelineEp}` : ''}`

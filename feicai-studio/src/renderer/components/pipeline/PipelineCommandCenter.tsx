@@ -1,46 +1,38 @@
-import { memo } from 'react'
-import type { Episode, PipelineState } from '@shared/types'
+import { memo, useId } from 'react'
+import type { Episode, PipelineState, ProjectEntryStage } from '@shared/types'
 import { type WorkflowCard } from '@renderer/utils/pipeline-view'
 import { DevProfiler } from '@renderer/dev/render-profiler'
-
-interface CommandCenterPrimaryAction {
-  label: string
-  disabled?: boolean
-  action: () => void
-}
+import {
+  FLOW_STATE_LABELS,
+  getCommandProgress,
+  getEntryPresentation,
+  getWorkflowModeLabel,
+  type StoryPipelineStep
+} from './command-center-view'
 
 interface CommandCenterNextStep {
   label: string
   status: string
   reason: string
   state: WorkflowCard['state']
-  primaryAction: CommandCenterPrimaryAction
+  primaryAction: {
+    label: string
+    disabled?: boolean
+    action: () => void
+  }
   secondaryLabel?: string
+  secondaryDisabled?: boolean
   secondaryAction?: () => void
   openLabel?: string
   openPath?: string
 }
 
-interface StoryPipelineStep {
-  id: 'novel' | 'story' | 'script'
-  label: string
-  description: string
-  state: WorkflowCard['state']
-  stateLabel: string
-  primaryLabel: string
-  primaryDisabled?: boolean
-  primaryAction: () => void
-  secondaryLabel?: string
-  secondaryAction?: () => void
-  reviewLabel?: string
-}
-
 interface PipelineCommandCenterProps {
   episodeNum: number
+  entryStage: ProjectEntryStage
   entryLabel: string
   workflowMode: string
   currentStageLabel: string
-  progress: number
   displayState: PipelineState
   displayIsRunning: boolean
   isRunning: boolean
@@ -52,22 +44,13 @@ interface PipelineCommandCenterProps {
   onOpen: (path: string) => void
 }
 
-const stateLabelMap: Record<WorkflowCard['state'], string> = {
-  done: '已完成',
-  active: '执行中',
-  ready: '可执行',
-  blocked: '被阻塞',
-  skipped: '已跳过',
-  warning: '需补齐'
-}
-
 function PipelineCommandCenter(props: PipelineCommandCenterProps) {
   const {
     episodeNum,
+    entryStage,
     entryLabel,
     workflowMode,
     currentStageLabel,
-    progress,
     displayState,
     displayIsRunning,
     isRunning,
@@ -78,76 +61,98 @@ function PipelineCommandCenter(props: PipelineCommandCenterProps) {
     onRetry,
     onOpen
   } = props
-
-  const hasArtifacts = [
-    currentEpisode?.hasStoryBeat,
-    currentEpisode?.hasStoryReview,
-    currentEpisode?.hasScript,
-    currentEpisode?.hasScriptReview,
-    currentEpisode?.hasDirectorAnalysis,
-    currentEpisode?.hasCharacterDesign,
-    currentEpisode?.hasArtDesign,
-    currentEpisode?.hasStoryboard || currentEpisode?.hasSeedancePrompts,
-    currentEpisode?.hasStoryboardReview
+  const id = useId()
+  const presentation = getEntryPresentation(entryStage)
+  const progress = getCommandProgress(storyPipelineSteps)
+  const reviewCount = [
+    entryStage !== 'script' && currentEpisode?.hasStoryReview,
+    currentEpisode?.hasScriptReview
   ].filter(Boolean).length
-  const storyDoneCount = storyPipelineSteps.filter(
-    (step) => step.state === 'done'
-  ).length
-  const readableState = displayIsRunning ? 'AI 正在执行' : displayState
+  const readableState =
+    displayIsRunning || nextStep.state === 'active'
+      ? '正在执行'
+      : isRunning
+        ? '其他任务执行中'
+        : displayState === 'error'
+          ? '执行失败'
+          : displayState === 'paused'
+            ? '已暂停'
+            : nextStep.status || FLOW_STATE_LABELS[nextStep.state]
 
   return (
     <DevProfiler id="PipelineCommandCenter">
-      <section className="pipeline-command-center">
+      <section
+        className="pipeline-command-center"
+        aria-labelledby={`${id}-title`}
+      >
         <div className="command-summary">
           <div className="command-kicker">
             <span>EP{String(episodeNum).padStart(2, '0')}</span>
             <span>{entryLabel}</span>
-            <span>{workflowMode || '未设置模式'}</span>
+            <span>{getWorkflowModeLabel(workflowMode)}</span>
           </div>
-          <h2>从小说到剧本</h2>
-          <p className="text-secondary">
-            当前停在「{currentStageLabel}」，先把原文、剧情和剧本走顺。
-          </p>
-          <div className="command-meter">
-            <span style={{ width: `${progress}%` }} />
+          <h2 id={`${id}-title`}>{presentation.title}</h2>
+          <p className="text-secondary">{presentation.description}</p>
+          <p className="text-secondary">当前阶段：{currentStageLabel}</p>
+          <div
+            className="command-meter"
+            role="progressbar"
+            aria-label="剧本准备进度"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progress.percent}
+            aria-valuetext={`${progress.completed} / ${progress.total} 个适用阶段已就绪；剧情和剧本需通过当前有效审核`}
+          >
+            <span style={{ width: `${progress.percent}%` }} />
           </div>
           <div className="command-stats">
             <div>
-              <span className="command-stat-label">主线完成</span>
-              <strong>{storyDoneCount}/3</strong>
+              <span className="command-stat-label">主线就绪</span>
+              <strong>
+                {progress.completed}/{progress.total}
+              </strong>
             </div>
             <div>
               <span className="command-stat-label">当前状态</span>
-              <strong>{readableState}</strong>
+              <strong role="status">{readableState}</strong>
             </div>
             <div>
-              <span className="command-stat-label">全部产物</span>
-              <strong>{hasArtifacts}/9</strong>
+              <span className="command-stat-label">主线有效审核</span>
+              <strong>
+                {reviewCount}/{entryStage === 'script' ? 1 : 2}
+              </strong>
             </div>
           </div>
         </div>
 
-        <div className="command-next">
+        <section className="command-next" aria-labelledby={`${id}-next-title`}>
           <div className="command-next-top">
             <span className="pipeline-summary-label">下一步建议</span>
             <span
               className={`command-state-chip command-state-chip--${nextStep.state}`}
             >
-              {nextStep.status || stateLabelMap[nextStep.state]}
+              {nextStep.status || FLOW_STATE_LABELS[nextStep.state]}
             </span>
           </div>
-          <h3>{nextStep.label}</h3>
-          <p className="command-next-reason">{nextStep.reason}</p>
+          <h3 id={`${id}-next-title`}>{nextStep.label}</h3>
+          <p id={`${id}-next-reason`} className="command-next-reason">
+            {nextStep.reason}
+          </p>
           <div className="command-primary-actions">
             <button
               className="btn btn-primary"
               onClick={nextStep.primaryAction.action}
               disabled={nextStep.primaryAction.disabled}
+              aria-describedby={`${id}-next-reason`}
             >
               {nextStep.primaryAction.label}
             </button>
             {nextStep.secondaryLabel && nextStep.secondaryAction && (
-              <button className="btn" onClick={nextStep.secondaryAction}>
+              <button
+                className="btn"
+                onClick={nextStep.secondaryAction}
+                disabled={nextStep.secondaryDisabled}
+              >
                 {nextStep.secondaryLabel}
               </button>
             )}
@@ -160,33 +165,49 @@ function PipelineCommandCenter(props: PipelineCommandCenterProps) {
               </button>
             )}
           </div>
-        </div>
+        </section>
 
-        <div className="story-step-panel">
+        <section
+          className="story-step-panel"
+          aria-label="剧本准备阶段"
+          style={
+            {
+              '--story-step-count': storyPipelineSteps.length
+            } as React.CSSProperties
+          }
+        >
           {storyPipelineSteps.map((step, index) => (
             <button
               key={step.id}
               className={`story-step story-step--${step.state}`}
               onClick={step.primaryAction}
               disabled={displayIsRunning || isRunning || step.primaryDisabled}
+              aria-label={`${step.label}：${step.primaryLabel}`}
+              aria-describedby={`${id}-${step.id}-status ${id}-${step.id}-description`}
             >
-              <span className="story-step-index">{index + 1}</span>
-              <div className="story-step-main">
-                <div className="story-step-title-row">
+              <span className="story-step-index" aria-hidden="true">
+                {index + 1}
+              </span>
+              <span className="story-step-main">
+                <span className="story-step-title-row">
                   <strong>{step.label}</strong>
                   <span
+                    id={`${id}-${step.id}-status`}
                     className={`command-state-chip command-state-chip--${step.state}`}
                   >
                     {step.stateLabel}
                   </span>
-                </div>
-                <p>{step.reviewLabel || step.description}</p>
-                {step.reviewLabel && (
-                  <span className="story-step-action-label">
-                    {step.primaryLabel}
-                  </span>
-                )}
-              </div>
+                </span>
+                <span
+                  id={`${id}-${step.id}-description`}
+                  className="story-step-description"
+                >
+                  {step.description}
+                </span>
+                <span className="story-step-action-label">
+                  {step.primaryLabel}
+                </span>
+              </span>
             </button>
           ))}
           {(displayIsRunning || displayState === 'error') && (
@@ -197,13 +218,13 @@ function PipelineCommandCenter(props: PipelineCommandCenterProps) {
                 </button>
               )}
               {displayState === 'error' && (
-                <button className="btn" onClick={onRetry}>
-                  重试
+                <button className="btn" onClick={onRetry} disabled={isRunning}>
+                  重试上次流水线任务
                 </button>
               )}
             </div>
           )}
-        </div>
+        </section>
       </section>
     </DevProfiler>
   )

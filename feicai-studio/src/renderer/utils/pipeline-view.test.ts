@@ -71,6 +71,39 @@ describe('pipeline-view', () => {
       getWorkflowActionAvailability(episode, 'script', 'script', false).canStart
     ).toBe(true)
   })
+  it('没有原文或单集数据时不把小说阶段误判为完成', () => {
+    const cards = buildWorkflowCards({
+      episode: undefined,
+      entryStage: 'novel',
+      displayState: 'idle',
+      displayIsRunning: false,
+      summaryMap: {},
+      hasSourceNovel: false
+    })
+    expect(cards.find((card) => card.id === 'novel')?.state).toBe('ready')
+    expect(cards.find((card) => card.id === 'story')?.state).toBe('blocked')
+    expect(cards.find((card) => card.id === 'script')?.state).toBe('blocked')
+  })
+
+  it('剧情入口的剧本生成和审核卡片遵循当前有效剧情审核门禁', () => {
+    const cards = buildWorkflowCards({
+      episode: createEpisode({ hasStoryBeat: true }),
+      entryStage: 'story',
+      displayState: 'story_done',
+      displayIsRunning: false,
+      summaryMap: {},
+      hasSourceNovel: false
+    })
+    expect(cards.find((card) => card.id === 'story')?.label).toBe('单集剧情')
+    expect(cards.find((card) => card.id === 'script')?.state).toBe('blocked')
+    expect(cards.find((card) => card.id === 'script')?.note).toContain(
+      '当前有效审核'
+    )
+    expect(cards.find((card) => card.id === 'script_review')?.state).toBe(
+      'blocked'
+    )
+  })
+
   it('能识别自动执行段活跃与完成态', () => {
     expect(isStageActive('director', 'director_analyzing')).toBe(true)
     expect(isStageDone('director', 'art_done')).toBe(true)
@@ -269,6 +302,34 @@ describe('pipeline-view', () => {
       singleStage: true
     })
     expect(storyboardSpec.primaryDisabled).toBe(true)
+
+    const workflowBusyDirector = resolveWorkflowCardActionSpec({
+      cardId: 'director',
+      currentEpisode: episode,
+      hasSourceNovel: true,
+      workflowAvailability,
+      stageAvailability,
+      busyWorkflow: true,
+      busyPipeline: false,
+      paths: { pipelinePath: '/project/1/pipeline?ep=1' }
+    })
+    expect(workflowBusyDirector.primaryDisabled).toBe(true)
+
+    const otherPipelineBusyReview = resolveWorkflowCardActionSpec({
+      cardId: 'script_review',
+      currentEpisode: { ...episode, hasScriptReview: false },
+      hasSourceNovel: true,
+      workflowAvailability,
+      stageAvailability,
+      busyWorkflow: false,
+      busyPipeline: true,
+      paths: { scriptPath: '/project/1/script?ep=1' }
+    })
+    expect(otherPipelineBusyReview.primaryDisabled).toBe(true)
+    expect(otherPipelineBusyReview.secondaryIntent).toEqual({
+      type: 'navigate',
+      path: '/project/1/script?ep=1'
+    })
   })
 
   it('能解析展示辅助信息', () => {

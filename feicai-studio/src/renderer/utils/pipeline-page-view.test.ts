@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Episode, ProjectConfig } from '@shared/types'
 import {
+  getProjectPipelineEpisodeNum,
   resolvePipelineDisplayState,
   resolvePipelineSummary,
   shouldShowCompleteBanner
@@ -40,6 +41,21 @@ const baseConfig: ProjectConfig = {
 }
 
 describe('pipeline-page-view', () => {
+  it('仅接受同一项目的流水线上下文集号', () => {
+    expect(
+      getProjectPipelineEpisodeNum('project-1', {
+        projectId: 'project-1',
+        episodeNum: 7
+      })
+    ).toBe(7)
+    expect(
+      getProjectPipelineEpisodeNum('project-2', {
+        projectId: 'project-1',
+        episodeNum: 7
+      })
+    ).toBeUndefined()
+    expect(getProjectPipelineEpisodeNum('project-1', null)).toBeUndefined()
+  })
   it('引擎匹配时使用实时状态，不匹配时回退到 episode 状态映射', () => {
     expect(
       resolvePipelineDisplayState({

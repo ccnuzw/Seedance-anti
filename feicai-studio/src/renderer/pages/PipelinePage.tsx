@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react'
+import { Link } from 'react-router-dom'
 import PipelineCommandCenter from '@renderer/components/pipeline/PipelineCommandCenter'
 import PipelineCompleteBanner from '@renderer/components/pipeline/PipelineCompleteBanner'
 import PipelineSectionHeader from '@renderer/components/pipeline/PipelineSectionHeader'
@@ -18,9 +19,18 @@ export default function PipelinePage() {
 
   if (!controller.currentProject) {
     return (
-      <div className="pipeline-page" style={{ minHeight: '60vh' }}>
-        <LoadingSpinner size="lg" text="正在恢复项目上下文..." />
-      </div>
+      <section
+        className="pipeline-page pipeline-empty-state"
+        aria-labelledby="pipeline-empty-title"
+      >
+        <h2 id="pipeline-empty-title">尚未取得项目数据</h2>
+        <p className="text-secondary" role="status">
+          制作总控需要已打开的项目。如果项目未能载入，请返回项目列表重新选择，检查项目是否仍然可用。
+        </p>
+        <Link className="btn btn-primary" to="/">
+          返回项目列表
+        </Link>
+      </section>
     )
   }
 
@@ -45,26 +55,32 @@ export default function PipelinePage() {
 
         <PipelineSectionHeader
           title="完整制作链"
-          description="展开后按同一种阶段样式查看从小说到导出的全流程、缺失项和可执行操作。"
+          description="按当前入口查看适用阶段、有效审核、缺失项和可执行操作。"
+          expanded={controller.advanced.visible}
+          controls="pipeline-advanced-panel"
           buttonLabel={controller.advanced.toggleLabel}
           onToggle={controller.advanced.onToggle}
         />
 
         {controller.advanced.visible && (
-          <div className="pipeline-advanced-panel">
-            <Suspense fallback={null}>
+          <div className="pipeline-advanced-panel" id="pipeline-advanced-panel">
+            <Suspense
+              fallback={<LoadingSpinner text="正在加载完整制作链..." />}
+            >
               <UnifiedWorkflowChain {...controller.workflowBoard} />
             </Suspense>
 
             <PipelineSectionHeader
               title="执行日志"
               description="需要排查运行细节时再展开日志。"
+              expanded={controller.logs.visible}
+              controls="pipeline-log-section"
               buttonLabel={controller.logs.toggleLabel}
               onToggle={controller.logs.onToggle}
             />
 
             {controller.logs.visible && (
-              <div className="pipeline-log-section">
+              <div className="pipeline-log-section" id="pipeline-log-section">
                 <LogPanel isEngineMatch={controller.logs.isEngineMatch} />
               </div>
             )}

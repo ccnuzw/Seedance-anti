@@ -199,7 +199,7 @@ export function fmtTime(seconds: number): string {
 
 export function getEntryIndex(entryStage: ProjectEntryStage): number {
   if (entryStage === 'story') return 1
-  if (entryStage === 'script') return 2
+  if (entryStage === 'script') return 3
   return 0
 }
 
@@ -257,7 +257,7 @@ export function getStageAvailability(
     }
     return {
       canStart: false,
-      reason: `请先完成剧本审核并补齐 ${describeEpisodeArtifact('scriptReview')}。`
+      reason: '请先让本集剧本通过当前有效审核，再启动导演分析。'
     }
   }
 
@@ -412,13 +412,17 @@ export function buildMissingFileHints(
     result.story = [`缺少 ${describeEpisodeArtifact('storyBeat')}`]
   }
   if (!episode?.hasStoryReview && entryStage !== 'script') {
-    result.story_review = [`缺少 ${describeEpisodeArtifact('storyReview')}`]
+    result.story_review = [
+      '剧情缺少当前有效的通过审核，请在剧情页检查正文后重新审核。'
+    ]
   }
   if (!episode?.hasScript) {
     result.script = [`缺少 ${describeEpisodeArtifact('script')}`]
   }
   if (!episode?.hasScriptReview) {
-    result.script_review = [`缺少 ${describeEpisodeArtifact('scriptReview')}`]
+    result.script_review = [
+      '剧本缺少当前有效的通过审核，请在剧本页检查正文后重新审核。'
+    ]
   }
   if (!episode?.hasDirectorAnalysis) {
     result.director = [`缺少 ${describeEpisodeArtifact('directorAnalysis')}`]
@@ -434,7 +438,7 @@ export function buildMissingFileHints(
   }
   if (!episode?.hasStoryboardReview) {
     result.storyboard_review = [
-      `缺少 ${describeEpisodeArtifact('storyboardReview')}`
+      '分镜缺少当前有效的通过审核，请检查提示词后重新审核。'
     ]
   }
 
@@ -508,7 +512,21 @@ export function buildWorkflowCards(params: {
     hasSourceNovel
   )
 
-  return FULL_WORKFLOW.map((stage, index) => {
+  return FULL_WORKFLOW.map((definition, index) => {
+    const stage =
+      entryStage === 'story' && definition.id === 'story'
+        ? {
+            ...definition,
+            label: '单集剧情',
+            hint: '导入或编写本集剧情，通过有效审核后生成剧本。'
+          }
+        : entryStage === 'story' && definition.id === 'story_review'
+          ? {
+              ...definition,
+              label: '剧情审核',
+              hint: '审核当前单集剧情，通过后生成剧本。'
+            }
+          : definition
     if (index < entryIndex) {
       return {
         ...stage,
@@ -538,12 +556,10 @@ export function buildWorkflowCards(params: {
 
     switch (stage.id) {
       case 'novel':
-        state = hasSourceNovel || episode?.status !== 'idle' ? 'done' : 'ready'
+        state = hasSourceNovel ? 'done' : 'ready'
         note = hasSourceNovel
           ? '已检测到小说原文或项目设定。'
-          : episode?.status === 'idle'
-            ? '等待导入小说原文或参考资料。'
-            : '项目已进入后续阶段。'
+          : '尚未读取到小说原文，请到原文页检查或导入小说。'
         break
       case 'story':
         if (episode?.hasStoryBeat) {
@@ -553,25 +569,41 @@ export function buildWorkflowCards(params: {
           state = 'warning'
           note = `已进入后续阶段，但缺少 ${describeEpisodeArtifact('storyBeat')}。`
         } else {
+          const availability = getWorkflowActionAvailability(
+            episode,
+            'story',
+            entryStage,
+            hasSourceNovel
+          )
           state =
-            entryStage === 'novel'
+            entryStage === 'story' || availability.canStart
               ? 'ready'
-              : entryStage === 'story'
-                ? 'ready'
-                : 'blocked'
-          note = '建议先生成每集剧情拆解，再进入剧本。'
+              : 'blocked'
+          note =
+            entryStage === 'story'
+              ? '请在剧情页导入或编写本集剧情，再执行剧情审核。'
+              : availability.reason
         }
         break
       case 'story_review':
         if (episode?.hasStoryReview) {
           state = 'done'
-          note = '已检测到剧情拆解审核记录。'
+          note = '当前剧情已通过有效审核。'
         } else if (hasLaterThanStoryReview) {
           state = 'warning'
-          note = `已进入后续阶段，但缺少 ${describeEpisodeArtifact('storyReview')}。`
+          note =
+            '后续产物已存在，但剧情缺少当前有效的通过审核。请检查剧情正文并重新审核；旧审核文件不代表当前有效。'
         } else {
-          state = episode?.hasStoryBeat ? 'ready' : 'blocked'
-          note = '建议先审核剧情拆解，再进入剧本生成。'
+          const availability = getWorkflowActionAvailability(
+            episode,
+            'story_review',
+            entryStage,
+            hasSourceNovel
+          )
+          state = availability.canStart ? 'ready' : 'blocked'
+          note = availability.canStart
+            ? '剧情文件已存在，尚未通过当前有效审核。请执行剧情审核。'
+            : availability.reason
         }
         break
       case 'script':
@@ -582,28 +614,45 @@ export function buildWorkflowCards(params: {
           state = 'warning'
           note = `已进入后续阶段，但缺少 ${describeEpisodeArtifact('script')}。`
         } else {
+          const availability = getWorkflowActionAvailability(
+            episode,
+            'script',
+            entryStage,
+            hasSourceNovel
+          )
           state =
-            entryStage === 'script' || episode?.hasStoryBeat
+            entryStage === 'script' || availability.canStart
               ? 'ready'
               : 'blocked'
-          note = '准备生成或补齐剧本文件。'
+          note =
+            entryStage === 'script'
+              ? '请在剧本页导入或编写本集剧本，再执行剧本审核。'
+              : availability.reason
         }
         break
       case 'script_review':
         if (episode?.hasScriptReview) {
           state = 'done'
-          note = '已检测到剧本审核记录。'
+          note = '当前剧本已通过有效审核。'
         } else if (hasLaterThanScriptReview) {
           state = 'warning'
-          note = `已进入制作段，但缺少 ${describeEpisodeArtifact('scriptReview')}。`
-        } else {
-          state = episode?.hasScript ? 'ready' : 'blocked'
           note =
-            '可以直接执行剧本审核，审核通过后才建议启动导演、角色、服化道与分镜。'
+            '制作产物已存在，但剧本缺少当前有效的通过审核。请检查剧本正文并重新审核；旧审核文件不代表当前有效。'
+        } else {
+          const availability = getWorkflowActionAvailability(
+            episode,
+            'script_review',
+            entryStage,
+            hasSourceNovel
+          )
+          state = availability.canStart ? 'ready' : 'blocked'
+          note = availability.canStart
+            ? '剧本文件已存在，尚未通过当前有效审核。请执行剧本审核。'
+            : availability.reason
         }
         break
       case 'script_approved':
-        if (episode?.hasScriptReview || hasLaterThanScriptReview) {
+        if (episode?.hasScriptReview) {
           state = 'done'
           note = '剧本已具备进入制作段的门槛。'
         } else {
@@ -659,10 +708,11 @@ export function buildWorkflowCards(params: {
       case 'storyboard_review':
         if (episode?.hasStoryboardReview) {
           state = 'done'
-          note = '已检测到分镜审核记录。'
+          note = '当前分镜已通过有效审核。'
         } else if (isEpisodeComplete(episode?.status || 'idle')) {
           state = 'warning'
-          note = `已生成最终 prompts，但缺少 ${describeEpisodeArtifact('storyboardReview')}。`
+          note =
+            '最终 prompts 已存在，但分镜缺少当前有效的通过审核，请检查提示词并重新审核。'
         } else {
           state = episode?.hasSeedancePrompts ? 'ready' : 'blocked'
           note = '建议在导出前补齐分镜审核记录。'
@@ -700,6 +750,7 @@ export function resolveWorkflowCardActionSpec(
     busyPipeline,
     paths
   } = params
+  const workflowBusy = busyWorkflow || busyPipeline
   const {
     sourcePath,
     storyPath,
@@ -720,7 +771,7 @@ export function resolveWorkflowCardActionSpec(
           ? '拆解一批剧情'
           : '打开小说原文',
         primaryDisabled: workflowAvailability.story.canStart
-          ? busyWorkflow
+          ? workflowBusy
           : !sourcePath,
         primaryIntent: workflowAvailability.story.canStart
           ? { type: 'workflow', stage: 'story' }
@@ -728,15 +779,15 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'story':
       return {
-        openLabel: '打开剧情拆解',
+        openLabel: '打开剧情内容',
         openPath: storyPath,
         primaryLabel: workflowAvailability.story.canStart
           ? currentEpisode?.hasStoryBeat
             ? '重新拆解当前批次'
             : '拆解当前批次'
-          : '进入剧情拆解',
+          : '进入剧情页',
         primaryDisabled: workflowAvailability.story.canStart
-          ? busyWorkflow
+          ? workflowBusy
           : !storyPath,
         primaryIntent: workflowAvailability.story.canStart
           ? { type: 'workflow', stage: 'story' }
@@ -748,18 +799,20 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'story_review':
       return {
-        openLabel: '查看剧情审核',
+        openLabel: currentEpisode?.hasStoryReview
+          ? '查看剧情审核'
+          : '检查剧情内容',
         openPath: currentEpisode?.hasStoryReview ? storyReviewPath : storyPath,
         primaryLabel: currentEpisode?.hasStoryReview
           ? '查看审核结果'
-          : '审核当前批次',
+          : '审核剧情',
         primaryDisabled: currentEpisode?.hasStoryReview
           ? !storyReviewPath
-          : busyWorkflow || !workflowAvailability.story_review.canStart,
+          : workflowBusy || !workflowAvailability.story_review.canStart,
         primaryIntent: currentEpisode?.hasStoryReview
           ? { type: 'navigate', path: storyReviewPath }
           : { type: 'workflow', stage: 'story_review' },
-        secondaryLabel: storyPath ? '返回剧情拆解' : undefined,
+        secondaryLabel: storyPath ? '返回剧情页' : undefined,
         secondaryIntent: storyPath
           ? { type: 'navigate', path: storyPath }
           : undefined
@@ -774,7 +827,7 @@ export function resolveWorkflowCardActionSpec(
             : '执行剧本生成'
           : '进入剧本页',
         primaryDisabled: workflowAvailability.script.canStart
-          ? busyWorkflow
+          ? workflowBusy
           : !scriptPath,
         primaryIntent: workflowAvailability.script.canStart
           ? { type: 'workflow', stage: 'script' }
@@ -786,14 +839,16 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'script_review':
       return {
-        openLabel: '查看审核',
+        openLabel: currentEpisode?.hasScriptReview
+          ? '查看剧本审核'
+          : '检查剧本内容',
         openPath: currentEpisode?.hasScriptReview ? reviewPath : scriptPath,
         primaryLabel: currentEpisode?.hasScriptReview
           ? '查看审核结果'
           : '执行剧本审核',
         primaryDisabled: currentEpisode?.hasScriptReview
           ? !reviewPath
-          : busyWorkflow || !workflowAvailability.script_review.canStart,
+          : workflowBusy || !workflowAvailability.script_review.canStart,
         primaryIntent: currentEpisode?.hasScriptReview
           ? { type: 'navigate', path: reviewPath }
           : { type: 'workflow', stage: 'script_review' },
@@ -818,7 +873,9 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'director':
       return {
-        openLabel: '查看导演产物',
+        openLabel: currentEpisode?.hasDirectorAnalysis
+          ? '查看导演产物'
+          : '返回制作总控',
         openPath: currentEpisode?.hasDirectorAnalysis
           ? promptBasePath
             ? `${promptBasePath}&tab=director`
@@ -829,7 +886,9 @@ export function resolveWorkflowCardActionSpec(
           : '启动导演分析',
         primaryDisabled: currentEpisode?.hasDirectorAnalysis
           ? !promptBasePath
-          : busyPipeline || !stageAvailability.director.canStart,
+          : busyPipeline ||
+            busyWorkflow ||
+            !stageAvailability.director.canStart,
         primaryIntent: currentEpisode?.hasDirectorAnalysis
           ? {
               type: 'navigate',
@@ -845,7 +904,9 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'character':
       return {
-        openLabel: '查看角色资产',
+        openLabel: currentEpisode?.hasCharacterDesign
+          ? '查看角色资产'
+          : '返回制作总控',
         openPath: currentEpisode?.hasCharacterDesign
           ? assetsPath
           : pipelinePath,
@@ -854,7 +915,7 @@ export function resolveWorkflowCardActionSpec(
           : '执行角色设计',
         primaryDisabled: currentEpisode?.hasCharacterDesign
           ? !assetsPath
-          : busyWorkflow || !workflowAvailability.character.canStart,
+          : workflowBusy || !workflowAvailability.character.canStart,
         primaryIntent: currentEpisode?.hasCharacterDesign
           ? { type: 'navigate', path: assetsPath }
           : { type: 'workflow', stage: 'character' },
@@ -865,7 +926,9 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'art':
       return {
-        openLabel: '查看服化道产物',
+        openLabel: currentEpisode?.hasArtDesign
+          ? '查看服化道产物'
+          : '返回制作总控',
         openPath: currentEpisode?.hasArtDesign
           ? promptBasePath
             ? `${promptBasePath}&tab=art`
@@ -876,7 +939,7 @@ export function resolveWorkflowCardActionSpec(
           : '启动服化道',
         primaryDisabled: currentEpisode?.hasArtDesign
           ? !promptBasePath
-          : busyPipeline || !stageAvailability.art.canStart,
+          : busyPipeline || busyWorkflow || !stageAvailability.art.canStart,
         primaryIntent: currentEpisode?.hasArtDesign
           ? {
               type: 'navigate',
@@ -890,7 +953,10 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'storyboard':
       return {
-        openLabel: '查看分镜产物',
+        openLabel:
+          currentEpisode?.hasSeedancePrompts || currentEpisode?.hasStoryboard
+            ? '查看分镜产物'
+            : '返回制作总控',
         openPath:
           currentEpisode?.hasSeedancePrompts || currentEpisode?.hasStoryboard
             ? promptBasePath
@@ -904,7 +970,9 @@ export function resolveWorkflowCardActionSpec(
         primaryDisabled:
           currentEpisode?.hasSeedancePrompts || currentEpisode?.hasStoryboard
             ? !promptBasePath
-            : busyPipeline || !stageAvailability.storyboard.canStart,
+            : busyPipeline ||
+              busyWorkflow ||
+              !stageAvailability.storyboard.canStart,
         primaryIntent:
           currentEpisode?.hasSeedancePrompts || currentEpisode?.hasStoryboard
             ? {
@@ -921,7 +989,9 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'storyboard_review':
       return {
-        openLabel: '查看审核结果',
+        openLabel: currentEpisode?.hasStoryboardReview
+          ? '查看审核结果'
+          : '返回制作总控',
         openPath: currentEpisode?.hasStoryboardReview
           ? reviewPath
           : pipelinePath,
@@ -930,7 +1000,7 @@ export function resolveWorkflowCardActionSpec(
           : '执行分镜审核',
         primaryDisabled: currentEpisode?.hasStoryboardReview
           ? !reviewPath
-          : busyWorkflow || !workflowAvailability.storyboard_review.canStart,
+          : workflowBusy || !workflowAvailability.storyboard_review.canStart,
         primaryIntent: currentEpisode?.hasStoryboardReview
           ? { type: 'navigate', path: reviewPath }
           : { type: 'workflow', stage: 'storyboard_review' },
@@ -941,7 +1011,9 @@ export function resolveWorkflowCardActionSpec(
       }
     case 'complete':
       return {
-        openLabel: '查看最终产物',
+        openLabel: currentEpisode?.hasSeedancePrompts
+          ? '查看最终产物'
+          : '返回制作总控',
         openPath: currentEpisode?.hasSeedancePrompts
           ? promptBasePath
             ? `${promptBasePath}&tab=prompts`
