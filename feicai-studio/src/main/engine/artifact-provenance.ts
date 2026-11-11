@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { DEFAULT_PIPELINE_SETTINGS } from '@shared/types'
 import type { ProjectConfig, ReviewResult, ReviewStage } from '@shared/types'
 import type { EpisodeArtifactId } from '@shared/artifact-registry'
 import {
@@ -98,7 +99,12 @@ export function captureReviewProvenance(
       targetMedium: config?.targetMedium ?? null,
       chaptersPerEpisode: config?.chaptersPerEpisode ?? null,
       totalEpisodes: config?.totalEpisodes ?? null,
-      pipelineSettings: config?.pipelineSettings ?? null
+      // Workflow actions read partial disk settings; pipeline launches fill defaults.
+      // Hash the same effective values in a fixed key order for both paths.
+      pipelineSettings: {
+        ...DEFAULT_PIPELINE_SETTINGS,
+        ...config?.pipelineSettings
+      }
     })
   )
 
