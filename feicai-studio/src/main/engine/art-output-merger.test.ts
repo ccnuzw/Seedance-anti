@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import type { ProjectConfig } from '@shared/types'
-import { ArtOutputMerger } from './art-output-merger'
+import { ArtOutputMerger, readArtReference } from './art-output-merger'
 import { parseAssetMarkdown } from '../asset/markdown-parser'
 
 let root: string
@@ -28,6 +28,45 @@ afterEach(() => {
 })
 
 describe('ArtOutputMerger approved publishing', () => {
+  it('按集保留发布前的真实参考，重试不重绑定，外部编辑重新暴露当前正文', async () => {
+    const path = join(root, 'custom-library', 'character-prompts.md')
+    mkdirSync(dirname(path), { recursive: true })
+    const original = '# 风格参考\n\n## 林舟\n\n旧蓝衣'
+    writeFileSync(path, original)
+    const revised = output('## 林舟\n\n新灰衣', '## 院子\n\n白昼')
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe(original)
+    await ArtOutputMerger.parseAndMerge(revised, root, 1, config)
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe(original)
+    expect(
+      readArtReference(root, 'characterPrompts', undefined, config)
+    ).toContain('新灰衣')
+    await ArtOutputMerger.parseAndMerge(revised, root, 1, config)
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe(original)
+    const external = readFileSync(path, 'utf8').replace(
+      '新灰衣',
+      '人工修改红衣'
+    )
+    writeFileSync(path, external)
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe(external)
+    await ArtOutputMerger.parseAndMerge(revised, root, 1, config)
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe(external)
+  })
+
+  it('两份共享文件发布中途取消可重试，快照不会把部分发布误认为外部修改', async () => {
+    const revised = output('## 林舟\n\n灰衣', '## 院子\n\n白昼')
+    let commits = 0
+    await expect(
+      ArtOutputMerger.parseAndMerge(revised, root, 1, config, async () => {
+        if (++commits === 3) throw new Error('中途取消')
+      })
+    ).rejects.toThrow('中途取消')
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe('')
+    expect(readArtReference(root, 'scenePrompts', 1, config)).toBe('')
+    await ArtOutputMerger.parseAndMerge(revised, root, 1, config)
+    expect(readArtReference(root, 'characterPrompts', 1, config)).toBe('')
+    expect(readArtReference(root, 'scenePrompts', 1, config)).toBe('')
+  })
+
   it('同集重发替换同名素材并删除本集已撤销条目，保留其他集素材', async () => {
     const shared = '## 林舟\n\n旧外套'
     await ArtOutputMerger.parseAndMerge(

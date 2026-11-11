@@ -18,6 +18,7 @@ import {
   executeRegenerateScriptAndReviewAction,
   executeScriptReviewAction
 } from '@renderer/utils/editor-workflow-actions'
+import { getEntryRequirements } from '@shared/workflow'
 import { normalizeProjectConfig } from '@shared/project-config'
 import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
 import { useShallow } from 'zustand/react/shallow'
@@ -42,6 +43,9 @@ export default function ScriptEditorPage() {
   const { running: runningAction, run: runAsyncAction } = useAsyncAction()
 
   const config = normalizeProjectConfig(currentProject?.config)
+  const storyReady =
+    !getEntryRequirements(config.entryStage).requiresStoryReview ||
+    !!episodes.find((ep) => ep.episodeNumber === currentEp)?.hasStoryReview
   const latestScriptReview = useLatestStageReview(
     currentProject?.projectPath,
     currentEp,
@@ -190,7 +194,9 @@ export default function ScriptEditorPage() {
         description:
           config.entryStage === 'script'
             ? '保存剧本并完成审核后，即可进入制作流程。'
-            : '剧本是导演分析和后续制作的上游输入。',
+            : !storyReady
+              ? '请先到本集剧情页保存剧情并通过审核，再审核剧本。'
+              : '剧本是导演分析和后续制作的上游输入。',
         steps: [
           {
             id: 'script',
@@ -229,10 +235,22 @@ export default function ScriptEditorPage() {
         primaryAction: {
           label: runningAction ? '执行中...' : '保存并审核剧本',
           onClick: handleRunScriptReview,
-          disabled: runningAction || loading,
+          disabled: runningAction || loading || !storyReady,
           variant: 'primary'
         },
         secondaryActions: [
+          ...(!storyReady
+            ? [
+                {
+                  label: '前往剧情审核',
+                  onClick: () =>
+                    currentProject &&
+                    navigate(
+                      `/project/${currentProject.id}/story?ep=${currentEp}`
+                    )
+                }
+              ]
+            : []),
           {
             label: '保存',
             onClick: handleSave,

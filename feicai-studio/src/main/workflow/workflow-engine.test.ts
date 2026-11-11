@@ -495,7 +495,7 @@ describe('workflow-engine behavior', () => {
     generate.mockResolvedValue(ART)
     await engine.generateStage('art', ctx)
     expect(existsSync(project('characterPrompts'))).toBe(false)
-    reviewProduction.mockResolvedValueOnce(result('art', 5, false))
+    reviewContent.mockResolvedValueOnce(result('art', 5, false))
     await engine.reviewStage('art', ctx)
     expect(existsSync(project('characterPrompts'))).toBe(false)
     const approved = await engine.reviewStage('art', ctx)

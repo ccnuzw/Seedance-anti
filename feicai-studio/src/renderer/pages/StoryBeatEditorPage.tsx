@@ -206,14 +206,19 @@ export default function StoryBeatEditorPage() {
               )
             }
             primaryActionLabel={
-              latestStoryReview.passed ? '执行剧本生成' : '按反馈重写并复审'
+              latestStoryReview.passed
+                ? '执行剧本生成'
+                : isNovelEntry
+                  ? '按反馈重写并复审'
+                  : '保存修改并复审'
             }
             onPrimaryAction={() => {
               if (latestStoryReview.passed) {
                 void handleRunScriptGeneration()
                 return
               }
-              void handleRegenerateStoryWithReviewFeedback()
+              if (isNovelEntry) void handleRegenerateStoryWithReviewFeedback()
+              else void handleRunStoryReview()
             }}
           />
         ) : null
@@ -263,7 +268,7 @@ export default function StoryBeatEditorPage() {
               ? '最近一次审核已通过'
               : isNovelEntry
                 ? '通过后自动写入剧情库存'
-                : '生成剧本前建议先审核剧情',
+                : '生成剧本前必须通过剧情审核',
             state: latestStoryReview?.passed
               ? 'done'
               : latestStoryReview
@@ -282,7 +287,7 @@ export default function StoryBeatEditorPage() {
               ? isNovelEntry
                 ? '剧情点已入库后，可以继续生成对应剧本'
                 : '可以基于审核通过的剧情生成剧本'
-              : '审核通过后再生成更稳妥',
+              : '请先完成剧情审核',
             state: latestStoryReview?.passed ? 'ready' : 'blocked',
             stateLabel: latestStoryReview?.passed ? '可生成' : '等待审核'
           }

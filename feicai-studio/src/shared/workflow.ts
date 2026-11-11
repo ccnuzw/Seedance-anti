@@ -1,4 +1,4 @@
-import type { EpisodeStatus, WorkflowStageId } from './types'
+import type { EpisodeStatus, ProjectEntryStage, WorkflowStageId } from './types'
 import { WORKFLOW_STAGE_MAP } from './workflow-definition'
 export { normalizeProjectConfig } from './project-config'
 export {
@@ -6,6 +6,18 @@ export {
   isEpisodeComplete,
   isEpisodePartial
 } from './episode-status'
+
+export function getEntryRequirements(entryStage: ProjectEntryStage = 'novel'): {
+  requiresNovel: boolean
+  requiresInventory: boolean
+  requiresStoryReview: boolean
+} {
+  return {
+    requiresNovel: entryStage === 'novel',
+    requiresInventory: entryStage === 'novel',
+    requiresStoryReview: entryStage === 'story'
+  }
+}
 
 export interface EpisodeArtifactFlags {
   hasSourceNovel?: boolean

@@ -398,8 +398,59 @@ describe('导出与项目变更互斥', () => {
 })
 
 describe('当前审核有效提示词导出', () => {
+  it.each([
+    ['nextScript', false],
+    ['nextScript', true],
+    ['characterDesign', false],
+    ['characterDesign', true],
+    ['characterPrompts', false],
+    ['characterPrompts', true],
+    ['scenePrompts', false],
+    ['scenePrompts', true]
+  ] as const)(
+    '审核后新增/修改依赖 %s（原先存在=%s）阻止导出',
+    async (dependency, existed) => {
+      const project = addProject()
+      const path =
+        dependency === 'nextScript'
+          ? resolveEpisodeArtifactPath(
+              project.projectPath,
+              'script',
+              2,
+              project.config
+            )
+          : dependency === 'characterDesign'
+            ? resolveEpisodeArtifactPath(
+                project.projectPath,
+                dependency,
+                1,
+                project.config
+              )
+            : resolveProjectArtifactPath(
+                project.projectPath,
+                dependency,
+                project.config
+              )
+      if (existed) write(path, '审核时输入')
+      approveEpisode(project, 1)
+      write(path, '审核后更改输入')
+      expect(
+        await invoke(IPC.EXPORT_PROMPTS, promptParams(project))
+      ).toHaveProperty('error')
+      expect(mocks.showSaveDialog).not.toHaveBeenCalled()
+    }
+  )
   it('从注册配置目录读取，实际导出计数排除缺失、失效和重复集数', async () => {
     const project = addProject()
+    write(
+      resolveEpisodeArtifactPath(
+        project.projectPath,
+        'script',
+        2,
+        project.config
+      ),
+      '剧本2'
+    )
     approveEpisode(project, 1, '## 第一集\n已审核正文')
     approveEpisode(project, 2, '## 第二集\n原正文')
     write(
@@ -556,15 +607,15 @@ describe('白名单全部产物导出不是备份', () => {
   it('安全命名、配置目录、真实文件计数，排除状态/草稿/备份/全局素材库', async () => {
     const project = addProject()
     project.name = '../../测试/项目'
-    approveEpisode(project, 1)
     write(
       join(project.projectPath, 'custom/outputs/ep01/draft.md'),
       '未审核草稿'
     )
     write(
       join(project.projectPath, 'custom/assets/character-prompts.md'),
-      '未绑定的全局库'
+      '作为审核参考但不单独导出的全局库'
     )
+    approveEpisode(project, 1)
     const exportRoot = temporary()
     mocks.showOpenDialog.mockResolvedValue({
       canceled: false,
