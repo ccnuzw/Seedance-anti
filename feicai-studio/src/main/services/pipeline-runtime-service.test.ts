@@ -4,7 +4,11 @@ const getAllWindows = vi.fn()
 const pipelineOn = vi.fn()
 const runnerConstructor = vi.fn()
 const pipelineConstructor = vi.fn()
-const eventHandlers = new Map<string, (data: unknown) => void>()
+const bindings = new Map<
+  unknown,
+  { emit: (event: string, data: unknown) => void; release: () => void }
+>()
+const resetPipelineTasks = vi.fn()
 let describeProject: (id: string, path: string) => { maxRetries: number }
 const loadPipelineSettings = vi.fn()
 
@@ -32,10 +36,7 @@ vi.mock('../engine/state-machine', () => ({
       pipelineConstructor(skillsDir)
     }
 
-    on = (event: string, handler: (data: unknown) => void) => {
-      eventHandlers.set(event, handler)
-      pipelineOn(event, handler)
-    }
+    on = pipelineOn
   }
 }))
 
@@ -52,7 +53,16 @@ vi.mock('../workflow/workflow-step-runner', () => ({
 
 vi.mock('./pipeline-service', () => ({
   getSkillsDir: vi.fn(() => '/tmp/skills'),
-  loadPipelineSettings
+  loadPipelineSettings,
+  bindPipelineRuntime: (
+    engine: unknown,
+    binding: {
+      emit: (event: string, data: unknown) => void
+      release: () => void
+    }
+  ) => bindings.set(engine, binding),
+  resetPipelineTasks,
+  setPipelineTaskSink: vi.fn()
 }))
 vi.mock('./project-service', () => ({
   getRegisteredProject: vi.fn(),
@@ -66,7 +76,7 @@ describe('pipeline-runtime-service', async () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    eventHandlers.clear()
+    bindings.clear()
     service.resetPipelineRuntime()
   })
 
@@ -102,7 +112,7 @@ describe('pipeline-runtime-service', async () => {
     }
   })
 
-  it('会缓存 pipeline 实例并在首次创建时绑定事件转发', () => {
+  it('只缓存当前运行实例，由服务在任务结束后释放', () => {
     getAllWindows.mockReturnValue([])
 
     const first = service.getPipelineRuntime()
@@ -111,7 +121,11 @@ describe('pipeline-runtime-service', async () => {
     expect(first).toBe(second)
     expect(pipelineConstructor).toHaveBeenCalledTimes(1)
     expect(pipelineConstructor).toHaveBeenCalledWith('/tmp/skills')
-    expect(pipelineOn).toHaveBeenCalledTimes(6)
+    expect(bindings.has(first)).toBe(true)
+    expect(pipelineOn).not.toHaveBeenCalled()
+    bindings.get(first)!.release()
+    expect(service.getPipelineRuntime()).not.toBe(first)
+    expect(pipelineConstructor).toHaveBeenCalledTimes(2)
   })
 
   it('每次提供独立 workflow runner，禁止共享可变provider上下文', () => {
@@ -147,11 +161,11 @@ describe('pipeline-runtime-service', async () => {
     ])
 
     const { IPC } = await import('@shared/ipc-channels')
-    service.getPipelineRuntime()
-
-    eventHandlers.get('stateChanged')?.({ state: 'director_done' })
-    eventHandlers.get('log')?.({ level: 'info', message: 'hello' })
-    eventHandlers.get('error')?.({ error: 'boom' })
+    const engine = service.getPipelineRuntime()
+    const binding = bindings.get(engine)!
+    binding.emit('stateChanged', { state: 'director_done' })
+    binding.emit('log', { level: 'info', message: 'hello' })
+    binding.emit('error', { error: 'boom' })
 
     expect(sendLive).toHaveBeenCalledWith(IPC.PIPELINE_STATE_CHANGED, {
       state: 'director_done'

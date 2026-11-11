@@ -21,7 +21,10 @@ import {
 import {
   launchPipeline,
   loadPipelineSettings,
-  runWorkflowAction
+  runWorkflowAction,
+  bindPipelineRuntime,
+  resetPipelineTasks,
+  setPipelineTaskSink
 } from './pipeline-service'
 import { recoverBatchCommit } from './batch-queue-recovery'
 import { IPC } from '@shared/ipc-channels'
@@ -42,18 +45,23 @@ function forwardToRenderer(channel: string, data: unknown): void {
 }
 
 function setupPipelineEvents(engine: PipelineStateMachine): void {
-  engine.on('stateChanged', (data) =>
-    forwardToRenderer(IPC.PIPELINE_STATE_CHANGED, data)
+  const channels: Record<string, string> = {
+    stateChanged: IPC.PIPELINE_STATE_CHANGED,
+    log: IPC.PIPELINE_LOG,
+    stream: IPC.PIPELINE_STREAM,
+    stageComplete: IPC.PIPELINE_STAGE_COMPLETE,
+    reviewResult: IPC.PIPELINE_REVIEW_RESULT,
+    error: IPC.PIPELINE_ERROR
+  }
+  bindPipelineRuntime(engine, {
+    emit: (event, data) => forwardToRenderer(channels[event], data),
+    release: () => {
+      if (pipeline === engine) pipeline = null
+    }
+  })
+  setPipelineTaskSink((snapshot) =>
+    forwardToRenderer(IPC.PIPELINE_TASK_CHANGED, snapshot)
   )
-  engine.on('log', (data) => forwardToRenderer(IPC.PIPELINE_LOG, data))
-  engine.on('stream', (data) => forwardToRenderer(IPC.PIPELINE_STREAM, data))
-  engine.on('stageComplete', (data) =>
-    forwardToRenderer(IPC.PIPELINE_STAGE_COMPLETE, data)
-  )
-  engine.on('reviewResult', (data) =>
-    forwardToRenderer(IPC.PIPELINE_REVIEW_RESULT, data)
-  )
-  engine.on('error', (data) => forwardToRenderer(IPC.PIPELINE_ERROR, data))
 }
 
 export function getPipelineRuntime(): PipelineStateMachine {
@@ -65,12 +73,16 @@ export function getPipelineRuntime(): PipelineStateMachine {
 }
 
 export function getWorkflowRunnerRuntime(): WorkflowStepRunner {
+  setPipelineTaskSink((snapshot) =>
+    forwardToRenderer(IPC.PIPELINE_TASK_CHANGED, snapshot)
+  )
   return new WorkflowStepRunner(getSkillsDir())
 }
 
 export function resetPipelineRuntime(): void {
   pipeline = null
   batchQueue = null
+  resetPipelineTasks()
 }
 
 export function getBatchQueueRuntime(): BatchQueue {

@@ -18,7 +18,8 @@ const listeners = {
   log: [] as Callback[],
   stream: [] as Callback[],
   reviewResult: [] as Callback[],
-  error: [] as Callback[]
+  error: [] as Callback[],
+  taskChanged: [] as Callback[]
 }
 
 function resetListeners(): void {
@@ -27,6 +28,7 @@ function resetListeners(): void {
   listeners.stream = []
   listeners.reviewResult = []
   listeners.error = []
+  listeners.taskChanged = []
 }
 
 function subscribe(bucket: Callback[], callback: Callback) {
@@ -39,6 +41,7 @@ function subscribe(bucket: Callback[], callback: Callback) {
 
 const syncSingleEpisodeStatus = vi.fn()
 const syncEpisodeStatus = vi.fn()
+let currentProject: { id: string } | null = null
 
 vi.mock('@renderer/services/pipeline-service', () => ({
   startPipeline,
@@ -48,6 +51,7 @@ vi.mock('@renderer/services/pipeline-service', () => ({
   skipPipeline,
   getPipelineState,
   pipelineEvents: {
+    onTaskChanged: (cb: Callback) => subscribe(listeners.taskChanged, cb),
     onStateChanged: (cb: Callback) => subscribe(listeners.stateChanged, cb),
     onLog: (cb: Callback) => subscribe(listeners.log, cb),
     onStream: (cb: Callback) => subscribe(listeners.stream, cb),
@@ -59,6 +63,7 @@ vi.mock('@renderer/services/pipeline-service', () => ({
 vi.mock('@renderer/stores/projectStore', () => ({
   useProjectStore: {
     getState: () => ({
+      currentProject,
       syncSingleEpisodeStatus,
       syncEpisodeStatus
     })
@@ -88,7 +93,9 @@ describe('usePipelineStore', async () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     resetListeners()
+    currentProject = null
     usePipelineStore.setState({
+      runIdentity: null,
       state: 'idle',
       context: null,
       logs: [],
@@ -166,6 +173,121 @@ describe('usePipelineStore', async () => {
     expect(usePipelineStore.getState().isRunning).toBe(false)
     expect(syncSingleEpisodeStatus).toHaveBeenCalledWith(2)
 
+    cleanup()
+  })
+
+  it('rejects stale state, logs, stream, reviews and errors by full identity', () => {
+    const cleanup = usePipelineStore.getState().setupEventListeners()
+    currentProject = { id: 'project-1' }
+    const identity = {
+      projectId: 'project-1',
+      taskId: 'task-2',
+      runId: 'run-2',
+      episodeNum: 1
+    }
+    const context: PipelineContext = {
+      ...identity,
+      projectPath: '/project',
+      currentStage: 'director',
+      state: 'director_analyzing',
+      retryCount: 0,
+      logs: [],
+      reviews: []
+    }
+    for (const cb of listeners.stateChanged)
+      cb({ identity, newState: context.state, context })
+    for (const wrong of [
+      { ...identity, runId: 'run-1' },
+      { ...identity, taskId: 'task-1' },
+      { ...identity, projectId: 'project-2' }
+    ]) {
+      for (const cb of listeners.stateChanged)
+        cb({
+          identity: wrong,
+          newState: 'episode_complete',
+          context: { ...context, ...wrong, state: 'episode_complete' }
+        })
+      for (const cb of listeners.log) cb({ identity: wrong, message: 'stale' })
+      for (const cb of listeners.stream) cb({ identity: wrong, chunk: 'stale' })
+      for (const cb of listeners.reviewResult)
+        cb({ identity: wrong, result: { passed: true } })
+      for (const cb of listeners.error) cb({ identity: wrong })
+    }
+    // Once the new contract is observed, unscoped legacy events cannot change it.
+    for (const cb of listeners.error) cb({})
+    for (const cb of listeners.stream) cb({ identity, chunk: 'current' })
+    vi.advanceTimersByTime(100)
+    expect(usePipelineStore.getState()).toMatchObject({
+      state: 'director_analyzing',
+      logs: [],
+      streamBuffer: 'current',
+      currentReview: null
+    })
+    expect(syncSingleEpisodeStatus).not.toHaveBeenCalled()
+    cleanup()
+  })
+
+  it('sends controls to the displayed run and rejects controls after switching projects', async () => {
+    const target = {
+      projectId: 'project-1',
+      taskId: 'task-1',
+      runId: 'run-1',
+      episodeNum: 1
+    }
+    currentProject = { id: 'project-1' }
+    usePipelineStore.setState({ runIdentity: target })
+    await usePipelineStore.getState().pausePipeline()
+    expect(pausePipeline).toHaveBeenLastCalledWith(target)
+    await usePipelineStore.getState().skipReviewPipeline()
+    expect(skipPipeline).toHaveBeenLastCalledWith(target)
+    await usePipelineStore.getState().stopPipeline()
+    expect(abortPipeline).toHaveBeenLastCalledWith(target)
+    currentProject = { id: 'project-2' }
+    pausePipeline.mockClear()
+    await expect(usePipelineStore.getState().pausePipeline()).rejects.toThrow(
+      '不匹配'
+    )
+    expect(pausePipeline).not.toHaveBeenCalled()
+  })
+
+  it('discards buffered events on display reset and cleans up listeners and timers', () => {
+    const cleanup = usePipelineStore.getState().setupEventListeners()
+    emitLog({ message: 'old-log' })
+    emitStream('old-stream')
+    usePipelineStore.getState().resetDisplay()
+    vi.advanceTimersByTime(100)
+    expect(usePipelineStore.getState()).toMatchObject({
+      logs: [],
+      streamBuffer: ''
+    })
+    cleanup()
+    for (const bucket of Object.values(listeners))
+      expect(bucket).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('uses an authoritative snapshot for task announcements and ignores responses after project changes', async () => {
+    const cleanup = usePipelineStore.getState().setupEventListeners()
+    currentProject = { id: 'project-1' }
+    const gate = Promise.withResolvers<PipelineContext>()
+    getPipelineState.mockReturnValueOnce(gate.promise)
+    for (const cb of listeners.taskChanged)
+      cb({
+        kind: 'pipeline',
+        status: 'running',
+        identity: {
+          projectId: 'project-1',
+          taskId: 'old-task',
+          runId: 'old-run'
+        }
+      })
+    currentProject = { id: 'project-2' }
+    gate.resolve({
+      projectId: 'project-1',
+      state: 'director_analyzing'
+    } as PipelineContext)
+    await Promise.resolve()
+    expect(usePipelineStore.getState().context).toBeNull()
     cleanup()
   })
 

@@ -68,12 +68,29 @@ const api: FeicaiAPI = {
 
   startPipeline: (params) => invoke(IPC.PIPELINE_START, params),
   runPipelineAndWait: (params) => invoke(IPC.PIPELINE_RUN_AND_WAIT, params),
-  pausePipeline: () => invoke(IPC.PIPELINE_PAUSE),
-  abortPipeline: () => invoke(IPC.PIPELINE_ABORT),
-  resumePipeline: () => invoke(IPC.PIPELINE_RESUME),
-  retryPipeline: (stage) => invoke(IPC.PIPELINE_RETRY, stage),
-  skipPipeline: (stage) => invoke(IPC.PIPELINE_SKIP, stage),
-  getPipelineState: () => invoke(IPC.PIPELINE_GET_STATE),
+  pausePipeline: (target) =>
+    target === undefined
+      ? invoke(IPC.PIPELINE_PAUSE)
+      : invoke(IPC.PIPELINE_PAUSE, target),
+  abortPipeline: (target) =>
+    target === undefined
+      ? invoke(IPC.PIPELINE_ABORT)
+      : invoke(IPC.PIPELINE_ABORT, target),
+  resumePipeline: (target) =>
+    target === undefined
+      ? invoke(IPC.PIPELINE_RESUME)
+      : invoke(IPC.PIPELINE_RESUME, target),
+  retryPipeline: (input) => invoke(IPC.PIPELINE_RETRY, input),
+  skipPipeline: (input) => invoke(IPC.PIPELINE_SKIP, input),
+  getPipelineState: (target) =>
+    target === undefined
+      ? invoke(IPC.PIPELINE_GET_STATE)
+      : invoke(IPC.PIPELINE_GET_STATE, target),
+  listPipelineTasks: () => invoke(IPC.PIPELINE_LIST_TASKS),
+  getPipelineTask: (taskId) => invoke(IPC.PIPELINE_GET_TASK, taskId),
+  controlPipelineTask: (request) => invoke(IPC.PIPELINE_CONTROL_TASK, request),
+  onPipelineTaskChanged: (callback) =>
+    subscribe(IPC.PIPELINE_TASK_CHANGED, callback),
 
   runStoryGeneration: (params) =>
     invoke(IPC.WORKFLOW_RUN_STORY_GENERATION, params),

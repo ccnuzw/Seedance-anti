@@ -10,11 +10,21 @@ const mocks = vi.hoisted(() => ({
   engine: {},
   runner: {},
   root: vi.fn((path: string) => path),
+  project: vi.fn(() => ({ id: 'p', projectPath: '/project' })),
+  pause: vi.fn(),
+  resume: vi.fn(),
+  retry: vi.fn(),
+  skip: vi.fn(),
+  list: vi.fn(),
+  task: vi.fn(),
   abort: vi.fn()
 }))
 vi.mock('../security/safe-ipc', () => ({
   registerSafeIpcHandler: (channel: string, handler: RuntimeHandler) =>
     mocks.handlers.set(channel, handler)
+}))
+vi.mock('../services/project-service', () => ({
+  findRegisteredProject: mocks.project
 }))
 vi.mock('../security/access-control', () => ({
   assertRegisteredProjectRoot: mocks.root,
@@ -32,10 +42,12 @@ vi.mock('../services/pipeline-service', () => ({
   launchPipeline: mocks.launch,
   runWorkflowAction: mocks.workflow,
   abortPipeline: mocks.abort,
-  pausePipeline: vi.fn(),
-  resumePipeline: vi.fn(),
-  retryPipeline: vi.fn(),
-  skipPipelineReview: vi.fn(),
+  pausePipeline: mocks.pause,
+  resumePipeline: mocks.resume,
+  retryPipeline: mocks.retry,
+  skipPipelineReview: mocks.skip,
+  listPipelineTasks: mocks.list,
+  getPipelineTask: mocks.task,
   getPipelineContext: vi.fn()
 }))
 vi.mock('../services/pipeline-runtime-service', () => ({
@@ -98,6 +110,75 @@ describe('safe runtime IPC boundaries', () => {
     expect(
       await mocks.handlers.get(IPC.PIPELINE_START)!({}, params)
     ).toMatchObject({ success: false, error: '任务仍在停止中' })
+  })
+  it('validates targets before dispatch and preserves explicit identity without silently using legacy controls', async () => {
+    const target = {
+      projectId: 'p',
+      taskId: 'task',
+      runId: 'run',
+      episodeNum: 1
+    }
+    await mocks.handlers.get(IPC.PIPELINE_PAUSE)!({}, target)
+    expect(mocks.pause).toHaveBeenCalledWith(mocks.engine, target)
+    await mocks.handlers.get(IPC.PIPELINE_RETRY)!({}, { target, stage: 'art' })
+    expect(mocks.retry).toHaveBeenCalledWith(mocks.engine, 'art', target)
+    await mocks.handlers.get(IPC.PIPELINE_SKIP)!({}, 'director')
+    expect(mocks.skip).toHaveBeenCalledWith(mocks.engine, 'director', undefined)
+    for (const invalid of [
+      null,
+      {},
+      { taskId: 'task' },
+      { ...target, runId: '' },
+      { ...target, projectId: 'x'.repeat(257) }
+    ]) {
+      mocks.pause.mockClear()
+      expect(
+        await mocks.handlers.get(IPC.PIPELINE_PAUSE)!({}, invalid)
+      ).toMatchObject({ success: false })
+      expect(mocks.pause).not.toHaveBeenCalled()
+    }
+    expect(await mocks.handlers.get(IPC.PIPELINE_RETRY)!({}, {})).toMatchObject(
+      { success: false }
+    )
+    expect(
+      await mocks.handlers.get(IPC.PIPELINE_CONTROL_TASK)!(
+        {},
+        { action: 'abort' }
+      )
+    ).toMatchObject({ success: false })
+    await mocks.handlers.get(IPC.PIPELINE_CONTROL_TASK)!(
+      {},
+      { action: 'resume', target }
+    )
+    expect(mocks.resume).toHaveBeenCalledWith(mocks.engine, target)
+  })
+  it('rejects a registered project ID paired with a different registered path', async () => {
+    expect(
+      await mocks.handlers.get(IPC.PIPELINE_START)!(
+        {},
+        { ...params, projectPath: '/other-project' }
+      )
+    ).toMatchObject({ success: false, error: '项目不存在或路径不匹配' })
+    expect(mocks.launch).not.toHaveBeenCalled()
+  })
+  it('supports bounded task queries and rejects a snapshot query for a mismatched run', async () => {
+    const target = { projectId: 'p', taskId: 'task', runId: 'run' }
+    mocks.task.mockReturnValue({
+      identity: target,
+      context: { state: 'director_done' }
+    })
+    expect(
+      await mocks.handlers.get(IPC.PIPELINE_GET_STATE)!({}, target)
+    ).toMatchObject({ state: 'director_done' })
+    expect(() =>
+      mocks.handlers.get(IPC.PIPELINE_GET_STATE)!(
+        {},
+        { ...target, runId: 'old' }
+      )
+    ).toThrow('失效')
+    expect(() =>
+      mocks.handlers.get(IPC.PIPELINE_GET_TASK)!({}, 'x'.repeat(257))
+    ).toThrow('无效')
   })
   it('awaits real cancellation settle before replying to stop', async () => {
     const gate = Promise.withResolvers<void>()

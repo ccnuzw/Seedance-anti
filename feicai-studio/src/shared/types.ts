@@ -198,6 +198,7 @@ export interface PipelineContext {
   state: PipelineState
   retryCount: number
   singleStage?: boolean
+  taskId?: string
   runId?: string
   running?: boolean
 

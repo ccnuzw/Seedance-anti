@@ -100,7 +100,9 @@ export function usePipelinePageController() {
   const projectConfig = normalizeProjectConfig(currentProject?.config)
   const entryStage = projectConfig.entryStage || 'novel'
 
-  const isEngineMatch = projectPipelineEpisodeNum === episodeNum
+  const isEngineMatch =
+    context?.projectId === currentProject?.id &&
+    projectPipelineEpisodeNum === episodeNum
 
   const displayState = resolvePipelineDisplayState({
     isEngineMatch,
