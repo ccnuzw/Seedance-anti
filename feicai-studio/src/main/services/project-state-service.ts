@@ -20,7 +20,9 @@ export async function getProjectPipelineState(
     projectPath,
     resolveProjectArtifactPath(projectPath, 'pipelineState', project?.config)
   )
-  const state = await readJsonWithRecovery<ProjectPipelineState>(statePath)
+  const state = await readJsonWithRecovery<ProjectPipelineState>(statePath, {
+    readOnly: true
+  })
   if (!state) return null
   normalizeSavedProjectState(state, projectPath, project?.id || state.projectId)
   if (!state.episodes || typeof state.episodes !== 'object')

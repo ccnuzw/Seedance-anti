@@ -30,7 +30,8 @@ describe('project state recovery boundary', () => {
     mocks.read.mockResolvedValue(state)
     expect(await getProjectPipelineState('/tmp/project')).toEqual(state)
     expect(mocks.read).toHaveBeenCalledWith(
-      '/tmp/project/custom-outputs/pipeline-state.json'
+      '/tmp/project/custom-outputs/pipeline-state.json',
+      { readOnly: true }
     )
   })
   it('returns null only when no saved state exists', async () => {

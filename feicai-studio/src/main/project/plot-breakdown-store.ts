@@ -118,7 +118,8 @@ export function summarizeProjectPlotBreakdown(params: {
   const filePath = getPlotBreakdownPath(params)
   const chapters = listSourceChapters({
     projectPath: params.projectPath,
-    config: params.config
+    config: params.config,
+    readOnly: true
   })
   const totalSourceChapters = chapters.length
   const chaptersPerEpisode = Math.max(

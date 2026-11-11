@@ -73,6 +73,12 @@ import {
   resetAccessControl
 } from '../security/access-control'
 import { flushPendingWrites } from '../io/atomic-file'
+import * as atomicFiles from '../io/atomic-file'
+import {
+  acquireExecutionLease,
+  getExecutionLease,
+  releaseExecutionLease
+} from '../services/batch-execution-lease'
 
 const directories: string[] = []
 function temporary(): string {
@@ -227,6 +233,8 @@ function promptParams(project: Project, format = 'markdown') {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.showSaveDialog.mockReset()
+  mocks.showOpenDialog.mockReset()
   resetAccessControl()
   mocks.projects.length = 0
   mocks.episodes.length = 0
@@ -237,11 +245,157 @@ beforeEach(() => {
   registerExportHandlers()
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
+  const lease = getExecutionLease()
+  if (lease) releaseExecutionLease(lease)
   await flushPendingWrites()
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true })
 })
 import { setTrustedIpcRendererUrl } from '../security/safe-ipc'
+
+describe('导出与项目变更互斥', () => {
+  it.each([IPC.EXPORT_PROMPTS, IPC.EXPORT_ALL])(
+    '%s 等待对话框时不持锁，取消不会占用租约',
+    async (channel) => {
+      const project = addProject()
+      approveEpisode(project, 1)
+      const opened = Promise.withResolvers<void>()
+      const dialog = Promise.withResolvers<{ canceled: boolean }>()
+      const show =
+        channel === IPC.EXPORT_PROMPTS
+          ? mocks.showSaveDialog
+          : mocks.showOpenDialog
+      show.mockImplementationOnce(() => {
+        opened.resolve()
+        return dialog.promise
+      })
+      const exporting = invoke(
+        channel,
+        channel === IPC.EXPORT_PROMPTS
+          ? promptParams(project)
+          : { projectPath: project.projectPath, projectName: project.name }
+      )
+      await opened.promise
+      expect(getExecutionLease()).toBeNull()
+      const lease = acquireExecutionLease('pipeline')
+      dialog.resolve({ canceled: true })
+      expect(await exporting).toMatchObject({ canceled: true })
+      expect(getExecutionLease()).toBe(lease)
+    }
+  )
+
+  it.each([
+    'pipeline',
+    'paused',
+    'stopping',
+    'data:backup-project',
+    'data:restore-project'
+  ])('%s 期间拒绝导出落盘，备份读取也不会修复项目文件', async (owner) => {
+    const project = addProject()
+    approveEpisode(project, 1)
+    const statePath = resolveProjectArtifactPath(
+      project.projectPath,
+      'pipelineState',
+      project.config
+    )
+    writeFileSync(`${statePath}.bak`, readFileSync(statePath))
+    writeFileSync(statePath, '{broken')
+    const target = join(temporary(), 'export.md')
+    const outputRoot = temporary()
+    mocks.showSaveDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePath: target
+    })
+    mocks.showOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: [outputRoot]
+    })
+    const lease = acquireExecutionLease(owner)
+    if (owner === 'paused') lease.pause()
+    if (owner === 'stopping') lease.abort()
+    const prompts = await invoke(IPC.EXPORT_PROMPTS, promptParams(project))
+    const all = await invoke(IPC.EXPORT_ALL, {
+      projectPath: project.projectPath,
+      projectName: project.name
+    })
+    expect(prompts.error).toContain('请等待')
+    expect(all.error).toContain('请等待')
+    expect(existsSync(target)).toBe(false)
+    expect(readdirSync(outputRoot)).toEqual([])
+    expect(readFileSync(statePath, 'utf8')).toBe('{broken')
+    expect(getExecutionLease()).toBe(lease)
+  })
+
+  it.each([
+    [IPC.EXPORT_PROMPTS, false],
+    [IPC.EXPORT_PROMPTS, true],
+    [IPC.EXPORT_ALL, false],
+    [IPC.EXPORT_ALL, true]
+  ] as const)(
+    '%s 持锁到最后一次写入，成功/异常释放（失败=%s）',
+    async (channel, fails) => {
+      const project = addProject()
+      approveEpisode(project, 1)
+      if (channel === IPC.EXPORT_PROMPTS)
+        mocks.showSaveDialog.mockResolvedValueOnce({
+          canceled: false,
+          filePath: join(temporary(), 'export.md')
+        })
+      else
+        mocks.showOpenDialog.mockResolvedValueOnce({
+          canceled: false,
+          filePaths: [temporary()]
+        })
+      const pending = Promise.withResolvers<void>()
+      const started = Promise.withResolvers<void>()
+      const write = atomicFiles.atomicWriteFile
+      vi.spyOn(atomicFiles, 'atomicWriteFile').mockImplementation(
+        (path, content) => {
+          expect(getExecutionLease()?.owner).toBe(channel)
+          if (
+            channel === IPC.EXPORT_PROMPTS ||
+            path.endsWith('export-manifest.json')
+          ) {
+            started.resolve()
+            return pending.promise
+          }
+          return write(path, content)
+        }
+      )
+      const exporting = invoke(
+        channel,
+        channel === IPC.EXPORT_PROMPTS
+          ? promptParams(project)
+          : { projectPath: project.projectPath, projectName: project.name }
+      )
+      await started.promise
+      expect(getExecutionLease()?.owner).toBe(channel)
+      expect(() => acquireExecutionLease('pipeline')).toThrow('请等待')
+      if (fails) pending.reject(new Error('disk failure'))
+      else pending.resolve()
+      expect(await exporting).toMatchObject(
+        fails ? { error: 'disk failure' } : { success: true }
+      )
+      expect(getExecutionLease()).toBeNull()
+    }
+  )
+
+  it('对话框期间项目身份改变，在持锁复核时拒绝写入', async () => {
+    const project = addProject()
+    approveEpisode(project, 1)
+    const target = join(temporary(), 'export.md')
+    mocks.showSaveDialog.mockImplementationOnce(async () => {
+      mocks.projects[0] = { ...project, id: 'replacement' }
+      return { canceled: false, filePath: target }
+    })
+    expect(
+      (await invoke(IPC.EXPORT_PROMPTS, promptParams(project))).error
+    ).toContain('项目身份或配置')
+    expect(existsSync(target)).toBe(false)
+    expect(getExecutionLease()).toBeNull()
+  })
+})
 
 describe('当前审核有效提示词导出', () => {
   it.each([
