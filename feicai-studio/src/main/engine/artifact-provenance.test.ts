@@ -78,6 +78,26 @@ beforeEach(() => {
 afterEach(() => rmSync(projectPath, { recursive: true, force: true }))
 
 describe('artifact provenance', () => {
+  it('依赖schema升级后旧凭据即使正文未变也保守失效', () => {
+    const review = boundReview('art')
+    delete review.inputHashes!.dependencySchema
+    expect(isReviewCurrent(review, projectPath, 1, config)).toBe(false)
+  })
+
+  it('角色输入只使视觉审核失效；相邻剧本变化使剧审及后续凭据失效', () => {
+    const script = boundReview('script_review')
+    const director = boundReview('director')
+    const art = boundReview('art')
+    const storyboard = boundReview('storyboard_review')
+    writeEpisode('characterDesign', '# 红衣角色')
+    expect(isReviewCurrent(script, projectPath, 1, config)).toBe(true)
+    expect(isReviewCurrent(director, projectPath, 1, config)).toBe(true)
+    expect(isReviewCurrent(art, projectPath, 1, config)).toBe(false)
+    expect(isReviewCurrent(storyboard, projectPath, 1, config)).toBe(false)
+    writeEpisode('script', '# 新的下一集', 2)
+    expect(isReviewCurrent(script, projectPath, 1, config)).toBe(false)
+    expect(isReviewCurrent(director, projectPath, 1, config)).toBe(false)
+  })
   it.each([
     'story_review',
     'script_review',

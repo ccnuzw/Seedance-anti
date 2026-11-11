@@ -26,7 +26,9 @@ import {
   type ProjectConfig,
   type ProjectPipelineState
 } from '@shared/types'
-import { ArtOutputMerger } from '../engine/art-output-merger'
+import { ArtOutputMerger, readArtReference } from '../engine/art-output-merger'
+import { normalizeProjectConfig } from '@shared/project-config'
+import { getEntryRequirements } from '@shared/workflow'
 import {
   formatReviewMarkdown,
   parseReviewMarkdown
@@ -155,6 +157,9 @@ export class WorkflowEngine {
     this.assertContext(ctx)
     await this.checkpoint(ctx)
     await this.assertCurrentPrerequisites(stage, ctx)
+    const entry = getEntryRequirements(ctx.projectConfig?.entryStage)
+    if (stage === 'story' && !entry.requiresNovel)
+      throw new Error('当前入口请直接导入或编辑剧情/剧本，无需生成小说剧情批次')
     if (stage === 'story') {
       const existing = options.reviewFeedback
         ? await this.readOptionalFile(
@@ -182,7 +187,7 @@ export class WorkflowEngine {
       stage,
       ctx.batchNumber
     )
-    this.assertGenerationPrerequisites(stage, inputs)
+    this.assertGenerationPrerequisites(stage, inputs, ctx.projectConfig)
     const skill = await this.skillLoader.load(GENERATION_SKILL_MAP[stage])
     const prompt = this.promptAssembler.assemble(
       skill,
@@ -190,7 +195,8 @@ export class WorkflowEngine {
       inputs,
       ctx.projectContext,
       PROMPT_STAGE_MAP[stage],
-      options.reviewFeedback
+      options.reviewFeedback,
+      normalizeProjectConfig(ctx.projectConfig).entryStage
     )
     const timeoutMs =
       options.timeoutMs ??
@@ -287,6 +293,7 @@ export class WorkflowEngine {
       ...ctx.projectConfig?.pipelineSettings
     }
     const callOptions = {
+      projectConfig: ctx.projectConfig,
       signal: ctx.signal,
       timeoutMs: ctx.timeoutMs ?? settings.llmTimeoutSec * 1000,
       passScore: settings.passScore,
@@ -296,7 +303,21 @@ export class WorkflowEngine {
     let review: ReviewResult
     let outputPath: string | undefined
     let storyBeat: string | undefined
-    if (stage === 'story_review') {
+    if (stage === 'story_review' && ctx.projectConfig?.entryStage === 'script')
+      throw new Error('剧本入口无需剧情审核，请直接审核本集剧本')
+    if (stage === 'story_review' && ctx.projectConfig?.entryStage === 'story') {
+      storyBeat = await this.readRequiredFile(
+        this.episodePath(ctx, 'storyBeat'),
+        ctx.projectPath
+      )
+      review = await engine.reviewContent({
+        stage,
+        reviewSkillName: 'story-breakdown-review-skill',
+        outputToReview: storyBeat,
+        ...callOptions
+      })
+      outputPath = this.episodePath(ctx, 'storyReview')
+    } else if (stage === 'story_review') {
       storyBeat = await this.readRequiredFile(
         this.episodePath(ctx, 'storyBeat'),
         ctx.projectPath
@@ -338,26 +359,49 @@ export class WorkflowEngine {
         this.episodePath(ctx, 'script'),
         ctx.projectPath
       )
-      const sourceNovel = await this.readEpisodeSourceNovel(
-        ctx.projectPath,
-        ctx.episodeNum,
-        ctx.projectConfig
-      )
+      const sourceNovel = getEntryRequirements(ctx.projectConfig?.entryStage)
+        .requiresNovel
+        ? await this.readEpisodeSourceNovel(
+            ctx.projectPath,
+            ctx.episodeNum,
+            ctx.projectConfig
+          )
+        : undefined
       const previousScript = await this.readAdjacentEpisodeScript(ctx, -1)
-      const plotBreakdown = getProjectPlotBreakdownMarkdownForEpisode({
-        projectPath: ctx.projectPath,
-        config: (ctx.projectConfig || {}) as ProjectConfig,
-        episodeNum: ctx.episodeNum,
-        heading: '# 当前集剧情点'
-      })
-      if (!plotBreakdown.trim())
+      const nextScript = await this.readAdjacentEpisodeScript(ctx, 1)
+      const storyBeat =
+        ctx.projectConfig?.entryStage === 'story'
+          ? await this.readRequiredFile(
+              this.episodePath(ctx, 'storyBeat'),
+              ctx.projectPath
+            )
+          : undefined
+      const plotBreakdown = getEntryRequirements(ctx.projectConfig?.entryStage)
+        .requiresInventory
+        ? getProjectPlotBreakdownMarkdownForEpisode({
+            projectPath: ctx.projectPath,
+            config: (ctx.projectConfig || {}) as ProjectConfig,
+            episodeNum: ctx.episodeNum,
+            heading: '# 当前集剧情点'
+          })
+        : ''
+      if (
+        getEntryRequirements(ctx.projectConfig?.entryStage).requiresInventory &&
+        !plotBreakdown.trim()
+      )
         throw new Error('缺少本集绑定剧情点，无法审核剧本')
       await this.checkpoint(ctx)
       review = await engine.reviewContent({
         stage,
         reviewSkillName: 'script-review-skill',
         outputToReview: script,
-        originalScript: [plotBreakdown, sourceNovel, previousScript]
+        originalScript: [
+          plotBreakdown,
+          storyBeat,
+          sourceNovel,
+          previousScript,
+          nextScript
+        ]
           .filter(Boolean)
           .join('\n\n---\n\n'),
         plotBreakdown,
@@ -405,19 +449,61 @@ export class WorkflowEngine {
         stage,
         reviewSkillName: 'seedance-prompt-review-skill',
         outputToReview: prompts,
-        originalScript: script,
+        originalScript: [script, await this.visualReviewInputs(ctx, false)]
+          .filter(Boolean)
+          .join('\n\n---\n\n'),
         directorAnalysis,
         artDesign,
         ...callOptions
       })
       outputPath = this.episodePath(ctx, 'storyboardReview')
+    } else if (stage === 'art') {
+      const inputs = await this.gatherInputs(
+        ctx.projectPath,
+        ctx.episodeNum,
+        ctx.projectConfig,
+        'art'
+      )
+      review = await engine.reviewContent({
+        stage,
+        reviewSkillName: 'art-direction-review-skill',
+        outputToReview: await this.readRequiredFile(
+          this.episodePath(ctx, 'artDesign'),
+          ctx.projectPath
+        ),
+        originalScript: [
+          inputs.script,
+          await this.visualReviewInputs(ctx, true)
+        ]
+          .filter(Boolean)
+          .join('\n\n---\n\n'),
+        directorAnalysis: inputs.directorAnalysis,
+        plotBreakdown: inputs.plotBreakdown,
+        ...callOptions
+      })
     } else {
+      const scriptPath = this.episodePath(ctx, 'script')
+      if (
+        ctx.scriptPath &&
+        assertPathWithinProject(ctx.projectPath, ctx.scriptPath) !== scriptPath
+      )
+        throw new Error('审核剧本路径与本集产物不匹配')
+      const inputs = await this.gatherInputs(
+        ctx.projectPath,
+        ctx.episodeNum,
+        ctx.projectConfig,
+        'director'
+      )
       await this.checkpoint(ctx)
-      review = await engine.review(stage, {
-        projectPath: ctx.projectPath,
-        episodeNum: ctx.episodeNum,
-        scriptPath: ctx.scriptPath,
-        projectConfig: ctx.projectConfig,
+      review = await engine.reviewContent({
+        stage,
+        reviewSkillName: 'script-analysis-review-skill',
+        outputToReview: await this.readRequiredFile(
+          this.episodePath(ctx, 'directorAnalysis'),
+          ctx.projectPath
+        ),
+        originalScript: inputs.script,
+        plotBreakdown: inputs.plotBreakdown,
         ...callOptions
       })
     }
@@ -439,7 +525,11 @@ export class WorkflowEngine {
     await this.checkpoint(ctx)
     this.assertReviewUnchanged(review, ctx)
     await this.assertCurrentPrerequisites(stage, ctx)
-    if (review.passed && stage === 'story_review') {
+    if (
+      review.passed &&
+      stage === 'story_review' &&
+      getEntryRequirements(ctx.projectConfig?.entryStage).requiresInventory
+    ) {
       await this.checkpoint(ctx)
       this.assertReviewUnchanged(review, ctx)
       const published = appendGeneratedStoryToProjectPlotBreakdown({
@@ -452,7 +542,11 @@ export class WorkflowEngine {
       if (published.appendedEntries === 0)
         throw new Error('剧情库存未写入任何剧情点')
     }
-    if (review.passed && stage === 'script_review') {
+    if (
+      review.passed &&
+      stage === 'script_review' &&
+      getEntryRequirements(ctx.projectConfig?.entryStage).requiresInventory
+    ) {
       await this.checkpoint(ctx)
       this.assertReviewUnchanged(review, ctx)
       markProjectPlotBreakdownEpisodeStatus({
@@ -519,12 +613,15 @@ export class WorkflowEngine {
             config: (projectConfig || {}) as ProjectConfig
           }).nextBatchNumber)
         : episodeNum
-    const sourceNovel = await this.readEpisodeSourceNovel(
-      projectPath,
-      sourceNumber,
-      projectConfig,
-      stage === 'story' ? 'breakdownBatch' : 'episode'
-    )
+    const sourceNovel = getEntryRequirements(projectConfig?.entryStage)
+      .requiresNovel
+      ? await this.readEpisodeSourceNovel(
+          projectPath,
+          sourceNumber,
+          projectConfig,
+          stage === 'story' ? 'breakdownBatch' : 'episode'
+        )
+      : undefined
     const episodeRead = (
       artifact: Parameters<typeof resolveEpisodeArtifactPath>[1]
     ) => this.readOptionalFile(this.episodePath(ctx, artifact), projectPath)
@@ -541,7 +638,8 @@ export class WorkflowEngine {
     return {
       sourceNovel,
       plotBreakdown:
-        stage === 'story'
+        stage === 'story' ||
+        !getEntryRequirements(projectConfig?.entryStage).requiresInventory
           ? undefined
           : getProjectPlotBreakdownMarkdownForEpisode({
               projectPath,
@@ -549,7 +647,10 @@ export class WorkflowEngine {
               episodeNum,
               heading: '# 当前集绑定剧情点（含已用剧情，可用于本集修订）'
             }),
-      storyBeat: undefined,
+      storyBeat:
+        projectConfig?.entryStage === 'story' && stage === 'script'
+          ? await episodeRead('storyBeat')
+          : undefined,
       previousScript:
         stage === 'script'
           ? await this.readAdjacentEpisodeScript(ctx, -1)
@@ -558,23 +659,56 @@ export class WorkflowEngine {
         stage === 'script'
           ? await this.readAdjacentEpisodeScript(ctx, 1)
           : undefined,
-      script: await episodeRead('script'),
-      directorAnalysis: await episodeRead('directorAnalysis'),
-      characterPrompts: await projectRead('characterPrompts'),
-      scenePrompts: await projectRead('scenePrompts'),
-      fullPlotBreakdown: await projectRead('plotBreakdown')
+      script: stage === 'story' ? undefined : await episodeRead('script'),
+      directorAnalysis: ['art', 'storyboard', 'character'].includes(stage || '')
+        ? await episodeRead('directorAnalysis')
+        : undefined,
+      characterDesign:
+        stage === 'art' || stage === 'storyboard'
+          ? await episodeRead('characterDesign')
+          : undefined,
+      artDesign:
+        stage === 'storyboard' ? await episodeRead('artDesign') : undefined,
+      characterPrompts:
+        stage === 'art' || stage === 'storyboard'
+          ? readArtReference(
+              projectPath,
+              'characterPrompts',
+              stage === 'art' ? episodeNum : undefined,
+              projectConfig
+            )
+          : undefined,
+      scenePrompts:
+        stage === 'art' || stage === 'storyboard'
+          ? readArtReference(
+              projectPath,
+              'scenePrompts',
+              stage === 'art' ? episodeNum : undefined,
+              projectConfig
+            )
+          : undefined,
+      fullPlotBreakdown:
+        stage === 'story' ? await projectRead('plotBreakdown') : undefined
     }
   }
 
   private assertGenerationPrerequisites(
     stage: WorkflowGenerateStage,
-    inputs: UpstreamInputs
+    inputs: UpstreamInputs,
+    config?: Partial<ProjectConfig> | null
   ): void {
     if (stage === 'story' && !inputs.sourceNovel?.trim())
       throw new Error(
         `缺少 ${describeProjectArtifact('sourceNovel')}，请先补齐小说原文或项目设定`
       )
-    if (stage === 'script' && !inputs.plotBreakdown?.trim())
+    if (
+      stage === 'script' &&
+      !(getEntryRequirements(config?.entryStage).requiresInventory
+        ? inputs.plotBreakdown?.trim()
+        : config?.entryStage === 'story'
+          ? inputs.storyBeat?.trim()
+          : inputs.script?.trim())
+    )
       throw new Error('缺少当前集绑定剧情点，请先完成剧情库存拆解')
     if (
       ['director', 'art', 'storyboard', 'character'].includes(stage) &&
@@ -598,6 +732,11 @@ export class WorkflowEngine {
   ): Promise<void> {
     const required: ReviewStage[] = []
     if (
+      ctx.projectConfig?.entryStage === 'story' &&
+      ['script', 'script_review'].includes(stage)
+    )
+      required.push('story_review')
+    if (
       [
         'director',
         'art',
@@ -618,9 +757,12 @@ export class WorkflowEngine {
       DEFAULT_PIPELINE_SETTINGS.passScore
     for (const upstream of required) {
       let review: ReviewResult | null | undefined
-      if (upstream === 'script_review') {
+      if (upstream === 'script_review' || upstream === 'story_review') {
         const raw = await this.readOptionalFile(
-          this.episodePath(ctx, 'scriptReview'),
+          this.episodePath(
+            ctx,
+            upstream === 'story_review' ? 'storyReview' : 'scriptReview'
+          ),
           ctx.projectPath
         )
         review = raw ? parseReviewMarkdown(raw, upstream) : null
@@ -658,6 +800,32 @@ export class WorkflowEngine {
         )
       }
     }
+  }
+
+  private async visualReviewInputs(
+    ctx: ReviewContext,
+    art: boolean
+  ): Promise<string> {
+    const character = await this.readOptionalFile(
+      this.episodePath(ctx, 'characterDesign'),
+      ctx.projectPath
+    )
+    return [
+      character ? `# 本集角色设计\n\n${character}` : '',
+      ...(['characterPrompts', 'scenePrompts'] as const).map((artifact) => {
+        const content = readArtReference(
+          ctx.projectPath,
+          artifact,
+          art ? ctx.episodeNum : undefined,
+          ctx.projectConfig
+        )
+        return content
+          ? `# ${artifact === 'characterPrompts' ? '已有角色素材' : '已有场景素材'}\n\n${content}`
+          : ''
+      })
+    ]
+      .filter(Boolean)
+      .join('\n\n---\n\n')
   }
 
   private assertReviewUnchanged(

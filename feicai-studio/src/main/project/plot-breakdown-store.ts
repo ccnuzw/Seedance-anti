@@ -349,7 +349,28 @@ export function appendGeneratedStoryToProjectPlotBreakdown(params: {
     replaceExistingHeading: true
   })
   if (result.appendedEntries === 0) throw new Error('剧情库存未写入任何剧情点')
-  atomicWriteFileSync(filePath, serializePlotBreakdownMarkdown(result.document))
+  const stableBatches = (document: PlotBreakdownDocument) =>
+    JSON.stringify(
+      document.batches.map((batch) => ({
+        ...batch,
+        entries: batch.entries.map(
+          ({ id, index, content, episode, status }) => ({
+            id,
+            index,
+            content,
+            episode,
+            status
+          })
+        )
+      }))
+    )
+  // Re-reviewing the same batch must not rewrite the inventory (including its
+  // human planning notes); preserve stable identities and consumption status.
+  if (stableBatches(doc) !== stableBatches(result.document))
+    atomicWriteFileSync(
+      filePath,
+      serializePlotBreakdownMarkdown(result.document)
+    )
 
   return {
     path: filePath,

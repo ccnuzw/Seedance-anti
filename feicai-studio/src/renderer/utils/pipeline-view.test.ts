@@ -36,6 +36,41 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
 }
 
 describe('pipeline-view', () => {
+  it('人工剧情不要求小说，但生成/剧审要求当前剧情PASS；现成剧本可审核及修订', () => {
+    const episode = createEpisode({ hasStoryBeat: true, hasScript: true })
+    expect(
+      getWorkflowActionAvailability(episode, 'story', 'story', false).canStart
+    ).toBe(false)
+    expect(
+      getWorkflowActionAvailability(episode, 'story_review', 'story', false)
+        .canStart
+    ).toBe(true)
+    expect(
+      getWorkflowActionAvailability(episode, 'script', 'story', false).canStart
+    ).toBe(false)
+    expect(
+      getWorkflowActionAvailability(episode, 'script_review', 'story', false)
+        .canStart
+    ).toBe(false)
+    expect(
+      getWorkflowActionAvailability(
+        { ...episode, hasStoryReview: true },
+        'script',
+        'story',
+        false
+      ).canStart
+    ).toBe(true)
+    expect(
+      getWorkflowActionAvailability(episode, 'script', 'novel', false).canStart
+    ).toBe(false)
+    expect(
+      getWorkflowActionAvailability(episode, 'script_review', 'script', false)
+        .canStart
+    ).toBe(true)
+    expect(
+      getWorkflowActionAvailability(episode, 'script', 'script', false).canStart
+    ).toBe(true)
+  })
   it('能识别自动执行段活跃与完成态', () => {
     expect(isStageActive('director', 'director_analyzing')).toBe(true)
     expect(isStageDone('director', 'art_done')).toBe(true)

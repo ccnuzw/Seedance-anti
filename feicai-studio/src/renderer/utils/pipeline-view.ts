@@ -16,6 +16,7 @@ import type {
   ReviewResult,
   WorkflowStageId
 } from '@shared/types'
+import { getEntryRequirements } from '@shared/workflow'
 import { isEpisodeComplete } from '@shared/episode-status'
 
 export const AUTO_STAGES: Array<{
@@ -285,11 +286,15 @@ export function getWorkflowActionAvailability(
   entryStage: ProjectEntryStage,
   hasSourceNovel: boolean
 ): StageAvailability {
+  const entry = getEntryRequirements(entryStage)
   if (stage === 'story') {
-    if (entryStage === 'script') {
+    if (!entry.requiresNovel) {
       return {
         canStart: false,
-        reason: '当前项目从剧本起步，这一步可直接跳过。'
+        reason:
+          entryStage === 'story'
+            ? '请在剧情页导入或编辑本集剧情，再执行剧情审核。'
+            : '当前项目从剧本起步，这一步可直接跳过。'
       }
     }
     if (!hasSourceNovel) {
@@ -304,10 +309,18 @@ export function getWorkflowActionAvailability(
   if (stage === 'script') {
     if (entryStage === 'script') {
       return {
-        canStart: false,
+        canStart: !!episode?.hasScript,
         reason: episode?.hasScript
-          ? '当前项目从剧本起步，已存在剧本，可直接进入剧本审核。'
+          ? '可修订现有剧本，或直接进入剧本审核。'
           : `当前项目从剧本起步，请先手动导入或编写 ${describeEpisodeArtifact('script')}。`
+      }
+    }
+    if (entry.requiresStoryReview) {
+      return {
+        canStart: !!episode?.hasStoryReview,
+        reason: episode?.hasStoryReview
+          ? '已满足剧本生成前置条件。'
+          : '请先让本集剧情通过当前有效审核。'
       }
     }
     if (!hasSourceNovel) {
@@ -340,6 +353,8 @@ export function getWorkflowActionAvailability(
   }
 
   if (stage === 'script_review') {
+    if (entry.requiresStoryReview && !episode?.hasStoryReview)
+      return { canStart: false, reason: '请先让本集剧情通过当前有效审核。' }
     if (!episode?.hasScript) {
       return {
         canStart: false,
@@ -390,7 +405,7 @@ export function buildMissingFileHints(
 ): Partial<Record<WorkflowStageId, string[]>> {
   const result: Partial<Record<WorkflowStageId, string[]>> = {}
 
-  if (entryStage !== 'script' && !hasSourceNovel) {
+  if (getEntryRequirements(entryStage).requiresNovel && !hasSourceNovel) {
     result.novel = [`缺少 ${describeProjectArtifact('sourceNovel')}`]
   }
   if (!episode?.hasStoryBeat && entryStage !== 'script') {

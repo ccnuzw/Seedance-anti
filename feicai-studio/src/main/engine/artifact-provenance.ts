@@ -9,6 +9,8 @@ import {
   resolveProjectLayout
 } from '@shared/path-resolver'
 import { parsePlotBreakdownMarkdown } from '@shared/plot-breakdown'
+import { getEntryRequirements } from '@shared/workflow'
+import { readArtReference } from './art-output-merger'
 import {
   assertEpisodeNumber,
   assertPathWithinProject
@@ -84,9 +86,14 @@ export function captureReviewProvenance(
   const add = (key: string, value: string | null) => {
     inputHashes[key] = hashOptional(value)
   }
+  const entry = getEntryRequirements(config?.entryStage)
+  // Dependency schema changes invalidate old credentials conservatively.
+  add('dependencySchema', '2')
   add(
     'reviewConfig',
     JSON.stringify({
+      entryStage: config?.entryStage ?? 'novel',
+      projectName: config?.projectName ?? null,
       visualStyle: config?.visualStyle ?? null,
       targetMedium: config?.targetMedium ?? null,
       chaptersPerEpisode: config?.chaptersPerEpisode ?? null,
@@ -102,7 +109,7 @@ export function captureReviewProvenance(
     stage === 'story_review'
       ? 6
       : Math.max(0, Number(config?.chaptersPerEpisode) || 0)
-  if (stage === 'story_review' && !batchMatch)
+  if (stage === 'story_review' && entry.requiresNovel && !batchMatch)
     throw new Error('旧剧情草稿缺少批次身份，请重新生成或明确批次后再审核')
   const sourceUnit = stage === 'story_review' ? batch : episodeNum
   const chapterStart = (sourceUnit - 1) * chapterWindow + 1
@@ -116,7 +123,7 @@ export function captureReviewProvenance(
     join(projectPath, resolveProjectLayout(config).sourceDir, 'chapters')
   )
   let chapterFiles: string[] = []
-  if (chapterWindow > 0) {
+  if (entry.requiresNovel && chapterWindow > 0) {
     try {
       chapterFiles = readdirSync(chapterDir)
         .filter((name) => /^chapter-\d+.*\.md$/i.test(name))
@@ -125,51 +132,88 @@ export function captureReviewProvenance(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
   }
-  if (chapterFiles.length === 0 || chapterWindow === 0) {
-    add(
-      'sourceNovel',
-      readContent(
-        projectPath,
-        resolveProjectArtifactPath(projectPath, 'sourceNovel', config)
-      )
-    )
-  } else {
-    const selected = chapterFiles.filter((name) => {
-      const index = Number(name.match(/^chapter-(\d+)/i)![1])
-      return index >= chapterStart && index <= chapterEnd && index <= maxChapter
-    })
-    add(
-      'sourceChapterWindow',
-      JSON.stringify({ chapterStart, chapterEnd, files: selected })
-    )
-    for (const file of selected)
+  if (entry.requiresNovel) {
+    if (chapterFiles.length === 0 || chapterWindow === 0) {
       add(
-        `sourceChapter:${file}`,
-        readContent(projectPath, join(chapterDir, file), true)
+        'sourceNovel',
+        readContent(
+          projectPath,
+          resolveProjectArtifactPath(projectPath, 'sourceNovel', config)
+        )
       )
+    } else {
+      const selected = chapterFiles.filter((name) => {
+        const index = Number(name.match(/^chapter-(\d+)/i)![1])
+        return (
+          index >= chapterStart && index <= chapterEnd && index <= maxChapter
+        )
+      })
+      add(
+        'sourceChapterWindow',
+        JSON.stringify({ chapterStart, chapterEnd, files: selected })
+      )
+      for (const file of selected)
+        add(
+          `sourceChapter:${file}`,
+          readContent(projectPath, join(chapterDir, file), true)
+        )
+    }
   }
 
-  if (stage !== 'story_review') {
+  if (stage === 'story_review' && entry.requiresInventory) {
     const inventory = readContent(
       projectPath,
       resolveProjectArtifactPath(projectPath, 'plotBreakdown', config)
     )
-    const related =
-      inventory === null
-        ? null
-        : parsePlotBreakdownMarkdown(inventory)
-            .batches.flatMap((group) => group.entries)
-            .filter((entry) => entry.episode === episodeNum)
-            .map(({ id, index, content, episode }) => ({
+    // The current batch is the reviewed output, and publishing/consuming it is
+    // not an upstream edit. Other batches still constrain numbering/allocation.
+    const otherBatches = inventory
+      ? parsePlotBreakdownMarkdown(inventory)
+          .batches.filter(
+            (group) =>
+              Number(group.heading.match(/^###\s+第(\d+)批/u)?.[1]) !== batch
+          )
+          .map((group) => ({
+            heading: group.heading,
+            entries: group.entries.map(({ id, index, content, episode }) => ({
               id,
               index,
               content,
               episode
             }))
-            .sort((a, b) => a.index - b.index)
-    add('plotBreakdown', related === null ? null : JSON.stringify(related))
+          }))
+      : []
+    add('storyInventoryContext', JSON.stringify(otherBatches))
+  }
+  if (stage !== 'story_review') {
+    if (entry.requiresStoryReview) {
+      add('storyBeat', readEpisode('storyBeat', episodeNum, true))
+      add('storyReview', readEpisode('storyReview'))
+    }
+    if (entry.requiresInventory) {
+      const inventory = readContent(
+        projectPath,
+        resolveProjectArtifactPath(projectPath, 'plotBreakdown', config)
+      )
+      const related =
+        inventory === null
+          ? null
+          : parsePlotBreakdownMarkdown(inventory)
+              .batches.flatMap((group) => group.entries)
+              .filter((entry) => entry.episode === episodeNum)
+              .map(({ id, index, content, episode }) => ({
+                id,
+                index,
+                content,
+                episode
+              }))
+              .sort((a, b) => a.index - b.index)
+      add('plotBreakdown', related === null ? null : JSON.stringify(related))
+    }
     if (episodeNum > 1)
       add('previousScript', readEpisode('script', episodeNum - 1))
+    if (!config?.totalEpisodes || episodeNum < config.totalEpisodes)
+      add('nextScript', readEpisode('script', episodeNum + 1))
   }
   if (
     stage === 'director' ||
@@ -181,6 +225,20 @@ export function captureReviewProvenance(
   }
   if (stage === 'art' || stage === 'storyboard_review') {
     add('directorAnalysis', readEpisode('directorAnalysis', episodeNum, true))
+    add('characterDesign', readEpisode('characterDesign'))
+    // Both stages depend on the stable art references; storyboard additionally
+    // consumes the published shared assets verbatim.
+    for (const artifact of ['characterPrompts', 'scenePrompts'] as const) {
+      add(
+        `artReference:${artifact}`,
+        readArtReference(projectPath, artifact, episodeNum, config)
+      )
+      if (stage === 'storyboard_review')
+        add(
+          artifact,
+          readArtReference(projectPath, artifact, undefined, config)
+        )
+    }
   }
   if (stage === 'storyboard_review')
     add('artDesign', readEpisode('artDesign', episodeNum, true))

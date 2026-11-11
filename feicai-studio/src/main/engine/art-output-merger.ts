@@ -1,6 +1,10 @@
+import { readFileSync } from 'fs'
 import { readFile } from 'fs/promises'
 import type { ProjectConfig } from '@shared/types'
-import { resolveProjectArtifactPath } from '@shared/path-resolver'
+import {
+  resolveEpisodeArtifactPath,
+  resolveProjectArtifactPath
+} from '@shared/path-resolver'
 import {
   parseAssetMarkdown,
   serializeAssets,
@@ -13,6 +17,70 @@ import {
 } from '../security/access-control'
 
 const OWNER_PATTERN = /\s*<!--\s*feicai-art-episodes:([\d,]+)\s*-->/gu
+
+type SharedArtArtifact = 'characterPrompts' | 'scenePrompts'
+interface ArtReferenceSnapshot {
+  version: 1
+  references: Partial<
+    Record<SharedArtArtifact, { input: string; published: string }>
+  >
+}
+
+function referencePath(
+  projectPath: string,
+  episodeNum: number,
+  config?: Partial<ProjectConfig> | null
+): string {
+  return assertPathWithinProject(
+    projectPath,
+    `${resolveEpisodeArtifactPath(projectPath, 'artDesign', episodeNum, config)}.references.json`
+  )
+}
+
+/** Publication may replace the shared file; retain the exact reference seen before
+ * this episode published. Any later external edit exposes the current file and
+ * invalidates the old review. Snapshots never rebind a review or grant PASS. */
+export function readArtReference(
+  projectPath: string,
+  artifact: SharedArtArtifact,
+  episodeNum?: number,
+  config?: Partial<ProjectConfig> | null
+): string {
+  const path = assertPathWithinProject(
+    projectPath,
+    resolveProjectArtifactPath(projectPath, artifact, config)
+  )
+  let current = ''
+  try {
+    current = readFileSync(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (episodeNum !== undefined) {
+    assertEpisodeNumber(episodeNum)
+    let snapshot: ArtReferenceSnapshot | undefined
+    try {
+      snapshot = JSON.parse(
+        readFileSync(referencePath(projectPath, episodeNum, config), 'utf8')
+      )
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code !== 'ENOENT' &&
+        !(error instanceof SyntaxError)
+      )
+        throw error
+    }
+    const reference =
+      snapshot?.version === 1 ? snapshot.references?.[artifact] : undefined
+    if (
+      reference &&
+      typeof reference.input === 'string' &&
+      reference.published === current
+    )
+      return reference.input
+  }
+  return current
+}
 
 /** Only approved episode art is published. Names are the stable shared asset identity. */
 export class ArtOutputMerger {
@@ -127,6 +195,22 @@ export class ArtOutputMerger {
               .join('\n\n') + '\n'
         }
       })
+    )
+    const snapshot: ArtReferenceSnapshot = { version: 1, references: {} }
+    for (const [index, artifact] of (
+      ['characterPrompts', 'scenePrompts'] as const
+    ).entries()) {
+      snapshot.references[artifact] = {
+        input: readArtReference(projectPath, artifact, episodeNum, config),
+        published: updates[index].content
+      }
+    }
+    await beforeCommit?.()
+    // Install conditional snapshots first. Until publication, the existing files
+    // still resolve to the same inputs; partial/cancelled publication is retryable.
+    await atomicWriteFile(
+      referencePath(projectPath, episodeNum, config),
+      JSON.stringify(snapshot)
     )
     for (const update of updates) {
       await beforeCommit?.()

@@ -1,5 +1,6 @@
 // 两步审核：明确协议、逐调用上下文、取消/超时与正文来源绑定。
 import { readFile } from 'fs/promises'
+import { normalizeProjectConfig } from '@shared/project-config'
 import { SkillLoader } from './skill-loader'
 import { PromptAssembler } from './prompt-assembler'
 import { OutputParser, type ParsedReview } from './output-parser'
@@ -315,7 +316,8 @@ export class ReviewEngine {
       params.originalScript,
       params.directorAnalysis,
       params.plotBreakdown,
-      params.artDesign
+      params.artDesign,
+      normalizeProjectConfig(params.projectConfig).entryStage
     )
     const aborted = Promise.withResolvers<never>()
     const rejectAbort = () =>

@@ -82,7 +82,7 @@ describe('prompt-assembler', () => {
     expect(prompt.user).toContain('# 本集剧情拆解')
     expect(prompt.user).toContain('# 导演讲戏本')
     expect(prompt.user).toContain(
-      '请根据以上剧情库存、剧情拆解和小说原文，直接输出当前集的完整漫剧剧本'
+      '请根据以上本集剧情库存及提供的上游材料，直接输出当前集的完整漫剧剧本'
     )
     expect(prompt.user).toContain('剧本规格必须接近项目配置：1200-1800 字')
     expect(prompt.user).toContain('25-40 条“△”动作指示')
