@@ -123,6 +123,13 @@
 | Native SQLite      | 用现有 Electron 的 `ELECTRON_RUN_AS_NODE=1` 执行 `src/main/db/database.test.ts`，7 项通过；直接使用已安装 `better-sqlite3`，覆盖旧库数据保留、部分升级、重复初始化、约束/索引和迁移回滚。此项是原生驱动回归，不等于 GUI 启动                                                                  |
 | 实际桌面启动 smoke | `scripts/electron-migration-smoke.mjs`：临时 userData/sessionData/logs/crashDumps，构造缺少 category 的历史 llm_configs 表（无凭据），加载真实生产 main/preload/renderer；真实 IPC 返回空项目列表，版本/索引/完整性检查通过；第二实例退出且第一实例收到事件，随后正常退出。渲染网络请求受阻断 |
 
+补充验收重点由本轮全量测试中的以下回归覆盖：
+
+- `workflow/workflow-entry-flows.test.ts` 装配真实 builtin skills 后断言 prompt：novel 首次拆解/剧情审核允许尚无库存，剧本生成/审核才要求小说章节和本集绑定库存；story/script 不强制虚构小说与库存。provider 仍受控，不能据此推定真实模型遵循提示词。
+- `ipc/register.test.ts`、`ipc/asset-handlers.test.ts`、`ipc/export-handlers.test.ts`、数据管理和租约回归覆盖制作与编辑/删除/导出/备份冲突，以及取消对话框不占租约。`ipc/export-handlers.test.ts`、`io/atomic-file.test.ts`、`services/project-service.test.ts` 验证公开读取使用只读备份回退，缺失/损坏/陈旧章节索引在公开查询期间不落盘，随后持锁扫描仍可更新。
+- `engine/artifact-provenance.test.ts`、`ipc/export-handlers.test.ts` 验证角色、共享视觉资料、相邻剧本变更使对应凭据/导出失效；`engine/art-output-merger.test.ts` 验证 art 发布自身不误失效、两份共享文件中途取消后可重试，不把部分发布误识别为外部修改。
+- 审核依赖 schema 已升级至 v2，历史审核即使正文未变也需重审；此版本号不是 SQLite 数据库版本。`full` 自动段仍为导演→服化道→分镜，不自动执行 `character`，角色设计为可选独立动作。
+
 覆盖率由 Vitest v8 本轮实际加载的模块组成，未配置覆盖全部源码的 `coverage.include`；未加载页面、未执行分支及外部桌面行为不能由总比例推定。报告为 statements 81.91%（5115/6244）、branches 69.17%（3570/5161）、functions 83.05%（995/1198）、lines 83.72%（4852/5795），门槛分别为 63/49/67/63。分母可能包含加载到的 fixture/helper；mock 的 IPC/原生环境与上面的 Electron smoke 不计为全仓库或端到端覆盖率。
 
 本轮集成发现并修复两处衔接问题：独立审核与自动段默认设置不同导致凭据误失效；提示词页面按“第一段是素材表”处理导致无表/表移位时漏计首条。旧格式审核指纹保守失效，需要重审；未通过忽略配置或素材变化放松门禁。
@@ -135,6 +142,8 @@ node scripts/electron-migration-smoke.mjs
 # macOS 已安装 Electron/native 模块的附加迁移回归
 ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron ./node_modules/vitest/vitest.mjs run src/main/db/database.test.ts
 ```
+
+`npm run build` 为编译构建，不是打包安装或发布验收。
 
 未验证范围：真实服务商/付费 API、模型输出质量、完整桌面三入口点击制作及视觉交互、其他平台与打包安装、签名/公证/发布。未重新执行下方历史大项目性能测量、audit 或外部文档检查器。未解决的产品限制仍包括跨文件发布没有整体事务、角色/素材缺少正式版本模型，以及人工确认和跨集质量分析；本轮未扩展这些能力。
 
