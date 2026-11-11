@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import {
   listLLMModels,
@@ -20,9 +20,14 @@ import {
   DEFAULT_WIRE_API,
   getProviderOptions,
   toLLMFormState,
-  type LLMFormState
+  type LLMFormState,
+  type ProviderOption
 } from '@renderer/settings/llm-config'
 import { useToastStore } from '@renderer/stores/toastStore'
+import {
+  modelTestNotice,
+  updateCredentialDraft
+} from '@renderer/settings/llm-settings-helpers'
 
 export interface LLMConfigManager {
   llmConfigs: LLMConfig[]
@@ -41,7 +46,7 @@ export interface LLMConfigManager {
   hasStoredApiKey: boolean
   form: LLMFormState
   setForm: Dispatch<SetStateAction<LLMFormState>>
-  providerOptions: ReturnType<typeof getProviderOptions>
+  providerOptions: ProviderOption[]
   filteredConfigs: LLMConfig[]
   handleProviderChange: (provider: LLMProviderType) => void
   handleFetchModels: () => Promise<void>
@@ -80,8 +85,37 @@ export function useLLMConfigManager(): LLMConfigManager {
   >({})
   const [fetchingModels, setFetchingModels] = useState(false)
   const [availableModels, setAvailableModels] = useState<LLMModelInfo[]>([])
-  const [hasStoredApiKey, setHasStoredApiKey] = useState(false)
-  const [form, setForm] = useState<LLMFormState>(() => createDefaultLLMForm())
+  const [hasStoredApiKey, setStoredApiKeyState] = useState(false)
+  const [form, setFormState] = useState<LLMFormState>(() =>
+    createDefaultLLMForm()
+  )
+  const draftRef = useRef({ form, hasStoredApiKey })
+  const setHasStoredApiKey = useCallback((value: boolean) => {
+    draftRef.current.hasStoredApiKey = value
+    setStoredApiKeyState(value)
+  }, [])
+  const setForm: Dispatch<SetStateAction<LLMFormState>> = useCallback(
+    (action) => {
+      const previous = draftRef.current
+      const next = typeof action === 'function' ? action(previous.form) : action
+      const updated = updateCredentialDraft(
+        previous.form,
+        next,
+        previous.hasStoredApiKey
+      )
+      if (
+        previous.form.provider !== next.provider ||
+        previous.form.baseUrl !== next.baseUrl
+      ) {
+        setAvailableModels([])
+        setTestResult(null)
+      }
+      draftRef.current = updated
+      setHasStoredApiKey(updated.hasStoredApiKey)
+      setFormState(updated.form)
+    },
+    [setHasStoredApiKey]
+  )
 
   useEffect(() => {
     void loadLLMConfigs()
@@ -118,11 +152,17 @@ export function useLLMConfigManager(): LLMConfigManager {
     setAvailableModels([])
     try {
       const payload: LLMModelListRequest = {
+        provider: form.provider,
         baseUrl: form.baseUrl,
         apiKey: form.apiKey || undefined,
         configId: editingId && hasStoredApiKey ? editingId : undefined
       }
       const result = await listLLMModels(payload)
+      if (
+        draftRef.current.form.provider !== form.provider ||
+        draftRef.current.form.baseUrl !== form.baseUrl
+      )
+        return
       if (result.success) {
         setAvailableModels(result.models)
         addToast('success', result.message)
@@ -134,24 +174,43 @@ export function useLLMConfigManager(): LLMConfigManager {
       }
     } catch (error) {
       addToast('error', getExceptionMessage(error, '获取模型列表失败'))
+    } finally {
+      setFetchingModels(false)
     }
-    setFetchingModels(false)
   }
 
   const handleTestConnection = async () => {
+    if (
+      form.category === 'video' ||
+      !window.confirm(modelTestNotice(form.category))
+    )
+      return
     setTesting(true)
     setTestResult(null)
-    const result: LLMConnectionTestResult = await testLLMConnection({
-      ...form,
-      id: editingId || '',
-      apiKey: form.apiKey
-    })
-    setTestResult(result)
-    setTesting(false)
-    addToast(result.success ? 'success' : 'error', result.message)
+    try {
+      const result: LLMConnectionTestResult = await testLLMConnection({
+        ...form,
+        id: editingId || '',
+        apiKey: form.apiKey
+      })
+      if (
+        draftRef.current.form.provider === form.provider &&
+        draftRef.current.form.baseUrl === form.baseUrl
+      )
+        setTestResult(result)
+      addToast(result.success ? 'success' : 'error', result.message)
+    } catch {
+      addToast('error', '测试失败，请检查网络和模型设置')
+    } finally {
+      setTesting(false)
+    }
   }
 
   const handleSave = async () => {
+    if (!form.apiKey.trim() && !(editingId && hasStoredApiKey)) {
+      addToast('error', '请输入 API Key；端点或 Provider 变更后必须重新输入')
+      return
+    }
     const payload = {
       ...form,
       ...(editingId && hasStoredApiKey && !form.apiKey.trim()
@@ -216,11 +275,24 @@ export function useLLMConfigManager(): LLMConfigManager {
   }
 
   const handleSetDefault = async (id: string) => {
-    await setDefaultLLM(id)
-    addToast('success', '已设为默认模型')
+    try {
+      await setDefaultLLM(id)
+      addToast('success', '已设为默认模型')
+    } catch {
+      addToast('error', '无法设为默认，请先编辑配置并重新输入 API Key')
+    }
   }
 
   const handleCardTest = async (config: LLMConfig) => {
+    if (
+      config.category === 'video' ||
+      !window.confirm(modelTestNotice(config.category))
+    )
+      return
+    if (!config.apiKey.trim() && !config.hasStoredApiKey) {
+      addToast('error', '缺少 API Key，请编辑配置并重新输入')
+      return
+    }
     setTestingCardId(config.id)
     setCardTestResult((prev) => {
       const next = { ...prev }

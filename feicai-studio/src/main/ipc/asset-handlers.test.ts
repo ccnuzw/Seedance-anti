@@ -1,159 +1,177 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync
+} from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import type { Project } from '@shared/types'
+import { IPC } from '@shared/ipc-channels'
 
-const handlers = new Map<string, Function>()
-const assertRegisteredProjectRoot = vi.fn((input: string) => input)
-const assertProjectFileReadAllowed = vi.fn((input: string) => input)
-const assetManagerConstructor = vi.fn()
-const loadCharacters = vi.fn()
-const loadScenes = vi.fn()
-const loadPrompts = vi.fn()
-const getPromptStats = vi.fn()
-const uploadReferenceImage = vi.fn()
-const listReferenceImages = vi.fn()
-const updateAssetPrompt = vi.fn()
-
+const mocks = vi.hoisted(() => {
+  const frame = { url: 'file:///app/index.html' }
+  const sender = {
+    mainFrame: frame,
+    isDestroyed: () => false,
+    getURL: () => frame.url
+  }
+  return {
+    handlers: new Map<string, (...args: unknown[]) => unknown>(),
+    projects: [] as Project[],
+    frame,
+    sender
+  }
+})
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: (channel: string, handler: Function) => {
-      handlers.set(channel, handler)
-    }
+    handle: (channel: string, callback: (...args: unknown[]) => unknown) =>
+      mocks.handlers.set(channel, callback)
+  },
+  BrowserWindow: {
+    fromWebContents: (sender: unknown) =>
+      sender === mocks.sender ? { id: 1 } : null
   }
 }))
-
-vi.mock('../security/access-control', () => ({
-  assertProjectFileReadAllowed,
-  assertRegisteredProjectRoot
+vi.mock('../services/project-service', () => ({
+  listRegisteredProjects: () => mocks.projects
 }))
+import { registerAssetHandlers } from './asset-handlers'
+import {
+  registerProjectRoot,
+  rememberSelectedFile,
+  resetAccessControl
+} from '../security/access-control'
+import { setTrustedIpcRendererUrl } from '../security/safe-ipc'
+import { flushPendingWrites } from '../io/atomic-file'
 
-vi.mock('../asset/asset-manager', () => ({
-  AssetManager: class MockAssetManager {
-    projectPath: string
+const directories: string[] = []
+function temporary(): string {
+  const root = realpathSync.native(
+    mkdtempSync(join(tmpdir(), 'feicai-asset-ipc-'))
+  )
+  directories.push(root)
+  return root
+}
+function addProject(root: string): void {
+  mocks.projects.push({
+    id: 'project',
+    name: '测试',
+    visualStyle: '写实',
+    targetMedium: '短剧',
+    totalEpisodes: 1,
+    projectPath: root,
+    config: {
+      projectName: '测试',
+      visualStyle: '写实',
+      targetMedium: '短剧',
+      totalEpisodes: 1,
+      createdAt: 'now',
+      directories: { assetsDir: 'custom-assets' }
+    },
+    createdAt: 'now',
+    updatedAt: 'now'
+  })
+  registerProjectRoot(root)
+}
+function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
+  return Promise.resolve().then(() =>
+    mocks.handlers.get(channel)!(
+      { senderFrame: mocks.frame, sender: mocks.sender },
+      ...args
+    )
+  )
+}
+beforeEach(() => {
+  mocks.handlers.clear()
+  mocks.projects.length = 0
+  resetAccessControl()
+  mocks.frame.url = 'file:///app/index.html'
+  setTrustedIpcRendererUrl(mocks.frame.url)
+  registerAssetHandlers()
+})
+afterEach(async () => {
+  await flushPendingWrites()
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true })
+})
 
-    constructor(projectPath: string) {
-      this.projectPath = projectPath
-      assetManagerConstructor(projectPath)
+describe('资产IPC真实边界', () => {
+  it('从数据库注册配置而非硬编码assets目录读取和编辑资产', async () => {
+    const root = temporary()
+    addProject(root)
+    mkdirSync(join(root, 'custom-assets'))
+    const file = join(root, 'custom-assets/character-prompts.md')
+    writeFileSync(file, '## 主角\n\n原提示词')
+    const result = await invoke(IPC.ASSET_LIST_CHARACTERS, root)
+    expect(result).toEqual([
+      expect.objectContaining({ name: '主角', promptText: '原提示词' })
+    ])
+    expect(
+      await invoke(IPC.ASSET_UPDATE_PROMPT, {
+        projectPath: root,
+        assetType: 'character',
+        assetName: '主角',
+        newPromptText: '新提示词'
+      })
+    ).toEqual({ success: true })
+    expect(readFileSync(file, 'utf8')).toContain('新提示词')
+  })
+
+  it('上传真实二进制仅授权选中源，拒绝无效类型与链接目标', async () => {
+    const root = temporary()
+    const external = temporary()
+    addProject(root)
+    const source = join(external, 'source.png')
+    const bytes = Buffer.from([137, 80, 78, 71, 1, 2, 3])
+    writeFileSync(source, bytes)
+    const params = {
+      projectPath: root,
+      assetType: 'scene',
+      assetName: 'street',
+      sourcePath: source
     }
-
-    loadCharacters = loadCharacters
-    loadScenes = loadScenes
-    loadPrompts = loadPrompts
-    getPromptStats = getPromptStats
-    uploadReferenceImage = uploadReferenceImage
-    listReferenceImages = listReferenceImages
-    updateAssetPrompt = updateAssetPrompt
-
-    getProjectPath() {
-      return this.projectPath
-    }
-  }
-}))
-
-describe('asset-handlers', () => {
-  beforeEach(() => {
-    handlers.clear()
-    vi.clearAllMocks()
-  })
-
-  async function registerHandlers() {
-    vi.resetModules()
-    const { registerAssetHandlers } = await import('./asset-handlers')
-    registerAssetHandlers()
-    return await import('@shared/ipc-channels')
-  }
-
-  it('空项目路径列角色时直接返回空数组', async () => {
-    const { IPC } = await registerHandlers()
-
-    const handler = handlers.get(IPC.ASSET_LIST_CHARACTERS)
-    const result = await handler?.({}, '')
-
-    expect(result).toEqual([])
-    expect(assetManagerConstructor).not.toHaveBeenCalled()
-  })
-
-  it('同一项目路径会复用 AssetManager 实例', async () => {
-    const { IPC } = await registerHandlers()
-    loadCharacters.mockResolvedValue([{ name: '主角' }])
-    loadScenes.mockResolvedValue([{ name: '客厅' }])
-
-    const characterHandler = handlers.get(IPC.ASSET_LIST_CHARACTERS)
-    const sceneHandler = handlers.get(IPC.ASSET_LIST_SCENES)
-    const characterResult = await characterHandler?.({}, '/tmp/project')
-    const sceneResult = await sceneHandler?.({}, '/tmp/project')
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(assetManagerConstructor).toHaveBeenCalledTimes(1)
-    expect(assetManagerConstructor).toHaveBeenCalledWith('/tmp/project')
-    expect(characterResult).toEqual([{ name: '主角' }])
-    expect(sceneResult).toEqual([{ name: '客厅' }])
-  })
-
-  it('上传图片时会先校验源文件读取权限并调用 manager', async () => {
-    await registerHandlers()
-    uploadReferenceImage.mockResolvedValue({
-      success: true,
-      path: '/tmp/project/assets/character/hero.png'
-    })
-
-    const handler = handlers.get('asset:upload-image')
-    const payload = {
-      projectPath: '/tmp/project',
-      assetType: 'character' as const,
-      assetName: 'hero',
-      sourcePath: '/tmp/source/hero.png'
-    }
-    const result = await handler?.({}, payload)
-
-    expect(assertProjectFileReadAllowed).toHaveBeenCalledWith(
-      '/tmp/source/hero.png'
+    await expect(invoke('asset:upload-image', params)).rejects.toThrow('未授权')
+    rememberSelectedFile(source)
+    const path = await invoke('asset:upload-image', params)
+    expect(typeof path).toBe('string')
+    expect(readFileSync(String(path))).toEqual(bytes)
+    await expect(
+      invoke('asset:upload-image', { ...params, assetType: '../escape' })
+    ).rejects.toThrow('素材类型')
+    symlinkSync(
+      join(external, 'missing.png'),
+      join(root, 'custom-assets/images/scene/link.png')
     )
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(uploadReferenceImage).toHaveBeenCalledWith(
-      'character',
-      'hero',
-      '/tmp/source/hero.png'
-    )
-    expect(result).toEqual({
-      success: true,
-      path: '/tmp/project/assets/character/hero.png'
-    })
+    await expect(
+      invoke('asset:upload-image', { ...params, assetName: 'link' })
+    ).rejects.toThrow('符号链接')
   })
 
-  it('切换项目路径时会重新创建 AssetManager', async () => {
-    await registerHandlers()
-    listReferenceImages.mockResolvedValue([])
-
-    const handler = handlers.get('asset:list-images')
-    await handler?.({}, '/tmp/project-a', 'character')
-    await handler?.({}, '/tmp/project-b', 'scene')
-
-    expect(assetManagerConstructor).toHaveBeenCalledTimes(2)
-    expect(assetManagerConstructor).toHaveBeenNthCalledWith(1, '/tmp/project-a')
-    expect(assetManagerConstructor).toHaveBeenNthCalledWith(2, '/tmp/project-b')
-    expect(listReferenceImages).toHaveBeenNthCalledWith(1, 'character')
-    expect(listReferenceImages).toHaveBeenNthCalledWith(2, 'scene')
-  })
-
-  it('更新资产提示词时会调用 manager 更新文本', async () => {
-    const { IPC } = await registerHandlers()
-    updateAssetPrompt.mockResolvedValue({ success: true })
-
-    const handler = handlers.get(IPC.ASSET_UPDATE_PROMPT)
-    const result = await handler?.(
-      {},
-      {
-        projectPath: '/tmp/project',
-        assetType: 'scene',
-        assetName: 'street',
-        newPromptText: '夜景街道，湿润路面'
-      }
+  it('拒绝未注册根、非法集数、远端和同URL子frame', async () => {
+    const root = temporary()
+    await expect(invoke(IPC.ASSET_LIST_CHARACTERS, root)).rejects.toThrow(
+      '未授权'
     )
-
-    expect(updateAssetPrompt).toHaveBeenCalledWith(
-      'scene',
-      'street',
-      '夜景街道，湿润路面'
-    )
-    expect(result).toEqual({ success: true })
+    addProject(root)
+    await expect(invoke('asset:load-prompts', root, 0)).rejects.toThrow('集数')
+    await expect(
+      invoke('asset:list-images', root, '../../outside')
+    ).rejects.toThrow('素材类型')
+    mocks.frame.url = 'https://evil.example/'
+    await expect(invoke(IPC.ASSET_LIST_SCENES, root)).rejects.toThrow('frame')
+    mocks.frame.url = 'file:///app/index.html'
+    await expect(
+      Promise.resolve().then(() =>
+        mocks.handlers.get(IPC.ASSET_LIST_SCENES)!(
+          { sender: mocks.sender, senderFrame: { url: mocks.frame.url } },
+          root
+        )
+      )
+    ).rejects.toThrow('frame')
   })
 })

@@ -5,29 +5,16 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
-import { useShallow } from 'zustand/react/shallow'
 
 /**
  * 在任何包含 /project/:id 路由的页面中调用。
- * 当 URL 中的 id 与当前 store 中的 currentProject 不匹配时，
- * 自动调用 loadProject 从数据库恢复项目上下文。
+ * 路由项目变化时加载项目与集数，不以另一项目遗留的集数数量判断已加载。
  */
 export function useProjectSync(): void {
   const { id } = useParams<{ id: string }>()
-  const { currentProject, episodeCount, loadProject } = useProjectStore(
-    useShallow((s) => ({
-      currentProject: s.currentProject,
-      episodeCount: s.episodes.length,
-      loadProject: s.loadProject
-    }))
-  )
+  const loadProject = useProjectStore((s) => s.loadProject)
 
   useEffect(() => {
-    if (
-      id &&
-      (!currentProject || currentProject.id !== id || episodeCount === 0)
-    ) {
-      loadProject(id)
-    }
-  }, [id, currentProject, episodeCount, loadProject])
+    if (id) void loadProject(id)
+  }, [id, loadProject])
 }

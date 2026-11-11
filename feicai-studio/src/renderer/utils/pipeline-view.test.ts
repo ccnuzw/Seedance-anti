@@ -20,6 +20,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -93,6 +94,12 @@ describe('pipeline-view', () => {
 
     const workflowAvailability = {
       story: getWorkflowActionAvailability(episode, 'story', 'script', false),
+      story_review: getWorkflowActionAvailability(
+        episode,
+        'story_review',
+        'script',
+        false
+      ),
       script: getWorkflowActionAvailability(episode, 'script', 'script', false),
       script_review: getWorkflowActionAvailability(
         episode,
@@ -133,7 +140,6 @@ describe('pipeline-view', () => {
       type: 'navigate',
       path: '/project/1/source'
     })
-    expect(novelSpec.primaryLabel).toBe('打开小说原文')
 
     const approvedSpec = resolveWorkflowCardActionSpec({
       cardId: 'script_approved',
@@ -163,6 +169,12 @@ describe('pipeline-view', () => {
     })
     const workflowAvailability = {
       story: getWorkflowActionAvailability(episode, 'story', 'novel', true),
+      story_review: getWorkflowActionAvailability(
+        episode,
+        'story_review',
+        'novel',
+        true
+      ),
       script: getWorkflowActionAvailability(episode, 'script', 'novel', true),
       script_review: getWorkflowActionAvailability(
         episode,

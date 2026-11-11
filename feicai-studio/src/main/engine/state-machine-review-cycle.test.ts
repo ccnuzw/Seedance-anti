@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { handleReviewCycleResult } from './state-machine-review-cycle'
 
 describe('state-machine-review-cycle', () => {
-  it('审核通过时会切换到完成态并返回 passed', () => {
+  it('审核通过时会在落盘后切换完成态并返回 passed', async () => {
     const onStateChange = vi.fn()
     const onLog = vi.fn()
     const onStageComplete = vi.fn()
     const updateEpisodeStatus = vi.fn().mockResolvedValue(undefined)
     const markStageReviewResult = vi.fn().mockResolvedValue(undefined)
 
-    const outcome = handleReviewCycleResult({
+    const outcome = await handleReviewCycleResult({
       stage: 'director',
       reviewResult: {
         stage: 'director',
@@ -47,12 +47,12 @@ describe('state-machine-review-cycle', () => {
     })
   })
 
-  it('审核失败但未耗尽重试时会返回下一次重试信息', () => {
+  it('审核失败但未耗尽重试时会返回下一次重试信息', async () => {
     const onStateChange = vi.fn()
     const onLog = vi.fn()
     const onStageComplete = vi.fn()
 
-    const outcome = handleReviewCycleResult({
+    const outcome = await handleReviewCycleResult({
       stage: 'art',
       reviewResult: {
         stage: 'art',
@@ -90,8 +90,8 @@ describe('state-machine-review-cycle', () => {
     })
   })
 
-  it('超过最大重试次数时会返回 exhausted 结果', () => {
-    const outcome = handleReviewCycleResult({
+  it('超过最大重试次数时会返回 exhausted 结果', async () => {
+    const outcome = await handleReviewCycleResult({
       stage: 'storyboard',
       reviewResult: {
         stage: 'storyboard_review',
@@ -122,10 +122,10 @@ describe('state-machine-review-cycle', () => {
     )
   })
 
-  it('reviewResult 为空时会按 0 分进入重试且不回写审核结果', () => {
+  it('reviewResult 为空时会按 0 分进入重试且不回写审核结果', async () => {
     const markStageReviewResult = vi.fn().mockResolvedValue(undefined)
 
-    const outcome = handleReviewCycleResult({
+    const outcome = await handleReviewCycleResult({
       stage: 'director',
       reviewResult: null,
       episodeNum: 1,

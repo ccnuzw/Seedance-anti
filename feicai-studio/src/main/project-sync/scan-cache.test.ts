@@ -1,22 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { invalidateProjectScanCache, scanEpisodeFilesystem } from './scan'
 
-const existsSync = vi.fn()
-const readdirSync = vi.fn()
-const readFileSync = vi.fn()
-const statSync = vi.fn()
-const parseReviewMarkdown = vi.fn()
-
-vi.mock('fs', () => ({
+const {
   existsSync,
   readdirSync,
   readFileSync,
-  statSync
+  statSync,
+  parseReviewMarkdown,
+  isReviewCurrent
+} = vi.hoisted(() => ({
+  existsSync: vi.fn(),
+  readdirSync: vi.fn(),
+  readFileSync: vi.fn(),
+  statSync: vi.fn(),
+  parseReviewMarkdown: vi.fn(),
+  isReviewCurrent: vi.fn()
 }))
-
-vi.mock('@shared/review-artifacts', () => ({
-  parseReviewMarkdown
+vi.mock('fs', () => ({ existsSync, readdirSync, readFileSync, statSync }))
+vi.mock('@shared/review-artifacts', () => ({ parseReviewMarkdown }))
+vi.mock('../engine/artifact-provenance', () => ({ isReviewCurrent }))
+vi.mock('../security/access-control', () => ({
+  assertPathWithinProject: (_root: string, path: string) => path,
+  assertEpisodeNumber: vi.fn()
 }))
-
 vi.mock('@shared/path-resolver', () => ({
   resolveEpisodeArtifactPath: (
     projectPath: string,
@@ -35,143 +41,87 @@ vi.mock('@shared/path-resolver', () => ({
 
 describe('scan 缓存行为', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.resetModules()
-  })
-
-  it('会缓存审核解析结果，并在 mtime 未变化时复用缓存', async () => {
-    existsSync.mockImplementation((filePath: string) =>
-      filePath.includes('scriptReview-ep01.md')
+    vi.resetAllMocks()
+    invalidateProjectScanCache()
+    existsSync.mockImplementation((path: string) =>
+      /(?:script|scriptReview)-ep01\.md$/.test(path)
     )
-    statSync.mockReturnValue({ mtimeMs: 100 })
+    statSync.mockReturnValue({ mtimeMs: 100, ctimeMs: 100, size: 10 })
     readFileSync.mockReturnValue('# review')
+    isReviewCurrent.mockReturnValue(true)
     parseReviewMarkdown.mockReturnValue({
       stage: 'script_review',
-      reviewType: 'business',
       result: 'PASS',
-      passed: true,
-      score: 8,
-      feedback: 'ok',
-      issues: [],
-      createdAt: '2026-05-08T00:00:00.000Z'
+      passed: true
     })
-
-    const { scanEpisodeFilesystem } = await import('./scan')
-
-    const first = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
-    const second = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
-
-    expect(readFileSync).toHaveBeenCalledTimes(1)
-    expect(parseReviewMarkdown).toHaveBeenCalledTimes(1)
-    expect(first.hasScriptReview).toBe(true)
-    expect(second.hasScriptReview).toBe(true)
-    expect(first.scriptReviewPath).toBe('/tmp/project/scriptReview-ep01.md')
-    expect(second.scriptReviewPath).toBe('/tmp/project/scriptReview-ep01.md')
   })
 
-  it('会在审核文件 mtime 变化后重新解析', async () => {
-    existsSync.mockImplementation((filePath: string) =>
-      filePath.includes('scriptReview-ep01.md')
-    )
-    statSync
-      .mockReturnValueOnce({ mtimeMs: 100 })
-      .mockReturnValueOnce({ mtimeMs: 101 })
-    readFileSync
-      .mockReturnValueOnce('# review-v1')
-      .mockReturnValueOnce('# review-v2')
-    parseReviewMarkdown
-      .mockReturnValueOnce({
-        stage: 'script_review',
-        reviewType: 'business',
-        result: 'PASS',
-        passed: true,
-        score: 8,
-        feedback: 'ok',
-        issues: [],
-        createdAt: '2026-05-08T00:00:00.000Z'
-      })
-      .mockReturnValueOnce({
-        stage: 'script_review',
-        reviewType: 'business',
-        result: 'FAIL',
-        passed: false,
-        score: 5,
-        feedback: 'retry',
-        issues: [],
-        createdAt: '2026-05-08T00:10:00.000Z'
-      })
-
-    const { scanEpisodeFilesystem } = await import('./scan')
-
+  it('缓存审核解析但每次重新校验当前依赖', () => {
     const first = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
     const second = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
-
-    expect(readFileSync).toHaveBeenCalledTimes(2)
-    expect(parseReviewMarkdown).toHaveBeenCalledTimes(2)
     expect(first.hasScriptReview).toBe(true)
+    expect(second.hasScriptReview).toBe(true)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(1)
+    expect(readFileSync).toHaveBeenCalledTimes(1)
+    expect(isReviewCurrent).toHaveBeenCalledTimes(2)
+    isReviewCurrent.mockReturnValue(false)
+    expect(
+      scanEpisodeFilesystem('/tmp/project', undefined, 1, false).hasScriptReview
+    ).toBe(false)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(1)
+  })
+
+  it('审核mtime或size改变时重新解析，失败审核仍可打开但不通过', () => {
+    scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
+    statSync.mockReturnValue({ mtimeMs: 101, ctimeMs: 101, size: 11 })
+    parseReviewMarkdown.mockReturnValue({
+      stage: 'script_review',
+      result: 'FAIL',
+      passed: false
+    })
+    const second = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(2)
     expect(second.hasScriptReview).toBe(false)
     expect(second.scriptReviewPath).toBe('/tmp/project/scriptReview-ep01.md')
   })
 
-  it('会缓存提示词统计结果，并在 mtime 未变化时复用缓存', async () => {
-    existsSync.mockImplementation((filePath: string) =>
-      filePath.includes('seedancePrompts-ep01.md')
+  it('缓存提示词统计，文件改变后重新读取统计', () => {
+    existsSync.mockImplementation((path: string) =>
+      path.includes('seedancePrompts-ep01.md')
     )
-    statSync.mockReturnValue({ mtimeMs: 200 })
-    readFileSync.mockReturnValue(
-      [
-        '## 镜头一',
-        '建议时长：10',
-        '内容 A',
-        '',
-        '## 镜头二',
-        '时长：12秒',
-        '内容 B'
-      ].join('\n')
-    )
-
-    const { scanEpisodeFilesystem } = await import('./scan')
-
+    readFileSync.mockReturnValue('## 镜头一\n建议时长：10')
     const first = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
     const second = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
-
+    expect(first.totalPrompts).toBe(1)
+    expect(second.totalDurationSeconds).toBe(10)
     expect(readFileSync).toHaveBeenCalledTimes(1)
-    expect(first.totalPrompts).toBe(2)
-    expect(first.totalDurationSeconds).toBe(22)
-    expect(second.totalPrompts).toBe(2)
-    expect(second.totalDurationSeconds).toBe(22)
+    statSync.mockReturnValue({ mtimeMs: 101, ctimeMs: 101, size: 50 })
+    readFileSync.mockReturnValue(
+      '## 镜头一\n建议时长：10\n## 镜头二\n时长：12秒'
+    )
+    const third = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
+    expect(readFileSync).toHaveBeenCalledTimes(2)
+    expect(third.totalPrompts).toBe(2)
+    expect(third.totalDurationSeconds).toBe(22)
+    expect(third.status).not.toBe('complete')
   })
 
-  it('会在提示词文件 mtime 变化后重新统计', async () => {
-    existsSync.mockImplementation((filePath: string) =>
-      filePath.includes('seedancePrompts-ep01.md')
-    )
-    statSync
-      .mockReturnValueOnce({ mtimeMs: 200 })
-      .mockReturnValueOnce({ mtimeMs: 201 })
-    readFileSync
-      .mockReturnValueOnce(['## 镜头一', '建议时长：10', '内容 A'].join('\n'))
-      .mockReturnValueOnce(
-        [
-          '## 镜头一',
-          '建议时长：10',
-          '内容 A',
-          '',
-          '## 镜头二',
-          '建议时长：15',
-          '内容 B'
-        ].join('\n')
-      )
+  it('解析缓存限容并逐出最旧条目', () => {
+    for (let i = 0; i < 257; i++)
+      scanEpisodeFilesystem(`/tmp/project-${i}`, undefined, 1, false)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(257)
+    scanEpisodeFilesystem('/tmp/project-256', undefined, 1, false)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(257)
+    scanEpisodeFilesystem('/tmp/project-0', undefined, 1, false)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(258)
+  })
 
-    const { scanEpisodeFilesystem } = await import('./scan')
-
-    const first = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
-    const second = scanEpisodeFilesystem('/tmp/project', undefined, 1, false)
-
-    expect(readFileSync).toHaveBeenCalledTimes(2)
-    expect(first.totalPrompts).toBe(1)
-    expect(first.totalDurationSeconds).toBe(10)
-    expect(second.totalPrompts).toBe(2)
-    expect(second.totalDurationSeconds).toBe(25)
+  it('仅使指定项目缓存失效', () => {
+    scanEpisodeFilesystem('/tmp/project-a', undefined, 1, false)
+    scanEpisodeFilesystem('/tmp/project-b', undefined, 1, false)
+    invalidateProjectScanCache('/tmp/project-a')
+    scanEpisodeFilesystem('/tmp/project-a', undefined, 1, false)
+    scanEpisodeFilesystem('/tmp/project-b', undefined, 1, false)
+    expect(parseReviewMarkdown).toHaveBeenCalledTimes(3)
   })
 })

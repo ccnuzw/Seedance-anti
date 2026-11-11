@@ -23,7 +23,7 @@ function sanitizeProjectDirectory(
 
 export function normalizeProjectConfig(
   config?: Partial<ProjectConfig> | null
-): ProjectConfig {
+): ProjectConfig & Required<Pick<ProjectConfig, 'entryStage'>> {
   const createdAt = config?.createdAt || new Date().toISOString()
   return {
     projectName: config?.projectName || '未命名项目',

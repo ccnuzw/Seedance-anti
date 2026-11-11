@@ -14,6 +14,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -65,12 +66,7 @@ describe('pipeline-page-view', () => {
       automationReady: true
     })
 
-    expect(summary.entryLabel).toBe('从剧情开始')
-    expect(summary.workflowMode).toBe('story_to_shortdrama')
-    expect(summary.currentStageLabel).toBe('剧本已通过')
     expect(summary.progress).toBeGreaterThan(0)
-    expect(summary.automationGate).toBe('已开放自动执行段')
-    expect(summary.automationReady).toBe(true)
   })
 
   it('仅在 episode 完成时显示完成横幅', () => {

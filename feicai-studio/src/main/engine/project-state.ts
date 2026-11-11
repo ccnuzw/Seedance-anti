@@ -2,8 +2,8 @@
 // Project State Persistence — 项目状态持久化
 // ============================================================
 
-import { readFile, writeFile, mkdir } from 'fs/promises'
-import { dirname } from 'path'
+import { atomicWriteFile, readJsonWithRecovery } from '../io/atomic-file'
+import { assertPathWithinProject } from '../security/access-control'
 import type {
   EpisodePipelineState,
   EpisodeStatus,
@@ -21,6 +21,8 @@ type StageSnapshotUpdate = Partial<
   status?: EpisodeStageSnapshot['status']
 }
 
+const stateMutations = new Map<string, Promise<void>>()
+
 function createEmptyEpisodeState(episodeNum: number): EpisodePipelineState {
   const now = new Date().toISOString()
   return {
@@ -35,19 +37,44 @@ function createEmptyEpisodeState(episodeNum: number): EpisodePipelineState {
   }
 }
 
+/** Saved history is portable; absolute paths and identity are not trusted on restore. */
+export function normalizeSavedProjectState(
+  state: ProjectPipelineState,
+  projectPath: string,
+  projectId: string
+): ProjectPipelineState {
+  if (!state.episodes || typeof state.episodes !== 'object')
+    throw new Error('项目流水线状态格式损坏')
+  state.projectId = projectId
+  for (const episode of Object.values(state.episodes)) {
+    for (const snapshot of Object.values(episode.stageStates || {})) {
+      if (!snapshot) continue
+      for (const key of ['outputPath', 'reviewPath'] as const) {
+        const savedPath = snapshot[key]
+        if (!savedPath) continue
+        try {
+          snapshot[key] = assertPathWithinProject(projectPath, savedPath)
+        } catch {
+          snapshot[key] = undefined
+        }
+      }
+    }
+  }
+  return state
+}
+
 export class ProjectStatePersistence {
   private filePath: string
   private state: ProjectPipelineState
 
   constructor(
-    projectPath: string,
-    projectId: string,
+    private readonly projectPath: string,
+    private readonly projectId: string,
     config?: Partial<ProjectConfig> | null
   ) {
-    this.filePath = resolveProjectArtifactPath(
+    this.filePath = assertPathWithinProject(
       projectPath,
-      'pipelineState',
-      config
+      resolveProjectArtifactPath(projectPath, 'pipelineState', config)
     )
     this.state = {
       projectId,
@@ -57,19 +84,29 @@ export class ProjectStatePersistence {
   }
 
   async load(): Promise<ProjectPipelineState> {
-    try {
-      const raw = await readFile(this.filePath, 'utf-8')
-      this.state = JSON.parse(raw) as ProjectPipelineState
-    } catch {
-      // ignore missing state file
+    const state = await readJsonWithRecovery<ProjectPipelineState>(
+      this.filePath
+    )
+    if (state) {
+      if (
+        !state.episodes ||
+        typeof state.episodes !== 'object' ||
+        typeof state.projectId !== 'string'
+      ) {
+        throw new Error('项目流水线状态格式损坏')
+      }
+      this.state = normalizeSavedProjectState(
+        state,
+        this.projectPath,
+        this.projectId
+      )
     }
     return this.state
   }
 
   async save(): Promise<void> {
     this.state.updatedAt = new Date().toISOString()
-    await mkdir(dirname(this.filePath), { recursive: true })
-    await writeFile(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8')
+    await atomicWriteFile(this.filePath, JSON.stringify(this.state, null, 2))
   }
 
   getEpisode(episodeNum: number): EpisodePipelineState | undefined {
@@ -84,14 +121,10 @@ export class ProjectStatePersistence {
     episodeNum: number,
     update: Partial<EpisodePipelineState>
   ): Promise<void> {
-    const existing =
-      this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
-    this.state.episodes[episodeNum] = {
+    await this.mutateEpisode(episodeNum, (existing) => ({
       ...existing,
-      ...update,
-      updatedAt: new Date().toISOString()
-    }
-    await this.save()
+      ...update
+    }))
   }
 
   async markStageRunning(
@@ -118,13 +151,13 @@ export class ProjectStatePersistence {
     episodeNum: number,
     stage: PipelineStage,
     review: ReviewResult,
-    extra: { reviewPath?: string; outputPath?: string } = {}
+    extra: {
+      reviewPath?: string
+      outputPath?: string
+      operationId?: string
+    } = {}
   ): Promise<void> {
-    const existing =
-      this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
-    const reviews = [...existing.reviews]
-    reviews.push(review)
-
+    // Read/merge review history inside the per-path transaction, not a stale instance snapshot.
     await this.updateStageSnapshot(
       episodeNum,
       stage,
@@ -134,15 +167,18 @@ export class ProjectStatePersistence {
         reviewPath: extra.reviewPath,
         outputPath: extra.outputPath,
         lastReview: review,
+        operationId: extra.operationId,
         lastError: review.passed ? undefined : review.feedback
       },
-      {
+      (existing) => ({
         lastStage: stage,
-        reviews,
+        reviews: [...existing.reviews, review],
         completedStages: review.passed
           ? Array.from(new Set([...(existing.completedStages || []), stage]))
-          : existing.completedStages
-      }
+          : (existing.completedStages || []).filter(
+              (completed) => completed !== stage
+            )
+      })
     )
   }
 
@@ -158,15 +194,12 @@ export class ProjectStatePersistence {
         completedAt: new Date().toISOString(),
         lastError: undefined
       },
-      {
+      (existing) => ({
         lastStage: stage,
         completedStages: Array.from(
-          new Set([
-            ...(this.getEpisode(episodeNum)?.completedStages || []),
-            stage
-          ])
+          new Set([...(existing.completedStages || []), stage])
         )
-      }
+      })
     )
   }
 
@@ -202,38 +235,60 @@ export class ProjectStatePersistence {
     })
   }
 
+  private async mutateEpisode(
+    episodeNum: number,
+    update: (existing: EpisodePipelineState) => EpisodePipelineState
+  ): Promise<void> {
+    const previous = stateMutations.get(this.filePath) || Promise.resolve()
+    const operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await this.load()
+        const existing =
+          this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
+        this.state.episodes[episodeNum] = {
+          ...update(existing),
+          updatedAt: new Date().toISOString()
+        }
+        await this.save()
+      })
+    stateMutations.set(this.filePath, operation)
+    try {
+      await operation
+    } finally {
+      if (stateMutations.get(this.filePath) === operation)
+        stateMutations.delete(this.filePath)
+    }
+  }
+
   private async updateStageSnapshot(
     episodeNum: number,
     stage: PipelineStage,
     update: StageSnapshotUpdate,
-    episodeUpdate: Partial<EpisodePipelineState> = {}
+    episodeUpdate:
+      | Partial<EpisodePipelineState>
+      | ((existing: EpisodePipelineState) => Partial<EpisodePipelineState>) = {}
   ): Promise<void> {
-    const existing =
-      this.state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
-    const current = existing.stageStates[stage]
-    const attempts =
-      update.status === 'running'
-        ? (current?.attempts || 0) + 1
-        : current?.attempts || 0
-
-    const snapshot: EpisodeStageSnapshot = {
-      stage,
-      status: update.status || current?.status || 'pending',
-      attempts,
-      startedAt: update.startedAt ?? current?.startedAt,
-      completedAt: update.completedAt ?? current?.completedAt,
-      updatedAt: new Date().toISOString(),
-      outputPath: update.outputPath ?? current?.outputPath,
-      reviewPath: update.reviewPath ?? current?.reviewPath,
-      lastError: update.lastError ?? current?.lastError,
-      lastReview: update.lastReview ?? current?.lastReview
-    }
-
-    await this.updateEpisode(episodeNum, {
-      ...episodeUpdate,
-      stageStates: {
-        ...existing.stageStates,
-        [stage]: snapshot
+    await this.mutateEpisode(episodeNum, (existing) => {
+      const current = existing.stageStates[stage]
+      const snapshot: EpisodeStageSnapshot = {
+        ...current,
+        ...update,
+        stage,
+        status: update.status || current?.status || 'pending',
+        attempts:
+          (current?.attempts || 0) + (update.status === 'running' ? 1 : 0),
+        updatedAt: new Date().toISOString(),
+        outputPath: update.outputPath ?? current?.outputPath,
+        reviewPath: update.reviewPath ?? current?.reviewPath,
+        lastReview: update.lastReview ?? current?.lastReview
+      }
+      return {
+        ...existing,
+        ...(typeof episodeUpdate === 'function'
+          ? episodeUpdate(existing)
+          : episodeUpdate),
+        stageStates: { ...existing.stageStates, [stage]: snapshot }
       }
     })
   }

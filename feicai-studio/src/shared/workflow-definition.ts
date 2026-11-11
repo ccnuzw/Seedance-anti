@@ -1,11 +1,7 @@
 import type { WorkflowStageId } from './types'
 
 export type WorkflowStageMode =
-  | 'source'
-  | 'gate'
-  | 'manual'
-  | 'automation'
-  | 'final'
+  'source' | 'gate' | 'manual' | 'automation' | 'final'
 
 export interface WorkflowStageDefinition {
   id: WorkflowStageId

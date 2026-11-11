@@ -1,17 +1,10 @@
-import {
-  getExceptionMessage,
-  getServiceErrorMessage,
-  isServiceSuccess
-} from '@renderer/services/service-contracts'
-import type { AutomatedPipelineStage } from '@shared/types'
+import type { AutomatedPipelineStage } from './types'
 import type {
   PipelineStartParams,
-  WorkflowActionParams
-} from '@renderer/services/workflow-actions'
-import type {
-  ServicePipelineStartResult,
-  ServiceWorkflowActionResult
-} from '@renderer/services/service-contracts'
+  WorkflowActionParams,
+  PipelineStartResult as ServicePipelineStartResult,
+  WorkflowActionResult as ServiceWorkflowActionResult
+} from './ipc-contracts'
 
 export type BatchMode =
   | 'smart_next'
@@ -38,7 +31,12 @@ export const MODE_MAP: Record<
     autoSelect?: true
   }
 > = {
-  smart_next: { label: '智能下一步', emoji: '🧭', workflow: true, autoSelect: true },
+  smart_next: {
+    label: '智能下一步',
+    emoji: '🧭',
+    workflow: true,
+    autoSelect: true
+  },
   preproduction: { label: '库存到剧审', emoji: '🧱', workflow: true },
   story_until_ready: {
     label: '拆到库存充足',
@@ -62,7 +60,7 @@ export const MODE_MAP: Record<
   story_review: { label: '批次审核', emoji: '🔎', workflow: true },
   script: { label: '剧本生成', emoji: '📖', workflow: true },
   script_review: { label: '剧本审核', emoji: '📝', workflow: true },
-  full: { label: '全流程', emoji: '🚀' },
+  full: { label: '制作流程（导演→服化道→分镜）', emoji: '▶' },
   director: { label: '导演分析', emoji: '🎬', stage: 'director' },
   art: { label: '服化道', emoji: '🎨', stage: 'art' },
   storyboard: { label: '分镜编写', emoji: '📐', stage: 'storyboard' }
@@ -90,8 +88,15 @@ export interface BatchWorkflowBaseParams {
   visualStyle: string
   targetMedium: string
   maxRetries?: number
+  batchNumber?: number
+  operationId?: string
+  checkpoint?: () => Promise<void>
+  getWaterline?: () => Promise<
+    NonNullable<BatchAutoSelectionInput['waterline']>
+  >
   plotBreakdown?: {
     unusedEntries: number
+    nextBatchNumber?: number
     unprocessedChapterCount: number | null
     nextActionMode: 'script' | 'breakdown' | 'done'
   } | null
@@ -162,7 +167,10 @@ export function resolveBatchExecutionEpisodes(
       Math.ceil((waterline.unprocessedChapterCount || 0) / 6)
     )
     const start = waterline.nextBatchNumber || 1
-    return Array.from({ length: remainingBatches }, (_item, index) => start + index)
+    return Array.from(
+      { length: remainingBatches },
+      (_item, index) => start + index
+    )
   }
 
   if (input.mode === 'script_until_empty') {
@@ -223,6 +231,15 @@ async function ensureStoryInventory(
   params: BatchWorkflowBaseParams,
   deps: BatchWorkflowDeps
 ): Promise<BatchWorkflowRunResult | null> {
+  await params.checkpoint?.()
+  const waterline = params.getWaterline
+    ? await params.getWaterline()
+    : params.plotBreakdown
+  params = {
+    ...params,
+    batchNumber:
+      params.batchNumber ?? waterline?.nextBatchNumber ?? params.episodeNum
+  }
   const story = await deps.runStoryGeneration(params)
   if (!story.success) {
     return {
@@ -336,7 +353,9 @@ export async function runBatchWorkflowMode(
   const maxRetries = normalizeMaxRetries(params.maxRetries)
   for (
     let retry = 1;
-    !scriptReview.success && scriptReview.review?.feedback && retry <= maxRetries;
+    !scriptReview.success &&
+    scriptReview.review?.feedback &&
+    retry <= maxRetries;
     retry++
   ) {
     const retryScript = await deps.runScriptGeneration({
@@ -379,8 +398,8 @@ export function isBatchRunSuccess(
   result: ServicePipelineStartResult,
   mode: BatchMode
 ): boolean {
-  if (!isServiceSuccess(result)) return false
-  if (mode === 'full') {
+  if (result.success !== true) return false
+  if (mode === 'full' || mode === 'storyboard') {
     return result.state === 'episode_complete'
   }
   return result.state === `${MODE_MAP[mode].stage}_done`
@@ -393,7 +412,11 @@ export function resolveBatchRunProgress(
 ): { status: 'done' | 'error'; progress: string; elapsed: number } {
   if (isWorkflowBatchMode(mode)) {
     const message =
-      'message' in result ? result.message : result.success ? '完成' : '执行失败'
+      'message' in result
+        ? result.message
+        : result.success
+          ? '完成'
+          : '执行失败'
     return {
       status: result.success ? 'done' : 'error',
       progress: `${message} (${elapsed}s)`,
@@ -401,7 +424,7 @@ export function resolveBatchRunProgress(
     }
   }
 
-  if (isBatchRunSuccess(result, mode)) {
+  if ('state' in result && isBatchRunSuccess(result, mode)) {
     return {
       status: 'done',
       progress: `完成 (${elapsed}s)`,
@@ -411,14 +434,72 @@ export function resolveBatchRunProgress(
 
   return {
     status: 'error',
-    progress: getServiceErrorMessage(
-      result,
-      result.state ? `失败: ${result.state}` : '执行失败'
-    ),
+    progress:
+      ('error' in result ? result.error : undefined) ||
+      result.message ||
+      ('state' in result && result.state
+        ? `失败: ${result.state}`
+        : '执行失败'),
     elapsed
   }
 }
 
 export function resolveBatchRunException(error: unknown): string {
-  return getExceptionMessage(error, '执行异常')
+  return error instanceof Error && error.message ? error.message : '执行异常'
+}
+
+export const BATCH_IPC = {
+  START: 'batch:start',
+  GET_STATE: 'batch:get-state',
+  PAUSE: 'batch:pause',
+  RESUME: 'batch:resume',
+  STOP: 'batch:stop',
+  STATE_CHANGED: 'batch:state-changed'
+} as const
+
+export interface BatchStartParams {
+  projectId: string
+  projectPath: string
+  mode: BatchMode
+  episodes: number[]
+}
+export interface BatchTaskState {
+  episodeNum: number
+  status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
+  progress?: string
+  elapsed?: number
+  /** Durable substep receipts, including retries, in invocation order. */
+  steps: Record<
+    string,
+    ServiceWorkflowActionResult | ServicePipelineStartResult
+  >
+  inFlight?: { key: string; operationId: string; action: string }
+  initialWaterline?: NonNullable<BatchAutoSelectionInput['waterline']>
+  batchNumber?: number
+}
+export interface BatchQueueState {
+  id: string
+  projectId: string
+  projectPath: string
+  mode: BatchMode
+  status:
+    | 'running'
+    | 'paused'
+    | 'stopping'
+    | 'interrupted'
+    | 'completed'
+    | 'stopped'
+    | 'error'
+  cursor: number
+  tasks: BatchTaskState[]
+  updatedAt: string
+  error?: string
+}
+export interface BatchAPI {
+  startBatch(params: BatchStartParams): Promise<BatchQueueState>
+  getBatchState(): Promise<BatchQueueState | null>
+  pauseBatch(): Promise<BatchQueueState | null>
+  resumeBatch(): Promise<BatchQueueState | null>
+  stopBatch(): Promise<BatchQueueState | null>
+  onBatchState(callback: (state: BatchQueueState) => void): () => void
 }

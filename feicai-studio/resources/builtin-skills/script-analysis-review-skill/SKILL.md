@@ -1,6 +1,8 @@
 ---
 name: script-analysis-review-skill
 description: 导演自审技能。用于审核阶段一导演分析产出（讲戏本、人物清单、场景清单），通过逐行比对、脑内预演和评分制确保讲戏质量达标。
+dependencies:
+  - ../director-skill/templates/director-analysis-template.md
 ---
 
 # 导演分析审核技能
@@ -80,6 +82,10 @@ outputs/<集数>/01-director-analysis.md
         □ 每个剧情点的"场景"字段是否与场景清单匹配？
 
 [输出规范]
+最终仅输出一个 JSON 对象：
+{"result":"PASS或FAIL","score":0,"feedback":"完整评分表、逐项核验与整体评价","issues":[{"severity":"critical或major或minor","description":"具体问题","location":"位置","suggestion":"修改方向"}]}
+score 为 0..10 的有限数值，使用剧情点平均分；issues 无问题时为空数组。
+下方 Markdown 评分表及评价仅作为 feedback 字符串内的内容依据，不在 JSON 外输出另一份结论。
 
     评分表格式：
         | 剧情点 | 节拍密度 | 画面感 | 动作链 | 镜头 | 光影 | 情绪 | 衔接 | 均分 | 问题摘要 |

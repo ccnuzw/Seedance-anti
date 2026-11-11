@@ -1,6 +1,8 @@
 export type PlotBreakdownEntryStatus = '未用' | '已用'
 
 export interface PlotBreakdownEntry {
+  /** 持久化身份；旧库存首次解析时由全局序号生成。 */
+  id?: string
   index: number
   content: string
   episode: number | null
@@ -46,7 +48,10 @@ export interface PlotBreakdownWaterlineSummary {
 }
 
 function normalizeMarkdownText(raw: string): string {
-  return raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  return raw
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
 }
 
 function parseBatchHeading(line: string): {
@@ -54,23 +59,29 @@ function parseBatchHeading(line: string): {
   chapterStart: number | null
   chapterEnd: number | null
 } | null {
-  const match = line.match(
-    /^###\s+(?:(?:第\d+批)[（(])?第(\d+)-(\d+)章[）)]?/u
-  )
-  if (!match) return null
-  const chapterStart = Number(match[1])
-  const chapterEnd = Number(match[2])
+  const match = line.match(/^###\s+第(\d+)批(?:[（(]第(\d+)-(\d+)章[）)])?/u)
+  const legacy = line.match(/^###\s+第(\d+)-(\d+)章/u)
+  if (!match && !legacy) return null
   return {
     heading: line.trim(),
-    chapterStart: Number.isFinite(chapterStart) ? chapterStart : null,
-    chapterEnd: Number.isFinite(chapterEnd) ? chapterEnd : null
+    chapterStart: match?.[2]
+      ? Number(match[2])
+      : legacy
+        ? Number(legacy[1])
+        : null,
+    chapterEnd: match?.[3]
+      ? Number(match[3])
+      : legacy
+        ? Number(legacy[2])
+        : null
   }
 }
 
 export function parsePlotBreakdownEntryLine(
   line: string
 ): PlotBreakdownEntry | null {
-  const trimmed = line.trim()
+  const idMatch = line.match(/\s*<!--\s*plot-id:([\w-]+)\s*-->\s*$/u)
+  const trimmed = line.replace(/\s*<!--\s*plot-id:[\w-]+\s*-->\s*$/u, '').trim()
   if (!trimmed.startsWith('【剧情')) return null
 
   const match = trimmed.match(
@@ -85,6 +96,7 @@ export function parsePlotBreakdownEntryLine(
 
   return {
     index: Number.isFinite(index) ? index : 0,
+    id: idMatch?.[1] || `plot-${index}`,
     content,
     episode: Number.isFinite(episode || NaN) ? episode : null,
     status,
@@ -99,9 +111,7 @@ export function extractPlotBreakdownEntries(raw: string): PlotBreakdownEntry[] {
     .filter((entry): entry is PlotBreakdownEntry => Boolean(entry))
 }
 
-export function parsePlotBreakdownMarkdown(
-  raw: string
-): PlotBreakdownDocument {
+export function parsePlotBreakdownMarkdown(raw: string): PlotBreakdownDocument {
   const lines = normalizeMarkdownText(raw).split('\n')
   const planningLines: string[] = []
   const trailingLines: string[] = []
@@ -262,7 +272,8 @@ export function updatePlotBreakdownPlanning(
     projectName: params.projectName?.trim() || doc.projectName,
     projectType: params.projectType?.trim() || doc.projectType,
     range: targetChapterLimit > 0 ? `第1-${targetChapterLimit}章` : doc.range,
-    targetEpisodes: totalEpisodes > 0 ? `${totalEpisodes} 集` : doc.targetEpisodes,
+    targetEpisodes:
+      totalEpisodes > 0 ? `${totalEpisodes} 集` : doc.targetEpisodes,
     chaptersPerEpisode:
       chaptersPerEpisode > 0
         ? `${chaptersPerEpisode}章/集`
@@ -275,7 +286,7 @@ export function formatPlotBreakdownEntry(entry: PlotBreakdownEntry): string {
     entry.episode && Number.isFinite(entry.episode)
       ? `，第${entry.episode}集`
       : ''
-  return `【剧情${entry.index}】${entry.content}${episodeLabel}，状态：${entry.status}`
+  return `【剧情${entry.index}】${entry.content}${episodeLabel}，状态：${entry.status}${entry.id ? ` <!-- plot-id:${entry.id} -->` : ''}`
 }
 
 export function updatePlotBreakdownEntryStatus(
@@ -348,7 +359,13 @@ export function summarizePlotBreakdownWaterline(
     usedEpisodeNumbers: [...usedEpisodeNumbers].sort((a, b) => a - b),
     chapterStart: chapterStarts.length > 0 ? Math.min(...chapterStarts) : null,
     chapterEnd: chapterEnds.length > 0 ? Math.max(...chapterEnds) : null,
-    nextBatchNumber: doc.batches.length + 1
+    nextBatchNumber:
+      Math.max(
+        doc.batches.length,
+        ...doc.batches.map(
+          (batch) => Number(batch.heading.match(/^###\s+第(\d+)批/u)?.[1]) || 0
+        )
+      ) + 1
   }
 }
 
@@ -362,7 +379,9 @@ export function getPlotBreakdownEntriesForEpisode(
   return doc.batches
     .flatMap((batch) => batch.entries)
     .filter((entry) => entry.episode === episode)
-    .filter((entry) => (options.status ? entry.status === options.status : true))
+    .filter((entry) =>
+      options.status ? entry.status === options.status : true
+    )
 }
 
 export function formatPlotBreakdownEntriesMarkdown(
@@ -392,37 +411,110 @@ export function appendPlotBreakdownBatch(
   document: PlotBreakdownDocument
   appendedEntries: number
 } {
-  const incoming = params.entries.filter((entry) => entry.content.trim())
-  if (incoming.length === 0) {
-    return { document: doc, appendedEntries: 0 }
+  validateGeneratedPlotBreakdownEntries(params.entries)
+  const batchNumber = params.heading.match(/^###\s+第(\d+)批/u)?.[1]
+  const previous = params.replaceExistingHeading
+    ? doc.batches.find(
+        (batch) =>
+          batch.heading === params.heading ||
+          (batchNumber &&
+            batch.heading.match(/^###\s+第(\d+)批/u)?.[1] === batchNumber)
+      )
+    : undefined
+  let maxIndex = Math.max(
+    0,
+    ...doc.batches.flatMap((batch) => batch.entries.map((entry) => entry.index))
+  )
+  const matched = new Set<PlotBreakdownEntry>()
+  const normalizedEntries: PlotBreakdownEntry[] = params.entries.map(
+    (entry, offset) => {
+      const old =
+        previous?.entries.find(
+          (item) =>
+            !matched.has(item) &&
+            item.id === entry.id &&
+            item.episode === entry.episode
+        ) ||
+        previous?.entries.find(
+          (item) =>
+            !matched.has(item) &&
+            item.content === entry.content &&
+            item.episode === entry.episode
+        ) ||
+        (previous?.entries[offset]?.episode === entry.episode &&
+        !matched.has(previous.entries[offset])
+          ? previous.entries[offset]
+          : undefined)
+      if (old) matched.add(old)
+      const index = old?.index ?? ++maxIndex
+      return {
+        ...entry,
+        index,
+        id: old?.id || `plot-${index}`,
+        status: old?.status || ('未用' as PlotBreakdownEntryStatus)
+      }
+    }
+  )
+  // 已绑定剧本的剧情不可因重新审核同批草稿而丢失。
+  normalizedEntries.push(
+    ...(previous?.entries.filter(
+      (entry) => entry.status === '已用' && !matched.has(entry)
+    ) || [])
+  )
+  const nextBatch = {
+    heading: params.heading,
+    chapterStart: params.chapterStart ?? null,
+    chapterEnd: params.chapterEnd ?? null,
+    entries: normalizedEntries
   }
-
-  const batches = params.replaceExistingHeading
-    ? doc.batches.filter((batch) => batch.heading !== params.heading)
-    : [...doc.batches]
-  const maxIndex = batches
-    .flatMap((batch) => batch.entries)
-    .reduce((max, entry) => Math.max(max, entry.index), 0)
-
-  const normalizedEntries = incoming.map((entry, offset) => ({
-    ...entry,
-    index: maxIndex + offset + 1,
-    status: entry.status || '未用'
-  }))
-
+  const batches = previous
+    ? doc.batches.map((batch) => (batch === previous ? nextBatch : batch))
+    : [...doc.batches, nextBatch]
   return {
-    document: {
-      ...doc,
-      batches: [
-        ...batches,
-        {
-          heading: params.heading,
-          chapterStart: params.chapterStart ?? null,
-          chapterEnd: params.chapterEnd ?? null,
-          entries: normalizedEntries
-        }
-      ]
-    },
-    appendedEntries: normalizedEntries.length
+    document: { ...doc, batches },
+    appendedEntries: params.entries.length
   }
+}
+
+/** 模型输出必须可以完整绑定目标集，不能把空/缺集/越界输出当作成功。 */
+export function validateGeneratedPlotBreakdownEntries(
+  entries: PlotBreakdownEntry[],
+  totalEpisodes?: number
+): void {
+  if (entries.length === 0) throw new Error('剧情拆解输出不包含有效剧情点')
+  const indices = new Set<number>()
+  for (const entry of entries) {
+    if (
+      !Number.isSafeInteger(entry.index) ||
+      entry.index <= 0 ||
+      indices.has(entry.index)
+    ) {
+      throw new Error('剧情点序号必须为不重复的正整数')
+    }
+    indices.add(entry.index)
+    if (!entry.content.trim()) throw new Error('剧情点内容不能为空')
+    if (
+      !Number.isSafeInteger(entry.episode) ||
+      !entry.episode ||
+      entry.episode < 1 ||
+      entry.episode > 10_000 ||
+      (totalEpisodes && entry.episode > totalEpisodes)
+    ) {
+      throw new Error('剧情点必须绑定目标范围内的集数')
+    }
+  }
+}
+
+export function validateGeneratedPlotBreakdown(
+  raw: string,
+  totalEpisodes?: number
+): PlotBreakdownEntry[] {
+  const lines = normalizeMarkdownText(raw)
+    .split('\n')
+    .filter((line) => line.trim().startsWith('【剧情'))
+  const entries = extractPlotBreakdownEntries(raw)
+  if (lines.length !== entries.length)
+    throw new Error('剧情拆解包含无法解析的剧情点')
+  validateGeneratedPlotBreakdownEntries(entries, totalEpisodes)
+  return entries
 }

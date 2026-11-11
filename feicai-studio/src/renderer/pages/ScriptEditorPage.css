@@ -1,6 +1,6 @@
 .script-editor-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: calc(100vh - var(--header-height) - var(--spacing-lg) * 2);
   min-height: 0;
   gap: var(--spacing-sm);
@@ -135,6 +135,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
   gap: var(--spacing-sm);
   height: 100%;
+  flex: 1;
   min-height: 0;
 }
 
@@ -149,7 +150,7 @@
 
 .document-workflow-main {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -459,6 +460,38 @@
   tab-size: 2;
   white-space: pre;
   overflow: auto;
+}
+
+.script-editor-page :is(button, select, textarea):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+@media (max-width: 1040px), (max-height: 650px) {
+  .script-editor-page {
+    height: auto;
+    min-height: 100%;
+  }
+  .script-editor-page .document-workflow-layout,
+  .script-editor-page .document-workflow-layout.has-side-panel {
+    display: flex;
+    height: auto;
+    flex-direction: column;
+  }
+  .script-editor-page .document-workflow-main {
+    min-height: 480px;
+    height: 70vh;
+  }
+  .script-editor-page .document-workflow-side-panel {
+    max-height: 180px;
+  }
+  .script-editor-page .document-workflow-command-sidebar {
+    max-height: none;
+    overflow: visible;
+  }
+  .script-editor-page .editor-info {
+    flex-wrap: wrap;
+  }
 }
 
 .plain-markdown-editor::selection {

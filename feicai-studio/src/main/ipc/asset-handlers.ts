@@ -1,104 +1,83 @@
-// ============================================================
-// Asset IPC Handlers — 资产管理 IPC
-// ============================================================
-
-import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc-channels'
-import { AssetManager } from '../asset/asset-manager'
+import { AssetManager, assertAssetType } from '../asset/asset-manager'
 import {
-  assertProjectFileReadAllowed,
-  assertRegisteredProjectRoot
+  assertEpisodeNumber,
+  assertNonEmptyString,
+  assertRegisteredProjectRoot,
+  isSameProjectRoot
 } from '../security/access-control'
+import { assertAllowedKeys, assertRecord } from '../security/input-validation'
+import { registerSafeIpcHandler as handle } from '../security/safe-ipc'
+import { listRegisteredProjects } from '../services/project-service'
 
-// 缓存 AssetManager 实例
-let assetManager: AssetManager | null = null
-
-function getManager(projectPath: string): AssetManager {
-  const trustedPath = assertRegisteredProjectRoot(projectPath)
-  if (!assetManager || assetManager.getProjectPath() !== trustedPath) {
-    assetManager = new AssetManager(trustedPath)
-  }
-  return assetManager
+function getManager(projectPath: unknown): AssetManager {
+  assertNonEmptyString(projectPath, '项目目录')
+  const root = assertRegisteredProjectRoot(projectPath)
+  const project = listRegisteredProjects().find((item) =>
+    isSameProjectRoot(item.projectPath, root)
+  )
+  if (!project) throw new Error('项目未注册')
+  return new AssetManager(root, project.config)
 }
 
 export function registerAssetHandlers(): void {
-  ipcMain.handle(
-    IPC.ASSET_LIST_CHARACTERS,
-    async (_event, projectPath: string) => {
-      if (!projectPath) return []
-      const mgr = getManager(projectPath)
-      return mgr.loadCharacters()
-    }
+  handle(IPC.ASSET_LIST_CHARACTERS, async (_event, path: unknown) =>
+    getManager(path).loadCharacters()
   )
-
-  ipcMain.handle(IPC.ASSET_LIST_SCENES, async (_event, projectPath: string) => {
-    if (!projectPath) return []
-    const mgr = getManager(projectPath)
-    return mgr.loadScenes()
-  })
-
-  ipcMain.handle(
+  handle(IPC.ASSET_LIST_SCENES, async (_event, path: unknown) =>
+    getManager(path).loadScenes()
+  )
+  handle(
     'asset:load-prompts',
-    async (_event, projectPath: string, episodeNum: number) => {
-      const mgr = getManager(projectPath)
-      return mgr.loadPrompts(episodeNum)
+    async (_event, path: unknown, episode: unknown) => {
+      assertEpisodeNumber(episode)
+      return getManager(path).loadPrompts(episode)
     }
   )
-
-  ipcMain.handle(
+  handle(
     'asset:prompt-stats',
-    async (_event, projectPath: string, episodeNum: number) => {
-      const mgr = getManager(projectPath)
-      return mgr.getPromptStats(episodeNum)
+    async (_event, path: unknown, episode: unknown) => {
+      assertEpisodeNumber(episode)
+      return getManager(path).getPromptStats(episode)
     }
   )
-
-  ipcMain.handle(
-    'asset:upload-image',
-    async (
-      _event,
-      params: {
-        projectPath: string
-        assetType: 'character' | 'scene'
-        assetName: string
-        sourcePath: string
-      }
-    ) => {
-      assertProjectFileReadAllowed(params.sourcePath)
-      const mgr = getManager(params.projectPath)
-      return mgr.uploadReferenceImage(
-        params.assetType,
-        params.assetName,
-        params.sourcePath
-      )
-    }
-  )
-
-  ipcMain.handle(
-    'asset:list-images',
-    async (_event, projectPath: string, assetType: string) => {
-      const mgr = getManager(projectPath)
-      return mgr.listReferenceImages(assetType as 'character' | 'scene')
-    }
-  )
-
-  ipcMain.handle(
-    IPC.ASSET_UPDATE_PROMPT,
-    async (
-      _event,
-      params: {
-        projectPath: string
-        assetType: 'character' | 'scene'
-        assetName: string
-        newPromptText: string
-      }
-    ) => {
-      const mgr = getManager(params.projectPath)
-      return mgr.updateAssetPrompt(
-        params.assetType,
-        params.assetName,
-        params.newPromptText
-      )
-    }
-  )
+  handle('asset:upload-image', async (_event, params: unknown) => {
+    assertRecord(params)
+    assertAllowedKeys(params, [
+      'projectPath',
+      'assetType',
+      'assetName',
+      'sourcePath'
+    ])
+    assertAssetType(params.assetType)
+    assertNonEmptyString(params.assetName, '素材名')
+    assertNonEmptyString(params.sourcePath, '参考图路径')
+    return getManager(params.projectPath).uploadReferenceImage(
+      params.assetType,
+      params.assetName,
+      params.sourcePath
+    )
+  })
+  handle('asset:list-images', async (_event, path: unknown, type: unknown) => {
+    assertAssetType(type)
+    return getManager(path).listReferenceImages(type)
+  })
+  handle(IPC.ASSET_UPDATE_PROMPT, async (_event, params: unknown) => {
+    assertRecord(params)
+    assertAllowedKeys(params, [
+      'projectPath',
+      'assetType',
+      'assetName',
+      'newPromptText'
+    ])
+    assertAssetType(params.assetType)
+    assertNonEmptyString(params.assetName, '素材名')
+    if (typeof params.newPromptText !== 'string')
+      throw new Error('提示词必须为字符串')
+    return getManager(params.projectPath).updateAssetPrompt(
+      params.assetType,
+      params.assetName,
+      params.newPromptText
+    )
+  })
 }

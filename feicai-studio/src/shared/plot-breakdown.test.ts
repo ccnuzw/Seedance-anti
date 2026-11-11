@@ -9,7 +9,8 @@ import {
   summarizePlotBreakdown,
   summarizePlotBreakdownWaterline,
   updatePlotBreakdownPlanning,
-  updatePlotBreakdownEntryStatus
+  updatePlotBreakdownEntryStatus,
+  validateGeneratedPlotBreakdown
 } from './plot-breakdown'
 
 describe('plot-breakdown', () => {
@@ -79,7 +80,9 @@ describe('plot-breakdown', () => {
     )
 
     expect(result.updated).toBe(true)
-    expect(result.content).toContain('【剧情1】院子，主角救人，危机反转，第1集，状态：已用')
+    expect(result.content).toContain(
+      '【剧情1】院子，主角救人，危机反转，第1集，状态：已用'
+    )
   })
 
   it('可以按集数筛选剧情点并转成 markdown 片段', () => {
@@ -173,5 +176,73 @@ describe('plot-breakdown', () => {
     expect(next).toContain('- **目标集数**：30 集')
     expect(next).toContain('- **章节-集数分配原则**：3章/集')
     expect(next).toContain('【剧情1】院子，主角救人')
+  })
+})
+
+describe('plot-breakdown stable identity', () => {
+  it('替换旧批次不重编号其他批次，保留已用身份并在往返后稳定', () => {
+    const base = parsePlotBreakdownMarkdown(
+      '# 剧情拆解\n\n## 剧情列表\n\n### 第1批（第1-6章）\n\n【剧情1】旧剧情，第1集，状态：已用\n\n### 第3批（第13-18章）\n\n【剧情8】后批剧情，第3集，状态：未用\n'
+    )
+    const replacement = appendPlotBreakdownBatch(base, {
+      heading: '### 第1批（第1-5章）',
+      chapterStart: 1,
+      chapterEnd: 5,
+      replaceExistingHeading: true,
+      entries: extractPlotBreakdownEntries(
+        '【剧情99】修订剧情，第1集，状态：未用\n【剧情100】新剧情，第2集，状态：未用'
+      )
+    }).document
+    expect(replacement.batches).toHaveLength(2)
+    expect(replacement.batches[0].entries[0]).toMatchObject({
+      id: 'plot-1',
+      index: 1,
+      status: '已用',
+      content: '修订剧情'
+    })
+    expect(replacement.batches[0].entries[1]).toMatchObject({
+      id: 'plot-9',
+      index: 9,
+      status: '未用'
+    })
+    expect(replacement.batches[1].entries[0]).toMatchObject({
+      id: 'plot-8',
+      index: 8
+    })
+    const reread = parsePlotBreakdownMarkdown(
+      serializePlotBreakdownMarkdown(replacement)
+    )
+    expect(reread.batches[0].entries[0].id).toBe('plot-1')
+    expect(summarizePlotBreakdownWaterline(reread).nextBatchNumber).toBe(4)
+  })
+
+  it('重审删除的已用剧情仍保留其剧本绑定', () => {
+    const base = parsePlotBreakdownMarkdown(
+      '# 剧情拆解\n\n## 剧情列表\n\n### 第1批\n\n【剧情1】已绑定剧情，第1集，状态：已用\n'
+    )
+    const next = appendPlotBreakdownBatch(base, {
+      heading: '### 第1批',
+      replaceExistingHeading: true,
+      entries: extractPlotBreakdownEntries(
+        '【剧情1】其他集剧情，第2集，状态：未用'
+      )
+    }).document
+    expect(getPlotBreakdownEntriesForEpisode(next, 1)[0]).toMatchObject({
+      id: 'plot-1',
+      content: '已绑定剧情',
+      status: '已用'
+    })
+    expect(getPlotBreakdownEntriesForEpisode(next, 2)[0].index).toBe(2)
+  })
+
+  it.each([
+    '',
+    '【剧情1】\n',
+    '【剧情1】内容，状态：未用',
+    '【剧情0】内容，第1集，状态：未用',
+    '【剧情1】内容，第3集，状态：未用',
+    '【剧情1】甲，第1集\n【剧情1】乙，第1集'
+  ])('无效模型结构不会进入库存：%s', (raw) => {
+    expect(() => validateGeneratedPlotBreakdown(raw, 2)).toThrow()
   })
 })

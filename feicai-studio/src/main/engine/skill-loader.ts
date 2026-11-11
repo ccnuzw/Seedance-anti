@@ -3,9 +3,27 @@
 // ============================================================
 
 import { readFile, readdir, stat } from 'fs/promises'
-import { join, basename } from 'path'
-import matter from 'gray-matter'
+import { join, basename, resolve, relative, isAbsolute } from 'path'
+import { parse as parseYaml } from 'yaml'
 import type { Skill } from '@shared/types'
+
+function parseSkillDocument(raw: string): {
+  data: Record<string, unknown>
+  content: string
+} {
+  const normalized = raw.replace(/^\uFEFF/, '')
+  if (!/^---\s*\r?\n/.test(normalized)) return { data: {}, content: normalized }
+  const match = normalized.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)
+  if (!match) throw new Error('Skill YAML 前置元数据缺少结束标记')
+  const data: unknown = parseYaml(match[1])
+  if (data !== null && (typeof data !== 'object' || Array.isArray(data))) {
+    throw new Error('Skill YAML 前置元数据必须是对象')
+  }
+  return {
+    data: (data ?? {}) as Record<string, unknown>,
+    content: normalized.slice(match[0].length)
+  }
+}
 
 export class SkillLoader {
   private skillsDir: string
@@ -27,7 +45,7 @@ export class SkillLoader {
 
     // 读取并解析 SKILL.md
     const raw = await readFile(skillMdPath, 'utf-8')
-    const { data: frontmatter, content: body } = matter(raw)
+    const { data: frontmatter, content: body } = parseSkillDocument(raw)
 
     // 加载子目录和附加文件
     const templates = await this.loadSubDir(join(skillDir, 'templates'))
@@ -39,12 +57,43 @@ export class SkillLoader {
 
     // 扫描所有文件
     const fileManifest = await this.listAllFiles(skillDir)
+    const dependencies = frontmatter.dependencies ?? []
+    if (
+      !Array.isArray(dependencies) ||
+      dependencies.some(
+        (file) => typeof file !== 'string' || !file.endsWith('.md')
+      )
+    ) {
+      throw new Error(
+        `Skill ${skillName} 的 dependencies 必须是 Markdown 路径数组`
+      )
+    }
+    const dependencyParts: string[] = []
+    for (const dependency of dependencies as string[]) {
+      const dependencyPath = resolve(skillDir, dependency)
+      const fromRoot = relative(resolve(this.skillsDir), dependencyPath)
+      if (
+        fromRoot === '..' ||
+        fromRoot.startsWith('../') ||
+        isAbsolute(fromRoot)
+      ) {
+        throw new Error(`Skill ${skillName} 引用了技能目录之外的依赖`)
+      }
+      // 显式依赖缺失或不可读是配置错误，不能静默省略审核依据。
+      dependencyParts.push(
+        `# 依赖依据：${dependency}\n\n${await readFile(dependencyPath, 'utf8')}`
+      )
+      fileManifest.push(`dependency:${dependency}`)
+    }
 
     const skill: Skill = {
       name: (frontmatter.name as string) || skillName,
       description: (frontmatter.description as string) || '',
       systemPrompt: body.trim(),
-      methodology: rootSupportingFiles.methodology || undefined,
+      methodology:
+        [rootSupportingFiles.methodology, ...dependencyParts]
+          .filter(Boolean)
+          .join('\n\n---\n\n') || undefined,
       templates,
       examples,
       guides:
@@ -165,7 +214,7 @@ export class SkillLoader {
         try {
           const skillMdPath = join(this.skillsDir, entry.name, 'SKILL.md')
           const raw = await readFile(skillMdPath, 'utf-8')
-          const { data } = matter(raw)
+          const { data } = parseSkillDocument(raw)
           skills.push({
             name: (data.name as string) || entry.name,
             description: (data.description as string) || ''

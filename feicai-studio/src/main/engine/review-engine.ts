@@ -1,26 +1,12 @@
-// ============================================================
-// Review Engine — 审核引擎（三层防偏 + 两步审核）
-// ============================================================
-//
-// 实现 FEICAI 的审核机制:
-//   第一层: 断点清洗 — 从文件系统重新读取产出
-//   第二层: 对抗性立场 — 注入"假设存在问题"的审核 prompt
-//   第三层: 评分锚定 — 起点 7 分，只有逐项验证后才上调
-//
-//   两步审核:
-//     Step 1: 业务审核（叙事/造型/分镜 专项）
-//     Step 2: 合规审核（平台内容红线）
-//
-
+// 两步审核：明确协议、逐调用上下文、取消/超时与正文来源绑定。
 import { readFile } from 'fs/promises'
 import { SkillLoader } from './skill-loader'
 import { PromptAssembler } from './prompt-assembler'
-import { OutputParser } from './output-parser'
+import { OutputParser, type ParsedReview } from './output-parser'
 import { REVIEW_SKILL_MAP, ANTIBIAS_PROMPT } from '@shared/constants'
 import type {
   AutomatedPipelineStage,
   ReviewResult,
-  ReviewIssue,
   ReviewStage,
   ProjectConfig
 } from '@shared/types'
@@ -29,261 +15,354 @@ import {
   resolveEpisodeArtifactPath,
   resolveProjectArtifactPath
 } from '@shared/path-resolver'
-import { parsePlotBreakdownMarkdown } from '@shared/plot-breakdown'
-import { formatPlotBreakdownEntriesMarkdown } from '@shared/plot-breakdown'
-import { getPlotBreakdownEntriesForEpisode } from '@shared/plot-breakdown'
+import {
+  parsePlotBreakdownMarkdown,
+  formatPlotBreakdownEntriesMarkdown,
+  getPlotBreakdownEntriesForEpisode
+} from '@shared/plot-breakdown'
+import { assertPathWithinProject } from '../security/access-control'
+import {
+  captureReviewProvenance,
+  hashReviewContent,
+  type ReviewProvenance
+} from './artifact-provenance'
 
-interface ReviewContext {
+interface ReviewOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
+  passScore?: number
+  provider?: ILLMProvider
+  waitUntilResumed?: () => Promise<void>
+}
+
+interface ReviewContext extends ReviewOptions {
   projectPath: string
   episodeNum: number
   scriptPath?: string
   projectConfig?: Partial<ProjectConfig> | null
 }
 
-interface ReviewContentParams {
+interface ReviewContentParams extends ReviewOptions {
   stage: ReviewStage
   reviewSkillName: string
   outputToReview: string
   originalScript?: string
   directorAnalysis?: string
   plotBreakdown?: string
+  artDesign?: string
+  projectPath?: string
+  episodeNum?: number
+  projectConfig?: Partial<ProjectConfig> | null
+}
+
+function assertActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? new Error('审核已取消')
+}
+
+function assertUnchanged(
+  provenance: ReviewProvenance,
+  projectPath: string,
+  stage: ReviewStage,
+  episodeNum: number,
+  config?: Partial<ProjectConfig> | null
+): void {
+  const current = captureReviewProvenance(
+    projectPath,
+    stage,
+    episodeNum,
+    config
+  )
+  const keys = Object.keys(current.inputHashes)
+  if (
+    current.artifactHash !== provenance.artifactHash ||
+    keys.length !== Object.keys(provenance.inputHashes).length ||
+    keys.some((key) => current.inputHashes[key] !== provenance.inputHashes[key])
+  ) {
+    throw new Error('审核期间正文或上游材料已变化，请重新审核')
+  }
 }
 
 export class ReviewEngine {
-  private skillLoader: SkillLoader
-  private promptAssembler: PromptAssembler
   private llmProvider: ILLMProvider | null = null
   private passScore = 7
 
-  constructor(skillLoader: SkillLoader, promptAssembler: PromptAssembler) {
-    this.skillLoader = skillLoader
-    this.promptAssembler = promptAssembler
-  }
+  constructor(
+    private skillLoader: SkillLoader,
+    private promptAssembler: PromptAssembler
+  ) {}
 
   setProvider(provider: ILLMProvider): void {
     this.llmProvider = provider
   }
-
   setPassScore(score: number): void {
     this.passScore = score
   }
 
-  /**
-   * 执行完整的两步审核
-   */
   async review(
     stage: AutomatedPipelineStage,
     ctx: ReviewContext
   ): Promise<ReviewResult> {
-    if (!this.llmProvider) throw new Error('LLM Provider 未设置')
-
-    // ===== 第一层：断点清洗 =====
-    // 从文件系统重新读取产出，不依赖上下文缓存
-    const freshOutput = await this.readFreshOutput(stage, ctx)
-    const freshScript = ctx.scriptPath
-      ? await readFile(ctx.scriptPath, 'utf-8')
-      : undefined
-
-    // 读取导演分析（art 和 storyboard 审核时作为对照）
-    let directorAnalysis: string | undefined
-    if (stage === 'art' || stage === 'storyboard') {
-      const analysisPath = resolveEpisodeArtifactPath(
+    const passScore = ctx.passScore ?? this.passScore
+    const provider = ctx.provider ?? this.llmProvider
+    if (!provider) throw new Error('LLM Provider 未设置')
+    assertActive(ctx.signal)
+    const reviewStage = stage === 'storyboard' ? 'storyboard_review' : stage
+    const provenance = captureReviewProvenance(
+      ctx.projectPath,
+      reviewStage,
+      ctx.episodeNum,
+      ctx.projectConfig
+    )
+    const artifact =
+      stage === 'art'
+        ? 'artDesign'
+        : stage === 'director'
+          ? 'directorAnalysis'
+          : 'seedancePrompts'
+    const readEpisode = async (id: typeof artifact | 'script') =>
+      readFile(
+        assertPathWithinProject(
+          ctx.projectPath,
+          resolveEpisodeArtifactPath(
+            ctx.projectPath,
+            id,
+            ctx.episodeNum,
+            ctx.projectConfig
+          )
+        ),
+        'utf8'
+      )
+    const output = await readEpisode(artifact)
+    const canonicalScript = assertPathWithinProject(
+      ctx.projectPath,
+      resolveEpisodeArtifactPath(
         ctx.projectPath,
-        'directorAnalysis',
+        'script',
         ctx.episodeNum,
         ctx.projectConfig
       )
-      try {
-        directorAnalysis = await readFile(analysisPath, 'utf-8')
-      } catch {
-        /* */
-      }
+    )
+    if (
+      ctx.scriptPath &&
+      assertPathWithinProject(ctx.projectPath, ctx.scriptPath) !==
+        canonicalScript
+    ) {
+      throw new Error('审核剧本路径与本集产物不匹配')
     }
-
-    // ===== Step 1: 业务审核 =====
-    return this.reviewContent({
-      stage: stage === 'storyboard' ? 'storyboard_review' : stage,
+    const script = await readEpisode('script')
+    const directorAnalysis =
+      stage === 'art' || stage === 'storyboard'
+        ? await readEpisode('directorAnalysis')
+        : undefined
+    const artDesign =
+      stage === 'storyboard' ? await readEpisode('artDesign') : undefined
+    const plotBreakdown = await this.readPlotBreakdownForReview(ctx)
+    assertActive(ctx.signal)
+    assertUnchanged(
+      provenance,
+      ctx.projectPath,
+      reviewStage,
+      ctx.episodeNum,
+      ctx.projectConfig
+    )
+    const result = await this.reviewContent({
+      stage: reviewStage,
       reviewSkillName: REVIEW_SKILL_MAP[stage],
-      outputToReview: freshOutput,
-      originalScript: freshScript,
+      outputToReview: output,
+      originalScript: script,
       directorAnalysis,
-      plotBreakdown:
-        stage === 'director' || stage === 'storyboard'
-          ? undefined
-          : await this.readPlotBreakdownForReview(ctx)
+      artDesign,
+      plotBreakdown,
+      projectPath: ctx.projectPath,
+      episodeNum: ctx.episodeNum,
+      projectConfig: ctx.projectConfig,
+      signal: ctx.signal,
+      timeoutMs: ctx.timeoutMs,
+      passScore,
+      waitUntilResumed: ctx.waitUntilResumed,
+      provider
     })
+    assertActive(ctx.signal)
+    assertUnchanged(
+      provenance,
+      ctx.projectPath,
+      reviewStage,
+      ctx.episodeNum,
+      ctx.projectConfig
+    )
+    return { ...result, ...provenance }
   }
 
-  /**
-   * 对任意内容执行两步审核
-   */
   async reviewContent(params: ReviewContentParams): Promise<ReviewResult> {
-    if (!this.llmProvider) throw new Error('LLM Provider 未设置')
+    // 在首次 await 前固定 provider、阈值与来源，避免其他执行改变共享 setter。
+    const provider = params.provider ?? this.llmProvider
+    const passScore = params.passScore ?? this.passScore
+    if (!provider) throw new Error('LLM Provider 未设置')
+    assertActive(params.signal)
+    if (!params.outputToReview.trim()) throw new Error('待审核内容为空')
+    const timeoutMs = params.timeoutMs ?? 90_000
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+      throw new Error('审核超时必须为正数')
+    if (!Number.isFinite(passScore) || passScore < 0 || passScore > 10)
+      throw new Error('审核阈值必须在 0..10 范围内')
+    if (
+      (params.projectPath === undefined) !==
+      (params.episodeNum === undefined)
+    ) {
+      throw new Error('审核来源必须同时提供项目路径和集数')
+    }
+    const provenance =
+      params.projectPath !== undefined
+        ? captureReviewProvenance(
+            params.projectPath,
+            params.stage,
+            params.episodeNum!,
+            params.projectConfig
+          )
+        : undefined
+    if (
+      provenance &&
+      provenance.artifactHash !== hashReviewContent(params.outputToReview)
+    ) {
+      throw new Error('待审正文与当前文件不一致，请重新读取')
+    }
+    const controller = new AbortController()
+    const forwardAbort = () =>
+      controller.abort(params.signal?.reason ?? new Error('审核已取消'))
+    params.signal?.addEventListener('abort', forwardAbort, { once: true })
+    const timer = setTimeout(
+      () => controller.abort(new Error('审核超时')),
+      timeoutMs
+    )
+    const signal = controller.signal
+    const deadline = Date.now() + timeoutMs
+    try {
+      assertActive(params.signal)
+      const business = await this.executeReview(
+        provider,
+        params.reviewSkillName,
+        ANTIBIAS_PROMPT,
+        params,
+        passScore,
+        signal,
+        deadline
+      )
+      // INVALID 仍执行合规以收齐修改意见；异常/取消则直接抛出，绝不启动第二步。
+      assertActive(signal)
+      const compliance = await this.executeReview(
+        provider,
+        'compliance-review-skill',
+        '你是合规审核员，严格检查内容是否触碰 Seedance 2.0 和 Gemini 平台红线。',
+        params,
+        passScore,
+        signal,
+        deadline
+      )
+      assertActive(signal)
+      if (provenance)
+        assertUnchanged(
+          provenance,
+          params.projectPath!,
+          params.stage,
+          params.episodeNum!,
+          params.projectConfig
+        )
+      const result =
+        business.result === 'INVALID' || compliance.result === 'INVALID'
+          ? 'INVALID'
+          : business.passed && compliance.passed
+            ? 'PASS'
+            : 'FAIL'
+      return {
+        stage: params.stage,
+        reviewType: 'business',
+        result,
+        passed: result === 'PASS',
+        score: business.score,
+        feedback: [
+          `## 业务审核: ${business.result === 'PASS' ? '✅' : '❌'} ${business.result} (${business.score}分)`,
+          business.feedback,
+          '',
+          `## 合规审核: ${compliance.result === 'PASS' ? '✅' : '❌'} ${compliance.result}`,
+          compliance.feedback
+        ].join('\n'),
+        issues: [...business.issues, ...compliance.issues],
+        createdAt: new Date().toISOString(),
+        ...provenance
+      }
+    } finally {
+      clearTimeout(timer)
+      params.signal?.removeEventListener('abort', forwardAbort)
+    }
+  }
 
-    const businessResult = await this.executeBusinessReview(
-      params.reviewSkillName,
+  private async executeReview(
+    provider: ILLMProvider,
+    skillName: string,
+    stance: string,
+    params: ReviewContentParams,
+    passScore: number,
+    signal: AbortSignal,
+    deadline: number
+  ): Promise<ParsedReview> {
+    assertActive(signal)
+    const skill = await this.skillLoader.load(skillName)
+    assertActive(signal)
+    const prompt = this.promptAssembler.assembleReview(
+      skill,
+      stance,
       params.outputToReview,
       params.originalScript,
       params.directorAnalysis,
-      params.plotBreakdown
+      params.plotBreakdown,
+      params.artDesign
     )
-
-    const complianceResult = await this.executeComplianceReview(
-      params.outputToReview
-    )
-
-    const allIssues = [...businessResult.issues, ...complianceResult.issues]
-
-    const passed = businessResult.passed && complianceResult.passed
-    const score = businessResult.score
-
-    return {
-      stage: params.stage,
-      reviewType: 'business',
-      result: passed ? 'PASS' : 'FAIL',
-      passed,
-      score,
-      feedback: this.formatFeedback(businessResult, complianceResult),
-      issues: allIssues,
-      createdAt: new Date().toISOString()
+    const aborted = Promise.withResolvers<never>()
+    const rejectAbort = () =>
+      aborted.reject(signal.reason ?? new Error('审核已取消'))
+    signal.addEventListener('abort', rejectAbort, { once: true })
+    try {
+      assertActive(signal)
+      if (params.waitUntilResumed) {
+        await Promise.race([params.waitUntilResumed(), aborted.promise])
+        assertActive(signal)
+      }
+      const response = await Promise.race([
+        provider.generate(prompt, {
+          signal,
+          timeoutMs: Math.max(1, deadline - Date.now())
+        }),
+        aborted.promise
+      ])
+      assertActive(signal)
+      return OutputParser.parseReview(response, passScore)
+    } finally {
+      signal.removeEventListener('abort', rejectAbort)
     }
-  }
-
-  /**
-   * 业务审核
-   */
-  private async executeBusinessReview(
-    reviewSkillName: string,
-    output: string,
-    script?: string,
-    directorAnalysis?: string,
-    plotBreakdown?: string
-  ): Promise<{
-    passed: boolean
-    score: number
-    issues: ReviewIssue[]
-    feedback: string
-  }> {
-    // 加载审核 Skill
-    const reviewSkill = await this.skillLoader.load(reviewSkillName)
-
-    // ===== 第二层 + 第三层：对抗性立场 + 评分锚定 =====
-    const prompt = this.promptAssembler.assembleReview(
-      reviewSkill,
-      ANTIBIAS_PROMPT,
-      output,
-      script,
-      directorAnalysis,
-      plotBreakdown
-    )
-
-    const response = await this.llmProvider!.generate(prompt)
-    return OutputParser.parseReview(response, this.passScore)
-  }
-
-  /**
-   * 合规审核
-   */
-  private async executeComplianceReview(output: string): Promise<{
-    passed: boolean
-    score: number
-    issues: ReviewIssue[]
-    feedback: string
-  }> {
-    const complianceSkill = await this.skillLoader.load(
-      'compliance-review-skill'
-    )
-
-    const prompt = this.promptAssembler.assembleReview(
-      complianceSkill,
-      '你是合规审核员，严格检查以下内容是否触碰 Seedance 2.0 和 Gemini 的平台内容红线。',
-      output
-    )
-
-    const response = await this.llmProvider!.generate(prompt)
-    return OutputParser.parseReview(response, this.passScore)
-  }
-
-  /**
-   * 从文件系统重新读取产出（断点清洗）
-   */
-  private async readFreshOutput(
-    stage: AutomatedPipelineStage,
-    ctx: ReviewContext
-  ): Promise<string> {
-    if (stage === 'art') {
-      // 服化道的产出在临时文件
-      return readFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'artDesign',
-          ctx.episodeNum,
-          ctx.projectConfig
-        ),
-        'utf-8'
-      )
-    }
-
-    if (stage === 'director') {
-      return readFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'directorAnalysis',
-          ctx.episodeNum,
-          ctx.projectConfig
-        ),
-        'utf-8'
-      )
-    }
-    if (stage === 'storyboard') {
-      return readFile(
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'seedancePrompts',
-          ctx.episodeNum,
-          ctx.projectConfig
-        ),
-        'utf-8'
-      )
-    }
-    throw new Error(`未知阶段: ${stage}`)
   }
 
   private async readPlotBreakdownForReview(
     ctx: ReviewContext
   ): Promise<string | undefined> {
-    const filePath = resolveProjectArtifactPath(
+    const filePath = assertPathWithinProject(
       ctx.projectPath,
-      'plotBreakdown',
-      ctx.projectConfig
+      resolveProjectArtifactPath(
+        ctx.projectPath,
+        'plotBreakdown',
+        ctx.projectConfig
+      )
     )
     try {
-      const raw = await readFile(filePath, 'utf-8')
-      const entries = getPlotBreakdownEntriesForEpisode(
-        parsePlotBreakdownMarkdown(raw),
-        ctx.episodeNum
+      const raw = await readFile(filePath, 'utf8')
+      return formatPlotBreakdownEntriesMarkdown(
+        getPlotBreakdownEntriesForEpisode(
+          parsePlotBreakdownMarkdown(raw),
+          ctx.episodeNum
+        )
       )
-      return formatPlotBreakdownEntriesMarkdown(entries)
-    } catch {
-      return undefined
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
     }
-  }
-
-  /**
-   * 格式化综合反馈
-   */
-  private formatFeedback(
-    business: { passed: boolean; score: number; feedback: string },
-    compliance: { passed: boolean; feedback: string }
-  ): string {
-    const lines: string[] = []
-    lines.push(
-      `## 业务审核: ${business.passed ? '✅ PASS' : '❌ FAIL'} (${business.score}分)`
-    )
-    lines.push(business.feedback)
-    lines.push('')
-    lines.push(`## 合规审核: ${compliance.passed ? '✅ PASS' : '❌ FAIL'}`)
-    lines.push(compliance.feedback)
-    return lines.join('\n')
   }
 }

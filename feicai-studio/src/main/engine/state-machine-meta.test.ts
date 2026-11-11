@@ -38,7 +38,8 @@ describe('state-machine-meta', () => {
       'idle',
       'episode_complete',
       'error',
-      'paused'
+      'director_done',
+      'art_done'
     ])
   })
 })

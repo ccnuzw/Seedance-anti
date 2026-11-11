@@ -38,7 +38,8 @@ export const PIPELINE_TERMINAL_STATES: PipelineState[] = [
   'idle',
   'episode_complete',
   'error',
-  'paused'
+  'director_done',
+  'art_done'
 ]
 
 export function getPipelineStageName(stage: AutomatedPipelineStage): string {
@@ -60,6 +61,6 @@ export function deriveEpisodeStatusFromStage(stage: AutomatedPipelineStage) {
     hasArtDesign: stage === 'art' || stage === 'storyboard',
     hasStoryboard: false,
     hasSeedancePrompts: stage === 'storyboard',
-    hasStoryboardReview: false
+    hasStoryboardReview: stage === 'storyboard'
   })
 }

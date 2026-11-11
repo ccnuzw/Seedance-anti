@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  readCachedTextFile,
-  invalidateCachedTextFile
-} from '@renderer/services/file-cache'
+import { readTextFile } from '@renderer/services/file-io'
 
 interface UseArtifactDocumentParams {
   enabled: boolean
@@ -13,55 +10,64 @@ interface UseArtifactDocumentParams {
 }
 
 export function useArtifactDocument(params: UseArtifactDocumentParams) {
-  const {
-    enabled,
-    filePath,
-    emptyContent = '',
-    onLoadMissing,
-    reloadKey
-  } = params
-
-  const [content, setContent] = useState(emptyContent)
-  const [loading, setLoading] = useState(false)
-  const emptyContentRef = useRef(emptyContent)
-  const onLoadMissingRef = useRef(onLoadMissing)
-
-  useEffect(() => {
-    emptyContentRef.current = emptyContent
-  }, [emptyContent])
-
-  useEffect(() => {
-    onLoadMissingRef.current = onLoadMissing
-  }, [onLoadMissing])
-
+  const { enabled, filePath, emptyContent = '', reloadKey } = params
+  const [state, setState] = useState({
+    filePath: '',
+    content: emptyContent,
+    loading: false,
+    error: null as string | null
+  })
+  const callbacks = useRef(params)
+  callbacks.current = params
+  const request = useRef(0)
   const reload = useCallback(async () => {
-    if (!enabled || !filePath) return
-    invalidateCachedTextFile(filePath)
-    setLoading(true)
-    try {
-      const text = await readCachedTextFile(filePath)
-      if (text == null) {
-        throw new Error('missing artifact')
-      }
-      setContent(text)
-    } catch {
-      setContent(emptyContentRef.current)
-      onLoadMissingRef.current?.()
+    const token = ++request.current
+    if (!enabled || !filePath) {
+      setState({
+        filePath,
+        content: callbacks.current.emptyContent ?? '',
+        loading: false,
+        error: null
+      })
+      return
     }
-    setLoading(false)
+    setState((current) => ({
+      filePath,
+      content: current.filePath === filePath ? current.content : '',
+      loading: true,
+      error: null
+    }))
+    try {
+      const text = await readTextFile(filePath)
+      if (token !== request.current) return
+      setState({
+        filePath,
+        content: text ?? callbacks.current.emptyContent ?? '',
+        loading: false,
+        error: null
+      })
+      if (text === null) callbacks.current.onLoadMissing?.()
+    } catch {
+      if (token !== request.current) return
+      setState((current) => ({
+        ...current,
+        loading: false,
+        error: '读取产物失败，请检查磁盘和权限后重试；这不代表文件不存在。'
+      }))
+    }
   }, [enabled, filePath])
 
   useEffect(() => {
-    if (enabled && filePath) {
-      void reload()
-      return
+    void reload()
+    return () => {
+      request.current++
     }
-    setContent(emptyContentRef.current)
-  }, [enabled, filePath, reload, reloadKey])
+  }, [reload, reloadKey])
 
   return {
-    content,
-    loading,
+    content: state.filePath === filePath ? state.content : emptyContent,
+    loading: state.filePath !== filePath || state.loading,
+    error: state.error,
     reload
   }
 }

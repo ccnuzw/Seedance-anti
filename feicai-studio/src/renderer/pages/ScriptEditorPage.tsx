@@ -38,7 +38,7 @@ export default function ScriptEditorPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const urlEp = parseInt(searchParams.get('ep') || '1')
-  const [currentEp, setCurrentEp] = useEpisodeParam(urlEp)
+  const [currentEp] = useEpisodeParam(urlEp)
   const { running: runningAction, run: runAsyncAction } = useAsyncAction()
 
   const config = normalizeProjectConfig(currentProject?.config)
@@ -61,7 +61,9 @@ export default function ScriptEditorPage() {
     saved,
     loading,
     reload: loadScript,
-    save
+    save,
+    documentSession,
+    overwriteConflict
   } = useEpisodeTextFile({
     enabled: !!currentProject,
     episodeNum: currentEp,
@@ -88,7 +90,8 @@ export default function ScriptEditorPage() {
   } = useDocumentEditorActions({
     setContent,
     save,
-    addToast
+    addToast,
+    documentKey: `${currentProject?.id}:${currentEp}`
   })
 
   const handleRunScriptReview = async () => {
@@ -109,6 +112,7 @@ export default function ScriptEditorPage() {
 
   const handleRegenerateScriptWithReviewFeedback = async () => {
     if (!currentProject || !latestScriptReview) return
+    if (!(await ensureSaved(saved))) return
 
     await runAsyncAction(async () => {
       await executeRegenerateScriptAndReviewAction(
@@ -129,15 +133,6 @@ export default function ScriptEditorPage() {
   }
 
   const handleEpSwitch = (ep: number) => {
-    if (!saved) {
-      if (
-        !confirm(
-          `EP${String(currentEp).padStart(2, '0')} 有未保存的修改，确定切换？`
-        )
-      )
-        return
-    }
-    setCurrentEp(ep)
     if (currentProject) {
       navigate(`/project/${currentProject.id}/script?ep=${ep}`)
     }
@@ -186,6 +181,10 @@ export default function ScriptEditorPage() {
       saved={saved}
       content={content}
       onContentChange={setContent}
+      documentSession={documentSession}
+      onOverwriteConflict={overwriteConflict}
+      onReload={loadScript}
+      onSave={handleSave}
       workflow={{
         title: '确认剧本',
         description:

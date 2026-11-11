@@ -1,3 +1,5 @@
+import type { BatchAPI } from './batch'
+import type { DataManagementAPI } from './data-management'
 import type {
   DetectedProjectInfo,
   LegacyNovelMigrationResult,
@@ -9,6 +11,7 @@ import type {
   Character,
   Episode,
   LLMConfig,
+  LLMProviderType,
   LogEntry,
   PipelineContext,
   PipelineState,
@@ -93,6 +96,7 @@ export interface LLMModelListRequest {
   baseUrl: string
   apiKey?: string
   configId?: string
+  provider?: LLMProviderType
 }
 
 export interface LLMConnectionTestResult {
@@ -143,6 +147,7 @@ export interface PipelineStartResult {
 export interface WorkflowActionParams {
   projectPath: string
   episodeNum: number
+  batchNumber?: number
   projectName: string
   visualStyle: string
   targetMedium: string
@@ -211,7 +216,7 @@ export interface PipelineErrorEvent {
   error: string
 }
 
-export interface FeicaiAPI {
+export interface FeicaiAPI extends BatchAPI, DataManagementAPI {
   listProjects(): Promise<Project[]>
   getProject(id: string): Promise<Project | null>
   detectProjectDirectory(dirPath: string): Promise<DetectedProjectInfo>
@@ -250,8 +255,9 @@ export interface FeicaiAPI {
   readTextFile(filePath: string): Promise<string | null>
   writeTextFile(
     filePath: string,
-    content: string
-  ): Promise<BasicSuccessResult | void>
+    content: string,
+    expectedContent?: string | null
+  ): Promise<(BasicSuccessResult & { error?: string }) | void>
   selectDirectory(): Promise<string | null>
   selectFile(filters?: FileDialogFilter[]): Promise<string | null>
 

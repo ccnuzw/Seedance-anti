@@ -7,6 +7,7 @@ import type { ILLMProvider } from './types'
 import { GeminiProvider } from './gemini-provider'
 import { AnthropicProvider } from './anthropic-provider'
 import { OpenAIProvider } from './openai-provider'
+import { LLMRequestError } from './endpoint-security'
 
 /**
  * 根据 LLMConfig 创建对应的 Provider 实例
@@ -21,6 +22,6 @@ export function createProvider(config: LLMConfig): ILLMProvider {
     case 'openai-compatible':
       return new OpenAIProvider(config)
     default:
-      throw new Error(`不支持的 LLM Provider 类型: ${config.provider}`)
+      throw new LLMRequestError('不支持的 LLM Provider 类型')
   }
 }

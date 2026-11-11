@@ -16,6 +16,10 @@ import {
   PIPELINE_STAGE_STATES,
   PIPELINE_TERMINAL_STATES
 } from './state-machine-meta'
+import {
+  assertEpisodeNumber,
+  assertPathWithinProject
+} from '../security/access-control'
 
 export interface StartPipelineParams {
   projectId: string
@@ -56,6 +60,7 @@ export async function preparePipelineStart(ctx: PrepareStartContext): Promise<{
   if (!PIPELINE_TERMINAL_STATES.includes(ctx.currentState)) {
     throw new Error(`无法在 ${ctx.currentState} 状态下启动流水线`)
   }
+  assertEpisodeNumber(ctx.params.episodeNum)
 
   const startStage = ctx.params.startStage || 'director'
   ctx.onResetFlags()
@@ -80,11 +85,14 @@ export async function preparePipelineStart(ctx: PrepareStartContext): Promise<{
   await persistence.load()
   ctx.onStatePersistenceAssigned(persistence)
 
-  const scriptPath = resolveEpisodeArtifactPath(
+  const scriptPath = assertPathWithinProject(
     ctx.params.projectPath,
-    'script',
-    ctx.params.episodeNum,
-    ctx.params.projectConfig || null
+    resolveEpisodeArtifactPath(
+      ctx.params.projectPath,
+      'script',
+      ctx.params.episodeNum,
+      ctx.params.projectConfig || null
+    )
   )
 
   try {
@@ -126,7 +134,7 @@ export function finalizeSingleStageRun(params: {
   params.onStateChange(PIPELINE_STAGE_STATES[stage].done)
 }
 
-export function performSkipReview(params: {
+export async function performSkipReview(params: {
   stage: AutomatedPipelineStage
   episodeNum: number
   statePersistence: ProjectStatePersistence | null
@@ -136,25 +144,24 @@ export function performSkipReview(params: {
     message: string
   ) => void
   onStateChange: (state: PipelineState) => void
-}): void {
+}): Promise<void> {
   params.onLog(
     'warn',
     'review_skipped',
     `⏭ 已跳过 ${getPipelineStageName(params.stage)} 审核`
   )
-  params.onStateChange(PIPELINE_STAGE_STATES[params.stage].done)
 
   if (params.statePersistence) {
-    params.statePersistence
-      .markStageSkipped(params.episodeNum, params.stage)
-      .catch(console.error)
-    params.statePersistence
-      .updateEpisodeStatus(
-        params.episodeNum,
-        deriveEpisodeStatusFromStage(params.stage)
-      )
-      .catch(console.error)
+    await params.statePersistence.markStageSkipped(
+      params.episodeNum,
+      params.stage
+    )
+    await params.statePersistence.updateEpisodeStatus(
+      params.episodeNum,
+      deriveEpisodeStatusFromStage(params.stage)
+    )
   }
+  params.onStateChange(PIPELINE_STAGE_STATES[params.stage].done)
 }
 
 export function createResetContext(): PipelineContext {

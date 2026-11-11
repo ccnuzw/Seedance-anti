@@ -6,8 +6,10 @@ import {
   countConfigsByCategory,
   formatImageConfigSummary,
   hasUsableApiKey,
-  isOpenAIProvider
+  isOpenAIProvider,
+  updateCredentialDraft
 } from './llm-settings-helpers'
+import { createDefaultLLMForm } from './llm-config'
 
 describe('llm-settings-helpers', () => {
   it('正确判断 openai 系 provider', () => {
@@ -123,5 +125,56 @@ describe('llm-settings-helpers', () => {
         'image'
       )
     ).toBe(1)
+  })
+
+  it('更换端点、路径或 Provider 后清空输入且禁止复用已保存密钥', () => {
+    const initial = { ...createDefaultLLMForm(), apiKey: 'old-input-key' }
+    for (const next of [
+      { ...initial, baseUrl: 'https://new.example/v1' },
+      { ...initial, baseUrl: `${initial.baseUrl}/different` },
+      { ...initial, provider: 'openai-compatible' as const }
+    ]) {
+      const changed = updateCredentialDraft(initial, next, true)
+      expect(changed.form.apiKey).toBe('')
+      expect(changed.hasStoredApiKey).toBe(false)
+      expect(
+        hasUsableApiKey(
+          changed.form.apiKey,
+          'saved-id',
+          changed.hasStoredApiKey
+        )
+      ).toBe(false)
+      const reentered = updateCredentialDraft(
+        changed.form,
+        { ...changed.form, apiKey: 'new-key' },
+        changed.hasStoredApiKey
+      )
+      expect(
+        hasUsableApiKey(
+          reentered.form.apiKey,
+          'saved-id',
+          reentered.hasStoredApiKey
+        )
+      ).toBe(true)
+      const reverted = updateCredentialDraft(
+        changed.form,
+        { ...initial, apiKey: '' },
+        changed.hasStoredApiKey
+      )
+      expect(reverted.hasStoredApiKey).toBe(false)
+    }
+  })
+
+  it('只改模型或名称不丢失端点绑定的保存密钥', () => {
+    const initial = createDefaultLLMForm()
+    const changed = updateCredentialDraft(
+      initial,
+      { ...initial, model: 'new-model', name: 'new-name' },
+      true
+    )
+    expect(changed.hasStoredApiKey).toBe(true)
+    expect(
+      hasUsableApiKey(changed.form.apiKey, 'saved-id', changed.hasStoredApiKey)
+    ).toBe(true)
   })
 })

@@ -162,7 +162,10 @@ export function useProjectPageController() {
       config.projectName = projectDraft.name.trim() || currentProject.name
       config.visualStyle = projectDraft.visualStyle.trim()
       config.targetMedium = projectDraft.targetMedium.trim()
-      config.totalEpisodes = Math.max(0, Number(projectDraft.totalEpisodes) || 0)
+      config.totalEpisodes = Math.max(
+        0,
+        Number(projectDraft.totalEpisodes) || 0
+      )
       config.chaptersPerEpisode = Math.max(
         0,
         Number(projectDraft.chaptersPerEpisode) || 0

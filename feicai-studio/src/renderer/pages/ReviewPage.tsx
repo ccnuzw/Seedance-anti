@@ -183,12 +183,25 @@ export default function ReviewPage() {
                 <div
                   className="review-record-header"
                   onClick={() => setExpandedReview(isExpanded ? null : idx)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={isExpanded}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setExpandedReview(isExpanded ? null : idx)
+                    }
+                  }}
                 >
                   <div className="record-left">
                     <span
                       className={`record-result badge ${isPass ? 'badge-success' : 'badge-danger'}`}
                     >
-                      {isPass ? '✅ PASS' : '❌ FAIL'}
+                      {review.result === 'INVALID'
+                        ? 'INVALID · 结果无效'
+                        : isPass
+                          ? '✅ PASS'
+                          : '❌ FAIL'}
                     </span>
                     <span className="record-stage">
                       {STAGE_LABELS[review.stage] || review.stage}

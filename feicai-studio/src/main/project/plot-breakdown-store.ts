@@ -1,12 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { dirname } from 'path'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteFileSync } from '../io/atomic-file'
 import {
-  buildDefaultPlotBreakdownTemplate
-} from '@shared/project-bootstrap'
+  assertEpisodeNumber,
+  assertPathWithinProject
+} from '../security/access-control'
+import { buildDefaultPlotBreakdownTemplate } from '@shared/project-bootstrap'
 import type { ProjectConfig } from '@shared/types'
 import {
   appendPlotBreakdownBatch,
-  extractPlotBreakdownEntries,
+  validateGeneratedPlotBreakdown,
   formatPlotBreakdownEntriesMarkdown,
   getPlotBreakdownEntriesForEpisode,
   parsePlotBreakdownMarkdown,
@@ -57,10 +59,13 @@ export function getPlotBreakdownPath(params: {
   projectPath: string
   config?: Partial<ProjectConfig> | null
 }): string {
-  return resolveProjectArtifactPath(
+  return assertPathWithinProject(
     params.projectPath,
-    'plotBreakdown',
-    params.config
+    resolveProjectArtifactPath(
+      params.projectPath,
+      'plotBreakdown',
+      params.config
+    )
   )
 }
 
@@ -70,16 +75,14 @@ export function ensurePlotBreakdownFile(params: {
 }): string {
   const filePath = getPlotBreakdownPath(params)
   if (!existsSync(filePath)) {
-    mkdirSync(dirname(filePath), { recursive: true })
-    writeFileSync(
+    atomicWriteFileSync(
       filePath,
       buildDefaultPlotBreakdownTemplate({
         projectName: params.config.projectName,
         projectType: params.config.targetMedium || '待确定',
         totalEpisodes: params.config.totalEpisodes,
         chaptersPerEpisode: params.config.chaptersPerEpisode || 0
-      }),
-      'utf-8'
+      })
     )
   }
   return filePath
@@ -104,8 +107,7 @@ export function writePlotBreakdown(params: {
   document: PlotBreakdownDocument
 }): string {
   const filePath = getPlotBreakdownPath(params)
-  mkdirSync(dirname(filePath), { recursive: true })
-  writeFileSync(filePath, serializePlotBreakdownMarkdown(params.document), 'utf-8')
+  atomicWriteFileSync(filePath, serializePlotBreakdownMarkdown(params.document))
   return filePath
 }
 
@@ -233,22 +235,20 @@ function buildPlotBreakdownSummary(params: {
       : null
   const hasEnoughUnusedEntries = params.base.unusedEntries >= 6
   const hasAnyUnusedEntries = params.base.unusedEntries > 0
-  const waterlineStatus =
-    hasEnoughUnusedEntries
-      ? 'ready'
-      : hasAnyUnusedEntries
-        ? 'low'
-        : hasUnprocessedChapters
-          ? 'empty'
-          : 'done'
-  const nextActionMode =
-    hasEnoughUnusedEntries
-      ? 'script'
+  const waterlineStatus = hasEnoughUnusedEntries
+    ? 'ready'
+    : hasAnyUnusedEntries
+      ? 'low'
       : hasUnprocessedChapters
-        ? 'breakdown'
-        : hasAnyUnusedEntries
-          ? 'script'
-          : 'done'
+        ? 'empty'
+        : 'done'
+  const nextActionMode = hasEnoughUnusedEntries
+    ? 'script'
+    : hasUnprocessedChapters
+      ? 'breakdown'
+      : hasAnyUnusedEntries
+        ? 'script'
+        : 'done'
   const nextActionLabel =
     nextActionMode === 'script'
       ? hasEnoughUnusedEntries
@@ -285,6 +285,7 @@ export function getProjectPlotBreakdownEntriesForEpisode(params: {
   episodeNum: number
   status?: PlotBreakdownEntryStatus
 }): PlotBreakdownEntry[] {
+  assertEpisodeNumber(params.episodeNum)
   const { document } = readPlotBreakdown(params)
   return getPlotBreakdownEntriesForEpisode(document, params.episodeNum, {
     status: params.status
@@ -309,37 +310,37 @@ export function appendGeneratedStoryToProjectPlotBreakdown(params: {
   projectPath: string
   config: ProjectConfig
   generatedContent: string
-  episodeNum: number
-  chaptersPerEpisode?: number
+  batchNumber: number
+  chaptersPerBatch?: number
 }): AppendPlotBreakdownBatchResult {
-  const entries = extractPlotBreakdownEntries(params.generatedContent)
-  if (entries.length === 0) {
-    return {
-      path: ensurePlotBreakdownFile(params),
-      appendedEntries: 0
-    }
-  }
-
-  const filePath = ensurePlotBreakdownFile(params)
-  const raw = readFileSync(filePath, 'utf-8')
-  const doc = parsePlotBreakdownMarkdown(raw)
-  const chaptersPerEpisode = Math.max(
-    0,
-    Number(params.chaptersPerEpisode) || 0
+  assertEpisodeNumber(params.batchNumber)
+  const entries = validateGeneratedPlotBreakdown(
+    params.generatedContent,
+    params.config.totalEpisodes
   )
-  const chapterStart =
-    chaptersPerEpisode > 0
-      ? (Math.max(params.episodeNum, 1) - 1) * chaptersPerEpisode + 1
-      : null
-  const chapterEnd =
-    chapterStart && chaptersPerEpisode > 0
-      ? chapterStart + chaptersPerEpisode - 1
-      : null
-  const heading =
-    chapterStart && chapterEnd
-      ? `### 第${params.episodeNum}批（第${chapterStart}-${chapterEnd}章）`
-      : `### 第${params.episodeNum}批`
-
+  const filePath = ensurePlotBreakdownFile(params)
+  const doc = parsePlotBreakdownMarkdown(readFileSync(filePath, 'utf-8'))
+  const chaptersPerBatch = params.chaptersPerBatch ?? 6
+  if (!Number.isSafeInteger(chaptersPerBatch) || chaptersPerBatch <= 0)
+    throw new Error('每批章节数无效')
+  const chapterStart = (params.batchNumber - 1) * chaptersPerBatch + 1
+  const sourceChapters = listSourceChapters(params)
+  const configuredLimit =
+    params.config.totalEpisodes > 0 &&
+    (params.config.chaptersPerEpisode || 0) > 0
+      ? params.config.totalEpisodes * params.config.chaptersPerEpisode!
+      : Infinity
+  const sourceLimit =
+    sourceChapters.length > 0
+      ? Math.max(...sourceChapters.map((chapter) => chapter.index))
+      : Infinity
+  const chapterEnd = Math.min(
+    chapterStart + chaptersPerBatch - 1,
+    configuredLimit,
+    sourceLimit
+  )
+  if (chapterEnd < chapterStart) throw new Error('当前剧情批次超出小说章节范围')
+  const heading = `### 第${params.batchNumber}批（第${chapterStart}-${chapterEnd}章）`
   const result = appendPlotBreakdownBatch(doc, {
     heading,
     entries,
@@ -347,10 +348,8 @@ export function appendGeneratedStoryToProjectPlotBreakdown(params: {
     chapterEnd,
     replaceExistingHeading: true
   })
-
-  if (result.appendedEntries > 0) {
-    writeFileSync(filePath, serializePlotBreakdownMarkdown(result.document), 'utf-8')
-  }
+  if (result.appendedEntries === 0) throw new Error('剧情库存未写入任何剧情点')
+  atomicWriteFileSync(filePath, serializePlotBreakdownMarkdown(result.document))
 
   return {
     path: filePath,
@@ -368,6 +367,7 @@ export function markProjectPlotBreakdownEpisodeStatus(params: {
   path: string
   updatedEntries: number
 } {
+  assertEpisodeNumber(params.episodeNum)
   const filePath = ensurePlotBreakdownFile(params)
   const raw = readFileSync(filePath, 'utf-8')
   const doc = parsePlotBreakdownMarkdown(raw)
@@ -384,7 +384,7 @@ export function markProjectPlotBreakdownEpisodeStatus(params: {
   }
 
   if (updatedEntries > 0) {
-    writeFileSync(filePath, serializePlotBreakdownMarkdown(doc), 'utf-8')
+    atomicWriteFileSync(filePath, serializePlotBreakdownMarkdown(doc))
   }
 
   return {
@@ -407,7 +407,7 @@ export function updateProjectPlotBreakdownEntryStatus(params: {
     params.status
   )
   if (result.updated) {
-    writeFileSync(filePath, result.content, 'utf-8')
+    atomicWriteFileSync(filePath, result.content)
   }
   return {
     path: filePath,

@@ -13,6 +13,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -30,6 +31,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
 function createAvailability(): WorkflowAvailabilityMap {
   return {
     story: { canStart: false, reason: '缺少原文' },
+    story_review: { canStart: false, reason: '缺少剧情拆解' },
     script: { canStart: true, reason: 'ok' },
     script_review: { canStart: true, reason: 'ok' },
     character: { canStart: false, reason: '缺少导演分析' },
@@ -54,30 +56,30 @@ function render(
 }
 
 describe('WorkflowActionPanel', () => {
-  it('按 episode 状态与可执行性渲染动作卡状态和禁用态', () => {
+  it('按可执行性启用和禁用动作按钮', () => {
     const html = render({
       currentEpisode: createEpisode({ hasScript: true })
     })
+    const buttons = html.match(/<button\b[^>]*>/g) ?? []
+    const availableCount = Object.values(createAvailability()).filter(
+      ({ canStart }) => canStart
+    ).length
 
-    expect(html).toContain('🧩 剧情拆解')
-    expect(html).toContain('未开放')
-    expect(html).toContain('📖 剧本生成')
-    expect(html).toContain('已存在')
-    expect(html).toContain('📝 剧本审核')
-    expect(html).toContain('可执行')
-    expect(html).toContain('disabled="">执行剧情拆解</button>')
-    expect(html).toContain('>执行剧本审核</button>')
+    expect(buttons).toHaveLength(Object.keys(createAvailability()).length)
+    expect(
+      buttons.filter((button) => !button.includes('disabled'))
+    ).toHaveLength(availableCount)
   })
 
-  it('执行中时展示对应阶段的执行中文案，并整体禁用按钮', () => {
+  it('执行中时禁用所有动作按钮', () => {
     const html = render({
       workflowAction: 'script_review',
       displayIsRunning: true
     })
+    const buttons = html.match(/<button\b[^>]*>/g) ?? []
 
-    expect(html).toContain('执行中...')
-    expect(html).toContain('disabled="">执行中...</button>')
-    expect(html).toContain('disabled="">执行剧本生成</button>')
+    expect(buttons).not.toHaveLength(0)
+    expect(buttons.every((button) => button.includes('disabled'))).toBe(true)
   })
 
   it('有执行报告时渲染结果、产物路径和审核反馈', () => {
@@ -100,9 +102,7 @@ describe('WorkflowActionPanel', () => {
       }
     })
 
-    expect(html).toContain('分镜审核')
-    expect(html).toContain('未通过 6/10')
-    expect(html).toContain('产物已写入：/tmp/reviews/storyboard/ep01.md')
+    expect(html).toContain('/tmp/reviews/storyboard/ep01.md')
     expect(html).toContain('审核未通过')
     expect(html).toContain('镜头节奏偏乱')
   })

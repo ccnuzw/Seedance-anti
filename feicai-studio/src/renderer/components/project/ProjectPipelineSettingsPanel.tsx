@@ -93,7 +93,9 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
           <div className="project-settings-section">
             <div className="project-settings-section-title">
               <span>基础信息</span>
-              <span className="text-secondary">影响项目头、侧边栏与后续生成上下文</span>
+              <span className="text-secondary">
+                影响项目头、侧边栏与后续生成上下文
+              </span>
             </div>
             <div className="pipeline-settings-grid project-settings-grid">
               <div className="ps-item">
@@ -197,144 +199,146 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
           <div className="project-settings-section">
             <div className="project-settings-section-title">
               <span>流水线参数</span>
-              <span className="text-secondary">影响审核、超时与提示词时长约束</span>
-            </div>
-          <div className="pipeline-settings-grid">
-            <div className="ps-item">
-              <label>最大重试次数</label>
-              <span className="ps-desc text-secondary">
-                审核不通过时的自动重试上限
+              <span className="text-secondary">
+                影响审核、超时与提示词时长约束
               </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={1}
-                max={10}
-                value={ps.maxRetries}
-                onChange={(e) =>
-                  setPs({ ...ps, maxRetries: Number(e.target.value) })
-                }
-              />
             </div>
-            <div className="ps-item">
-              <label>审核通过阈值</label>
-              <span className="ps-desc text-secondary">
-                评分 ≥ 此值即 PASS（1-10 分）
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={1}
-                max={10}
-                value={ps.passScore}
-                onChange={(e) =>
-                  setPs({ ...ps, passScore: Number(e.target.value) })
-                }
-              />
+            <div className="pipeline-settings-grid">
+              <div className="ps-item">
+                <label>最大重试次数</label>
+                <span className="ps-desc text-secondary">
+                  审核不通过时的自动重试上限
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={1}
+                  max={10}
+                  value={ps.maxRetries}
+                  onChange={(e) =>
+                    setPs({ ...ps, maxRetries: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>审核通过阈值</label>
+                <span className="ps-desc text-secondary">
+                  评分 ≥ 此值即 PASS（1-10 分）
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={1}
+                  max={10}
+                  value={ps.passScore}
+                  onChange={(e) =>
+                    setPs({ ...ps, passScore: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>LLM 超时 (秒)</label>
+                <span className="ps-desc text-secondary">
+                  无新数据超过此时间则中断
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={30}
+                  max={300}
+                  value={ps.llmTimeoutSec}
+                  onChange={(e) =>
+                    setPs({ ...ps, llmTimeoutSec: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>每集最短时长 (秒)</label>
+                <span className="ps-desc text-secondary">
+                  生成提示词的最短总时长约束
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={30}
+                  max={600}
+                  value={ps.durationMin}
+                  onChange={(e) =>
+                    setPs({ ...ps, durationMin: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>每集最长时长 (秒)</label>
+                <span className="ps-desc text-secondary">
+                  生成提示词的最长总时长约束
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={30}
+                  max={600}
+                  value={ps.durationMax}
+                  onChange={(e) =>
+                    setPs({ ...ps, durationMax: Number(e.target.value) })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>剧本最少字数</label>
+                <span className="ps-desc text-secondary">
+                  小说到剧本阶段的单集正文下限，默认沿用旧版 1500 字
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={300}
+                  max={10000}
+                  value={ps.scriptWordCountMin}
+                  onChange={(e) =>
+                    setPs({
+                      ...ps,
+                      scriptWordCountMin: Number(e.target.value)
+                    })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>剧本最多字数</label>
+                <span className="ps-desc text-secondary">
+                  小说到剧本阶段的单集正文上限，默认沿用旧版 2000 字
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={300}
+                  max={12000}
+                  value={ps.scriptWordCountMax}
+                  onChange={(e) =>
+                    setPs({
+                      ...ps,
+                      scriptWordCountMax: Number(e.target.value)
+                    })
+                  }
+                />
+              </div>
+              <div className="ps-item">
+                <label>单条提示词上限 (秒)</label>
+                <span className="ps-desc text-secondary">
+                  每条 Seedance 提示词的时长上限
+                </span>
+                <input
+                  type="number"
+                  className="input input-sm"
+                  min={4}
+                  max={15}
+                  value={ps.singlePromptMax}
+                  onChange={(e) =>
+                    setPs({ ...ps, singlePromptMax: Number(e.target.value) })
+                  }
+                />
+              </div>
             </div>
-            <div className="ps-item">
-              <label>LLM 超时 (秒)</label>
-              <span className="ps-desc text-secondary">
-                无新数据超过此时间则中断
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={30}
-                max={300}
-                value={ps.llmTimeoutSec}
-                onChange={(e) =>
-                  setPs({ ...ps, llmTimeoutSec: Number(e.target.value) })
-                }
-              />
-            </div>
-            <div className="ps-item">
-              <label>每集最短时长 (秒)</label>
-              <span className="ps-desc text-secondary">
-                生成提示词的最短总时长约束
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={30}
-                max={600}
-                value={ps.durationMin}
-                onChange={(e) =>
-                  setPs({ ...ps, durationMin: Number(e.target.value) })
-                }
-              />
-            </div>
-            <div className="ps-item">
-              <label>每集最长时长 (秒)</label>
-              <span className="ps-desc text-secondary">
-                生成提示词的最长总时长约束
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={30}
-                max={600}
-                value={ps.durationMax}
-                onChange={(e) =>
-                  setPs({ ...ps, durationMax: Number(e.target.value) })
-                }
-              />
-            </div>
-            <div className="ps-item">
-              <label>剧本最少字数</label>
-              <span className="ps-desc text-secondary">
-                小说到剧本阶段的单集正文下限，默认沿用旧版 1500 字
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={300}
-                max={10000}
-                value={ps.scriptWordCountMin}
-                onChange={(e) =>
-                  setPs({
-                    ...ps,
-                    scriptWordCountMin: Number(e.target.value)
-                  })
-                }
-              />
-            </div>
-            <div className="ps-item">
-              <label>剧本最多字数</label>
-              <span className="ps-desc text-secondary">
-                小说到剧本阶段的单集正文上限，默认沿用旧版 2000 字
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={300}
-                max={12000}
-                value={ps.scriptWordCountMax}
-                onChange={(e) =>
-                  setPs({
-                    ...ps,
-                    scriptWordCountMax: Number(e.target.value)
-                  })
-                }
-              />
-            </div>
-            <div className="ps-item">
-              <label>单条提示词上限 (秒)</label>
-              <span className="ps-desc text-secondary">
-                每条 Seedance 提示词的时长上限
-              </span>
-              <input
-                type="number"
-                className="input input-sm"
-                min={4}
-                max={15}
-                value={ps.singlePromptMax}
-                onChange={(e) =>
-                  setPs({ ...ps, singlePromptMax: Number(e.target.value) })
-                }
-              />
-            </div>
-          </div>
           </div>
           <div className="pipeline-settings-actions">
             <button className="btn btn-sm" onClick={onReset}>

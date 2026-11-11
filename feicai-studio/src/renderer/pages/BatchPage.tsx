@@ -1,15 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import {
-  abortPipeline,
-  runPipelineAndWait
-} from '@renderer/services/pipeline-service'
-import {
-  runScriptGeneration,
-  runScriptReview,
-  runStoryGeneration,
-  runStoryReview
-} from '@renderer/services/workflow-actions'
+import { abortPipeline } from '@renderer/services/pipeline-service'
+import { useBatchStore } from '@renderer/stores/batchStore'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
 import { useToastStore } from '@renderer/stores/toastStore'
@@ -18,14 +10,9 @@ import { useShallow } from 'zustand/react/shallow'
 import {
   MODE_MAP,
   type BatchMode,
-  buildBatchPipelineParams,
   isAutoSelectBatchMode,
-  isWorkflowBatchMode,
-  resolveBatchExecutionEpisodes,
-  resolveBatchRunException,
-  resolveBatchRunProgress,
-  runBatchWorkflowMode
-} from '@renderer/utils/batch-runner'
+  resolveBatchExecutionEpisodes
+} from '@shared/batch'
 import { getPlotBreakdownSummary } from '@renderer/services/project-service'
 import type { PlotBreakdownSummary } from '@shared/ipc-contracts'
 import './BatchPage.css'
@@ -70,17 +57,10 @@ const MODE_DESCRIPTIONS: Record<BatchMode, string> = {
   story_review: '审核选中集当前剧情批次。',
   script: '基于已通过剧情拆解生成剧本。',
   script_review: '审核选中集当前剧本。',
-  full: '按完整流水线依次执行到后续制作完成。',
+  full: '制作流程（导演→服化道→分镜），生成经审核的视频提示词，不生成图片或视频媒体。',
   director: '只执行导演分析阶段。',
   art: '只执行服化道设计阶段。',
   storyboard: '只执行分镜编写阶段。'
-}
-
-interface BatchTask {
-  episodeNum: number
-  status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
-  progress?: string
-  elapsed?: number
 }
 
 function formatEpisodeList(nums: number[]): string {
@@ -122,12 +102,25 @@ export default function BatchPage() {
 
   const [mode, setMode] = useState<BatchMode>('full')
   const [selectedEps, setSelectedEps] = useState<Set<number>>(new Set())
-  const [tasks, setTasks] = useState<BatchTask[]>([])
-  const [isRunning, setIsRunning] = useState(false)
+  const {
+    snapshot,
+    commandPending,
+    connect,
+    start,
+    stop,
+    pause,
+    resume,
+    error: queueError
+  } = useBatchStore()
+  const tasks = snapshot?.tasks || []
+  const isRunning =
+    !!snapshot && ['running', 'paused', 'stopping'].includes(snapshot.status)
+  const [episodePage, setEpisodePage] = useState(0)
+  const [taskPage, setTaskPage] = useState(0)
+  const pageSize = 100
   const [logExpanded, setLogExpanded] = useState(true)
   const [plotBreakdownSummary, setPlotBreakdownSummary] =
     useState<PlotBreakdownSummary | null>(null)
-  const abortRef = useRef(false)
   const logsEndRef = useRef<HTMLDivElement>(null)
   const lastScrollAtRef = useRef(0)
 
@@ -136,6 +129,17 @@ export default function BatchPage() {
     const cleanup = setupEventListeners()
     return cleanup
   }, [setupEventListeners])
+
+  useEffect(() => connect(), [connect])
+
+  useEffect(() => {
+    if (
+      snapshot &&
+      ['running', 'paused', 'stopping', 'interrupted'].includes(snapshot.status)
+    ) {
+      setMode(snapshot.mode)
+    }
+  }, [snapshot?.id, snapshot?.status])
 
   useEffect(() => {
     if (!currentProject) {
@@ -169,11 +173,10 @@ export default function BatchPage() {
   // mount 时同步后端状态，检测是否有后台任务在运行
   const [bgRunning, setBgRunning] = useState(false)
   useEffect(() => {
-    syncFromBackend().then(() => {
-      const globalRunning = usePipelineStore.getState().isRunning
-      setBgRunning(globalRunning && !isRunning)
-    })
-  }, [])
+    void syncFromBackend().then(() =>
+      setBgRunning(usePipelineStore.getState().isRunning)
+    )
+  }, [syncFromBackend])
 
   // 当全局引擎状态变为非运行时，清除 bgRunning 提示
   useEffect(() => {
@@ -284,154 +287,59 @@ export default function BatchPage() {
 
   const handleBatchRun = useCallback(async () => {
     if (!currentProject) return
-
-    // 互斥保护：检查后端引擎是否正在执行
-    await syncFromBackend()
-    if (usePipelineStore.getState().isRunning) {
-      addToast('error', '流水线正在执行中，请先停止当前任务')
-      return
-    }
-
-    setIsRunning(true)
     setLogExpanded(true)
-    abortRef.current = false
     clearLogs()
-
-    const latestWaterline = await getPlotBreakdownSummary(currentProject.id)
-    setPlotBreakdownSummary(latestWaterline)
-    const sortedEps = resolveBatchExecutionEpisodes({
-      mode,
-      selectedEpisodes: [...selectedEps],
-      allEpisodes: episodes.map((episode) => episode.episodeNumber),
-      waterline: latestWaterline
-    })
-    if (sortedEps.length === 0) {
-      setIsRunning(false)
-      addToast('info', '当前水位无需执行该模式')
-      return
-    }
-    const initialTasks: BatchTask[] = sortedEps.map((ep) => ({
-      episodeNum: ep,
-      status: 'pending'
-    }))
-    setTasks(initialTasks)
-
-    // 顺序执行，每集等待完成
-    for (let i = 0; i < sortedEps.length; i++) {
-      if (abortRef.current) {
-        setTasks((prev) =>
-          prev.map((t, idx) =>
-            idx >= i ? { ...t, status: 'skipped', progress: '已跳过' } : t
-          )
-        )
-        break
-      }
-
-      const epNum = sortedEps[i]
-      const startTime = Date.now()
-      setTasks((prev) =>
-        prev.map((t, idx) =>
-          idx === i ? { ...t, status: 'running', progress: '执行中...' } : t
-        )
+    try {
+      await start({
+        projectId: currentProject.id,
+        projectPath: currentProject.projectPath,
+        mode,
+        episodes: [...selectedEps]
+      })
+    } catch (error) {
+      addToast(
+        'error',
+        error instanceof Error ? error.message : '启动批队列失败'
       )
-
-      try {
-        const baseParams = {
-          projectId: currentProject.id,
-          projectPath: currentProject.projectPath,
-          episodeNum: epNum,
-          projectName: currentProject.name,
-          visualStyle: currentProject.visualStyle,
-          targetMedium: currentProject.targetMedium,
-          maxRetries: currentProject.config.pipelineSettings?.maxRetries,
-          plotBreakdown: latestWaterline
-        }
-
-        const result = isWorkflowBatchMode(mode)
-          ? await runBatchWorkflowMode(mode, baseParams, {
-              runStoryGeneration,
-              runStoryReview,
-              runScriptGeneration,
-              runScriptReview
-            })
-          : await runPipelineAndWait(buildBatchPipelineParams(baseParams, mode))
-
-        const elapsed = Math.round((Date.now() - startTime) / 1000)
-        const taskResult = resolveBatchRunProgress(result, mode, elapsed)
-
-        setTasks((prev) =>
-          prev.map((t, idx) =>
-            idx === i
-              ? {
-                  ...t,
-                  ...taskResult
-                }
-              : t
-          )
-        )
-      } catch (error) {
-        setTasks((prev) =>
-          prev.map((t, idx) =>
-            idx === i
-              ? {
-                  ...t,
-                  status: 'error',
-                  progress: resolveBatchRunException(error)
-                }
-              : t
-          )
-        )
-      }
     }
+  }, [currentProject, selectedEps, mode, start, clearLogs, addToast])
 
-    setIsRunning(false)
+  const handleStop = useCallback(async () => {
+    try {
+      await stop()
+      addToast('warning', '批队列已停止，未完成步骤可显式恢复')
+    } catch (error) {
+      addToast('error', error instanceof Error ? error.message : '停止失败')
+    }
+  }, [stop, addToast])
 
-    // 汇总通知
-    setTasks((prev) => {
-      const successCount = prev.filter((t) => t.status === 'done').length
-      const errorCount = prev.filter((t) => t.status === 'error').length
-      const skippedCount = prev.filter((t) => t.status === 'skipped').length
-      if (abortRef.current) {
-        addToast(
-          'warning',
-          `批量执行已中止：${successCount} 集成功，${errorCount} 集失败，${skippedCount} 集跳过`,
-          { title: '批量执行中止' }
-        )
-      } else if (errorCount > 0) {
-        addToast(
-          'warning',
-          `批量执行完成：${successCount} 集成功，${errorCount} 集失败`,
-          { title: '批量执行完成' }
-        )
-      } else {
-        addToast('success', `全部 ${successCount} 集执行成功！`, {
-          title: '🎉 批量执行完成'
-        })
-      }
-      return prev
-    })
+  const controlQueue = async (action: () => Promise<void>) => {
+    try {
+      await action()
+    } catch (error) {
+      addToast('error', error instanceof Error ? error.message : '队列控制失败')
+    }
+  }
 
-    // 批量完成后只做一次全量同步，避免为每集重复启动单独扫描
-    await useProjectStore.getState().syncEpisodeStatus()
-    void getPlotBreakdownSummary(currentProject.id)
-      .then(setPlotBreakdownSummary)
-      .catch(() => setPlotBreakdownSummary(null))
-  }, [
-    currentProject,
-    selectedEps,
-    mode,
-    episodes,
-    syncFromBackend,
-    clearLogs,
-    addToast
-  ])
+  useEffect(() => {
+    if (snapshot?.status !== 'completed') return
+    void useProjectStore.getState().syncEpisodeStatus()
+    if (currentProject)
+      void getPlotBreakdownSummary(currentProject.id)
+        .then(setPlotBreakdownSummary)
+        .catch(() => {})
+  }, [snapshot?.id, snapshot?.status, currentProject?.id])
 
-  const handleStop = useCallback(() => {
-    abortRef.current = true
-    // 强制中止当前执行（abort 会使引擎进入 error 状态，waitForCompletion 立即 resolve）
-    void abortPipeline()
-    addToast('warning', '正在停止批量执行...')
-  }, [addToast])
+  const episodePageCount = Math.max(1, Math.ceil(episodes.length / pageSize))
+  const taskPageCount = Math.max(1, Math.ceil(tasks.length / pageSize))
+  const visibleEpisodes = episodes.slice(
+    Math.min(episodePage, episodePageCount - 1) * pageSize,
+    (Math.min(episodePage, episodePageCount - 1) + 1) * pageSize
+  )
+  const visibleTasks = tasks.slice(
+    Math.min(taskPage, taskPageCount - 1) * pageSize,
+    (Math.min(taskPage, taskPageCount - 1) + 1) * pageSize
+  )
 
   return (
     <div className="batch-page">
@@ -446,15 +354,55 @@ export default function BatchPage() {
         </div>
       </div>
 
+      {queueError && <p role="alert">{queueError}</p>}
+      {snapshot && (
+        <p role="status" aria-live="polite">
+          主进程队列：{snapshot.status} · 已提交 {snapshot.cursor}/
+          {snapshot.tasks.length} 项。离开页面不会停止任务。
+        </p>
+      )}
+      {snapshot &&
+        ['interrupted', 'stopped'].includes(snapshot.status) &&
+        snapshot.cursor < snapshot.tasks.length && (
+          <div className="batch-bg-banner">
+            <span>
+              上次队列未完成，恢复仅继续未提交步骤，不会自动覆盖已完成结果。
+            </span>
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={commandPending}
+              onClick={() => void controlQueue(resume)}
+            >
+              恢复未完成队列
+            </button>
+            {snapshot.status === 'interrupted' && (
+              <button
+                className="btn btn-sm"
+                disabled={commandPending}
+                onClick={() => void controlQueue(stop)}
+              >
+                停止保留的队列
+              </button>
+            )}
+          </div>
+        )}
+
       {bgRunning && !isRunning && (
         <div className="batch-bg-banner">
           <span>后台有流水线任务正在运行中，启动新的批量任务前请先停止。</span>
           <button
             className="btn btn-danger btn-sm"
-            onClick={() => {
-              void abortPipeline()
-              setBgRunning(false)
-              addToast('warning', '后台任务已停止')
+            onClick={async () => {
+              try {
+                await abortPipeline()
+                setBgRunning(false)
+                addToast('warning', '后台任务已停止')
+              } catch (error) {
+                addToast(
+                  'error',
+                  error instanceof Error ? error.message : '停止失败'
+                )
+              }
             }}
           >
             ⏹ 停止后台任务
@@ -515,14 +463,35 @@ export default function BatchPage() {
               <button
                 className="btn btn-primary btn-lg"
                 onClick={handleBatchRun}
-                disabled={!canRun}
+                disabled={
+                  !canRun ||
+                  commandPending ||
+                  snapshot?.status === 'interrupted'
+                }
               >
                 ▶ {executionLabel}
               </button>
             ) : (
-              <button className="btn btn-danger btn-lg" onClick={handleStop}>
-                ⏹ 停止批量执行
-              </button>
+              <div>
+                <button
+                  className="btn btn-danger btn-lg"
+                  disabled={commandPending || snapshot?.status === 'stopping'}
+                  onClick={handleStop}
+                >
+                  停止批量执行
+                </button>
+                <button
+                  className="btn btn-sm"
+                  disabled={commandPending || snapshot?.status === 'stopping'}
+                  onClick={() =>
+                    void controlQueue(
+                      snapshot?.status === 'paused' ? resume : pause
+                    )
+                  }
+                >
+                  {snapshot?.status === 'paused' ? '继续执行' : '暂停队列'}
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -585,6 +554,8 @@ export default function BatchPage() {
                         key={key}
                         className={`batch-mode-option ${mode === key ? 'active' : ''}`}
                         onClick={() => setMode(key)}
+                        aria-pressed={mode === key}
+                        disabled={isRunning || commandPending}
                       >
                         <span className="batch-mode-emoji">{config.emoji}</span>
                         <span>
@@ -640,12 +611,14 @@ export default function BatchPage() {
             </div>
           </div>
           <div className="episode-select-grid">
-            {episodes.map((ep) => (
+            {visibleEpisodes.map((ep) => (
               <button
                 key={ep.id}
                 className={`episode-select-btn ${selectedEps.has(ep.episodeNumber) ? 'selected' : ''} ${isEpisodeComplete(ep.status) ? 'completed' : ''}`}
                 onClick={() => toggleEpisode(ep.episodeNumber)}
                 title={`EP${String(ep.episodeNumber).padStart(2, '0')}`}
+                aria-label={`选择第 ${ep.episodeNumber} 集${isEpisodeComplete(ep.status) ? '，已完成' : ''}`}
+                aria-pressed={selectedEps.has(ep.episodeNumber)}
               >
                 <span className="ep-num">
                   EP{String(ep.episodeNumber).padStart(2, '0')}
@@ -656,6 +629,26 @@ export default function BatchPage() {
               </button>
             ))}
           </div>
+          <nav aria-label="集数分页" className="batch-quick-actions">
+            <button
+              className="btn btn-sm"
+              disabled={episodePage <= 0}
+              onClick={() => setEpisodePage((p) => p - 1)}
+            >
+              上一页
+            </button>
+            <span>
+              第 {Math.min(episodePage + 1, episodePageCount)} /{' '}
+              {episodePageCount} 页
+            </span>
+            <button
+              className="btn btn-sm"
+              disabled={episodePage >= episodePageCount - 1}
+              onClick={() => setEpisodePage((p) => p + 1)}
+            >
+              下一页
+            </button>
+          </nav>
         </div>
       </section>
 
@@ -672,7 +665,7 @@ export default function BatchPage() {
             </span>
           </div>
           <div className="batch-task-list">
-            {tasks.map((task) => (
+            {visibleTasks.map((task) => (
               <div
                 key={task.episodeNum}
                 className={`batch-task task-${task.status}`}
@@ -693,6 +686,25 @@ export default function BatchPage() {
               </div>
             ))}
           </div>
+          <nav aria-label="执行队列分页" className="batch-quick-actions">
+            <button
+              className="btn btn-sm"
+              disabled={taskPage <= 0}
+              onClick={() => setTaskPage((p) => p - 1)}
+            >
+              上一页
+            </button>
+            <span>
+              第 {Math.min(taskPage + 1, taskPageCount)} / {taskPageCount} 页
+            </span>
+            <button
+              className="btn btn-sm"
+              disabled={taskPage >= taskPageCount - 1}
+              onClick={() => setTaskPage((p) => p + 1)}
+            >
+              下一页
+            </button>
+          </nav>
         </div>
       )}
 
@@ -700,15 +712,17 @@ export default function BatchPage() {
         <div
           className={`batch-log-panel ${logExpanded ? 'expanded' : 'collapsed'}`}
         >
-          <div
-            className="batch-log-header"
-            onClick={() => setLogExpanded(!logExpanded)}
-          >
-            <span className="batch-log-title">
+          <div className="batch-log-header">
+            <button
+              className="batch-log-title"
+              aria-expanded={logExpanded}
+              aria-controls="batch-log-body"
+              onClick={() => setLogExpanded(!logExpanded)}
+            >
               📋 执行日志
               {isRunning && <span className="log-running-dot" />}
               <span className="batch-log-count">{logs.length} 条</span>
-            </span>
+            </button>
             <div className="batch-log-actions">
               <button
                 className="btn btn-sm batch-log-clear-btn"
@@ -717,6 +731,7 @@ export default function BatchPage() {
                   clearLogs()
                 }}
                 title="清空日志"
+                aria-label="清空执行日志"
               >
                 🗑
               </button>
@@ -726,7 +741,7 @@ export default function BatchPage() {
             </div>
           </div>
           {logExpanded && (
-            <div className="batch-log-body">
+            <div id="batch-log-body" className="batch-log-body">
               {hiddenLogCount > 0 && (
                 <div className="log-empty text-secondary">
                   为减少渲染压力，仅展示最近 {visibleLogs.length}{' '}

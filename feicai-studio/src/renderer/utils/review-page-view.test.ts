@@ -10,6 +10,7 @@ function createEpisode(partial: Partial<Episode> = {}): Episode {
     title: '第1集',
     status: 'idle',
     hasStoryBeat: false,
+    hasStoryReview: false,
     hasScript: false,
     hasScriptReview: false,
     hasDirectorAnalysis: false,
@@ -39,6 +40,21 @@ function createReview(partial: Partial<ReviewResult> = {}): ReviewResult {
 }
 
 describe('review-page-view', () => {
+  it('无效审核计入未通过而非从统计中消失', () => {
+    const model = buildReviewPageViewModel({
+      historicalState: null,
+      selectedEp: 1,
+      currentSessionEpisodeNum: 1,
+      sessionReviews: [
+        createReview({ result: 'INVALID', passed: false, score: 0 })
+      ],
+      episodes: [createEpisode()]
+    })
+    expect(model.stats.passCount).toBe(0)
+    expect(model.stats.failCount).toBe(1)
+    expect(model.stats.totalReviews).toBe(1)
+  })
+
   it('会合并历史和当前会话审核，并生成统计值', () => {
     const historicalState: ProjectPipelineState = {
       projectId: 'project-1',

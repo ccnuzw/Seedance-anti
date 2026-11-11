@@ -34,6 +34,7 @@ import { type ProjectContext } from './prompt-assembler'
 import { createProvider } from '../llm/provider-factory'
 import type { ILLMProvider } from '../llm/types'
 import { v4 as uuid } from 'uuid'
+import { randomUUID } from 'crypto'
 import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
 import { WorkflowEngine } from '../workflow/workflow-engine'
 import {
@@ -43,13 +44,9 @@ import {
   preparePipelineStart
 } from './state-machine-lifecycle'
 import {
-  getRetryStageSequence,
-  performAbort,
   performPause,
   performResume,
-  shouldStopPipelineExecution,
-  waitForTerminalState,
-  type TerminalStateSubscriber
+  shouldStopPipelineExecution
 } from './state-machine-controls'
 import { handleReviewCycleResult } from './state-machine-review-cycle'
 import {
@@ -68,6 +65,26 @@ export class PipelineStateMachine extends EventEmitter {
   private _aborted = false
   private _reviewSkipped = false
   private projectConfig: Partial<ProjectConfig> | null = null
+  private activeTask: Promise<void> | null = null
+  private controller: AbortController | null = null
+  private runId = ''
+  private operationId?: string
+  private pauseGate: Promise<void> | null = null
+  private openPauseGate: (() => void) | null = null
+  private externalCheckpoint?: () => Promise<void>
+  private pendingErrorWrite: Promise<void> | null = null
+  private pendingSkipWrite: Promise<void> | null = null
+
+  isRunning(): boolean {
+    return this.activeTask !== null
+  }
+
+  private async checkpoint(): Promise<void> {
+    this.controller?.signal.throwIfAborted()
+    if (this.pauseGate) await this.pauseGate
+    await this.externalCheckpoint?.()
+    this.controller?.signal.throwIfAborted()
+  }
 
   constructor(skillsDir: string) {
     super()
@@ -92,11 +109,18 @@ export class PipelineStateMachine extends EventEmitter {
 
   /** 获取完整上下文 */
   getContext(): PipelineContext {
-    return { ...this.context }
+    return {
+      ...this.context,
+      runId: this.runId,
+      running: this.isRunning(),
+      reviews: [...this.context.reviews],
+      logs: [...this.context.logs]
+    }
   }
 
   /** 设置 LLM Provider */
   setProvider(config: LLMConfig): void {
+    if (this.activeTask) throw new Error('任务尚未结束，不能更换模型')
     this.llmProvider = createProvider(config)
     this.workflowEngine.setProvider(this.llmProvider)
   }
@@ -104,7 +128,6 @@ export class PipelineStateMachine extends EventEmitter {
   /** 设置项目级流水线参数 */
   setPipelineSettings(settings: Partial<PipelineSettings>): void {
     this.pipelineSettings = { ...DEFAULT_PIPELINE_SETTINGS, ...settings }
-    this.workflowEngine.setPassScore(this.pipelineSettings.passScore)
   }
 
   // ==================== 状态转换 ====================
@@ -125,7 +148,7 @@ export class PipelineStateMachine extends EventEmitter {
   /**
    * 启动流水线 — 加载剧本并开始第一个阶段
    */
-  async start(params: {
+  start(params: {
     projectId: string
     projectPath: string
     episodeNum: number
@@ -133,7 +156,52 @@ export class PipelineStateMachine extends EventEmitter {
     projectConfig?: Partial<ProjectConfig> | null
     startStage?: AutomatedPipelineStage
     singleStage?: boolean
+    signal?: AbortSignal
+    runId?: string
+    operationId?: string
+    waitUntilResumed?: () => Promise<void>
   }): Promise<void> {
+    if (this.activeTask) throw new Error('任务仍在执行或停止中')
+    this.controller = new AbortController()
+    this.runId = params.runId || randomUUID()
+    this.operationId = params.operationId
+    this.externalCheckpoint = params.waitUntilResumed
+    const cancel = () => {
+      this.controller?.abort()
+      this.openPauseGate?.()
+    }
+    params.signal?.addEventListener('abort', cancel, { once: true })
+    if (params.signal?.aborted) cancel()
+    // Start on the next microtask: the active slot is held before the first await.
+    const task = Promise.resolve()
+      .then(() => this.executeStart(params))
+      .catch(async (error) => {
+        if (!this.controller?.signal.aborted)
+          this.handleError('制作流程执行失败', error)
+      })
+      .finally(async () => {
+        params.signal?.removeEventListener('abort', cancel)
+        try {
+          await this.pendingErrorWrite
+          await this.pendingSkipWrite
+        } finally {
+          this.pendingErrorWrite = null
+          this.pendingSkipWrite = null
+          if (this._aborted || this.controller?.signal.aborted)
+            this.context.state = 'idle'
+          this.activeTask = null
+          this.setState(this.context.state)
+        }
+      })
+    this.activeTask = task
+    return task
+  }
+
+  private async executeStart(
+    params: Parameters<PipelineStateMachine['start']>[0]
+  ): Promise<void> {
+    await this.checkpoint()
+    this.statePersistence = null
     const prepared = await preparePipelineStart({
       params,
       llmConfigured: this.llmProvider !== null,
@@ -150,7 +218,10 @@ export class PipelineStateMachine extends EventEmitter {
         this.projectContext = projectContext
       },
       onProjectConfigAssigned: (projectConfig) => {
-        this.projectConfig = projectConfig
+        this.projectConfig = {
+          ...projectConfig,
+          pipelineSettings: { ...this.pipelineSettings }
+        }
       },
       onStatePersistenceAssigned: (persistence) => {
         this.statePersistence = persistence
@@ -168,6 +239,7 @@ export class PipelineStateMachine extends EventEmitter {
     }
 
     for (const stage of prepared.stageSequence) {
+      await this.checkpoint()
       if (this.shouldStop()) break
       await this.executeFullStage(stage)
     }
@@ -196,6 +268,24 @@ export class PipelineStateMachine extends EventEmitter {
     this.context.retryCount = 0
     this.context.lastReviewFeedback = undefined
     this._reviewSkipped = false
+    const saved = this.statePersistence?.getEpisode(this.context.episodeNum)
+      ?.stageStates[stage]
+    if (
+      this.operationId &&
+      saved?.operationId === this.operationId &&
+      saved.lastReview &&
+      !saved.lastReview.passed
+    ) {
+      this.context.retryCount = Math.max(
+        0,
+        saved.attempts - (saved.status === 'running' ? 1 : 0)
+      )
+      this.context.lastReviewFeedback = saved.lastReview.feedback
+      if (this.context.retryCount > this.pipelineSettings.maxRetries) {
+        this.handleError(`${stage} 阶段审核失败超过最大重试次数`, null)
+        return
+      }
+    }
 
     let passed = false
     while (
@@ -203,29 +293,34 @@ export class PipelineStateMachine extends EventEmitter {
       this.context.retryCount <= this.pipelineSettings.maxRetries
     ) {
       if (this.shouldStop()) return
+      await this.checkpoint()
 
       // 1. 执行阶段
       await this.executeStage(stage)
+      await this.checkpoint()
       if (this.shouldStop()) return
 
       // 2. 审核阶段
       const reviewResult = await this.executeReview(stage)
+      await this.checkpoint()
       if (this.shouldStop()) return
 
       // 3. 如果审核被用户跳过（skipReview 设置了 _reviewSkipped），直接跳出
       if (this._reviewSkipped) {
+        await this.pendingSkipWrite
         this._reviewSkipped = false
         passed = true
         break
       }
 
-      const outcome = handleReviewCycleResult({
+      const outcome = await handleReviewCycleResult({
         stage,
         reviewResult,
         episodeNum: this.context.episodeNum,
         retryCount: this.context.retryCount,
         maxRetries: this.pipelineSettings.maxRetries,
         statePersistence: this.statePersistence,
+        operationId: this.operationId,
         getStageOutputPath: (targetStage) =>
           this.getStageOutputPath(targetStage),
         getStageReviewPath: (targetStage) =>
@@ -261,6 +356,11 @@ export class PipelineStateMachine extends EventEmitter {
   private async executeStage(stage: AutomatedPipelineStage): Promise<void> {
     await runStageGeneration({
       stage,
+      operationId: this.operationId
+        ? `${this.operationId}:generation:${stage}:${this.context.retryCount}`
+        : undefined,
+      signal: this.controller?.signal,
+      waitUntilResumed: () => this.checkpoint(),
       workflowEngine: this.workflowEngine,
       projectPath: this.context.projectPath,
       episodeNum: this.context.episodeNum,
@@ -272,7 +372,8 @@ export class PipelineStateMachine extends EventEmitter {
       getStageOutputPath: (targetStage) => this.getStageOutputPath(targetStage),
       onStateChange: (state) => this.setState(state as PipelineState),
       onLog: (level, eventType, message) => this.log(level, eventType, message),
-      onStream: (payload) => this.emit('stream', payload),
+      onStream: (payload) =>
+        this.emit('stream', { ...payload, runId: this.runId }),
       shouldStop: () => this.shouldStop(),
       onDirectorOutputPath: (path) => {
         this.context.directorAnalysisPath = path
@@ -292,6 +393,11 @@ export class PipelineStateMachine extends EventEmitter {
   ): Promise<ReviewResult | null> {
     return await runStageReview({
       stage,
+      operationId: this.operationId
+        ? `${this.operationId}:review:${stage}:${this.context.retryCount}`
+        : undefined,
+      signal: this.controller?.signal,
+      waitUntilResumed: () => this.checkpoint(),
       workflowEngine: this.workflowEngine,
       projectPath: this.context.projectPath,
       episodeNum: this.context.episodeNum,
@@ -302,7 +408,8 @@ export class PipelineStateMachine extends EventEmitter {
       onReviewAppended: (review) => {
         this.context.reviews.push(review)
       },
-      onReviewResult: (payload) => this.emit('reviewResult', payload),
+      onReviewResult: (payload) =>
+        this.emit('reviewResult', { ...payload, runId: this.runId }),
       onError: (message, error) => this.handleError(message, error)
     })
   }
@@ -310,6 +417,10 @@ export class PipelineStateMachine extends EventEmitter {
   // ==================== 暂停/恢复/重试 ====================
 
   pause(): void {
+    if (!this.activeTask || this.pauseGate) return
+    const gate = Promise.withResolvers<void>()
+    this.pauseGate = gate.promise
+    this.openPauseGate = gate.resolve
     performPause({
       currentState: this.context.state,
       onPausedStateSaved: (state) => {
@@ -321,23 +432,22 @@ export class PipelineStateMachine extends EventEmitter {
   }
 
   /** 强制中止（用于停止执行）—— 状态回到 idle 而非 error */
-  abort(): void {
-    performAbort({
-      onAborted: () => {
-        this._aborted = true
-      },
-      onPausedStateCleared: () => {
-        this.pausedState = null
-      },
-      onErrorCleared: () => {
-        this.context.error = undefined
-      },
-      onStateChange: (state) => this.setState(state),
-      onLog: (level, eventType, message) => this.log(level, eventType, message)
-    })
+  async abort(): Promise<void> {
+    this._aborted = true
+    this.controller?.abort()
+    this.openPauseGate?.()
+    this.pauseGate = null
+    this.openPauseGate = null
+    this.pausedState = null
+    await this.activeTask
+    this.context.error = undefined
+    this.setState('idle')
   }
 
   resume(): void {
+    this.openPauseGate?.()
+    this.openPauseGate = null
+    this.pauseGate = null
     performResume({
       currentState: this.context.state,
       pausedState: this.pausedState,
@@ -352,65 +462,58 @@ export class PipelineStateMachine extends EventEmitter {
   /**
    * 从指定阶段重试
    */
-  async retry(stage?: AutomatedPipelineStage): Promise<void> {
-    const targetStage = stage || this.context.currentStage
-    this.context.retryCount = 0
-    this._aborted = false
-    this._reviewSkipped = false
-    this.context.state = 'script_done' // 重置到可以开始的状态
-
-    for (const nextStage of getRetryStageSequence(targetStage)) {
-      if (this.shouldStop()) break
-      await this.executeFullStage(nextStage)
-    }
+  async retry(
+    stage?: AutomatedPipelineStage,
+    options: {
+      signal?: AbortSignal
+      runId?: string
+      waitUntilResumed?: () => Promise<void>
+    } = {}
+  ): Promise<void> {
+    if (this.activeTask) throw new Error('任务尚未结束，不能重试')
+    if (!this.projectContext) throw new Error('没有可重试的制作流程')
+    await this.start({
+      ...options,
+      projectId: this.context.projectId,
+      projectPath: this.context.projectPath,
+      episodeNum: this.context.episodeNum,
+      projectContext: this.projectContext,
+      projectConfig: this.projectConfig,
+      startStage: stage || this.context.currentStage
+    })
   }
 
   /**
    * 跳过当前阶段审核，直接标记通过
    */
-  skipReview(stage: AutomatedPipelineStage): void {
+  async skipReview(stage: AutomatedPipelineStage): Promise<void> {
     if (!this.context.state.endsWith('_reviewing')) return
     this._reviewSkipped = true // 设置标志，阻止 executeFullStage 重试
-    performSkipReview({
+    this.pendingSkipWrite = performSkipReview({
       stage,
       episodeNum: this.context.episodeNum,
       statePersistence: this.statePersistence,
       onLog: (level, eventType, message) => this.log(level, eventType, message),
       onStateChange: (state) => this.setState(state)
     })
+    await this.pendingSkipWrite
   }
 
   /**
    * 等待流水线执行完成（episode_complete 或 error）
    * 用于批量模式的串行等待
    */
-  waitForCompletion(): Promise<{
+  async waitForCompletion(): Promise<{
     state: PipelineState
     stage: AutomatedPipelineStage
   }> {
-    const listeners = new Map<
-      TerminalStateSubscriber,
-      (data: { newState: PipelineState }) => void
-    >()
-    return waitForTerminalState(
-      this.context,
-      (listener) => {
-        const wrapped = (data: { newState: PipelineState }) =>
-          listener(data.newState)
-        listeners.set(listener, wrapped)
-        this.on('stateChanged', wrapped)
-      },
-      (listener) => {
-        const wrapped = listeners.get(listener)
-        if (!wrapped) return
-        this.removeListener('stateChanged', wrapped)
-        listeners.delete(listener)
-      }
-    )
+    await this.activeTask
+    return { state: this.context.state, stage: this.context.currentStage }
   }
 
   /** 重置到初始状态 */
   reset(): void {
+    if (this.activeTask) throw new Error('任务尚未结束，不能重置')
     this.context = createResetContext()
     this.pausedState = null
     this._aborted = false
@@ -436,7 +539,9 @@ export class PipelineStateMachine extends EventEmitter {
       timestamp: new Date().toISOString()
     }
     this.context.logs.push(entry)
-    this.emit('log', entry)
+    if (this.context.logs.length > 500)
+      this.context.logs.splice(0, this.context.logs.length - 500)
+    this.emit('log', { ...entry, runId: this.runId })
   }
 
   private handleError(message: string, error: unknown): void {
@@ -444,16 +549,15 @@ export class PipelineStateMachine extends EventEmitter {
     this.log('error', 'error', `❌ ${message}${detail ? ': ' + detail : ''}`)
     this.context.error = `${message}${detail ? ': ' + detail : ''}`
     if (this.statePersistence && this.context.episodeNum > 0) {
-      this.statePersistence
-        .markStageError(
-          this.context.episodeNum,
-          this.context.currentStage,
-          this.context.error
-        )
-        .catch(console.error)
+      this.pendingErrorWrite = this.statePersistence.markStageError(
+        this.context.episodeNum,
+        this.context.currentStage,
+        this.context.error
+      )
+      void this.pendingErrorWrite.catch(console.error)
     }
     this.setState('error')
-    this.emit('error', { message, error: detail })
+    this.emit('error', { message, error: detail, runId: this.runId })
   }
 
   private getStageOutputPath(

@@ -32,6 +32,26 @@ function createStatement(sql: string) {
   return {
     run: (...args: unknown[]) => {
       if (
+        sql ===
+        "UPDATE llm_configs SET api_key_encrypted = '', is_default = 0 WHERE api_key_encrypted <> ''"
+      ) {
+        let changes = 0
+        for (const row of rows) {
+          if (row.api_key_encrypted) {
+            row.api_key_encrypted = ''
+            row.is_default = 0
+            changes++
+          }
+        }
+        return { changes }
+      }
+      if (
+        sql === 'UPDATE llm_configs SET is_default = 0 WHERE is_default <> 0'
+      ) {
+        for (const row of rows) row.is_default = 0
+        return { changes: rows.length }
+      }
+      if (
         sql.startsWith(
           'UPDATE llm_configs SET is_default = 0 WHERE category = ?'
         )
@@ -393,5 +413,79 @@ describe('llm-config-repository', async () => {
 
     repository.deleteLLMConfig('cfg-a')
     expect(findRowById('cfg-a')).toBeUndefined()
+  })
+
+  it.each([
+    { baseUrl: 'https://attacker.example.com' },
+    { baseUrl: 'https://api.example.com/other' },
+    { provider: 'openai' as const }
+  ])('保存、测试、执行不可将旧密钥带到变更端点/provider: %j', (change) => {
+    const saved = repository.addLLMConfig(baseConfig)
+    expect(() => repository.updateLLMConfig(saved.id, change)).toThrow(
+      '重新输入 API Key'
+    )
+    expect(() =>
+      repository.resolveLLMConfigForExecution({ ...saved, ...change })
+    ).toThrow('重新输入 API Key')
+    expect(repository.resolveLLMConfigForExecution(saved).apiKey).toBe(
+      'secret-key'
+    )
+    repository.updateLLMConfig(saved.id, {
+      ...change,
+      apiKey: 'replacement-key'
+    })
+    const updated = repository
+      .listLLMConfigs()
+      .find((item) => item.id === saved.id)!
+    expect(repository.resolveLLMConfigForExecution(updated).apiKey).toBe(
+      'replacement-key'
+    )
+  })
+
+  it('拒绝不安全端点且不触碰已保存密钥', () => {
+    const saved = repository.addLLMConfig(baseConfig)
+    for (const baseUrl of [
+      'http://remote.example/v1',
+      'https://private-key@remote.example/v1'
+    ]) {
+      expect(() =>
+        repository.addLLMConfig({ ...baseConfig, baseUrl })
+      ).toThrow()
+      expect(() =>
+        repository.updateLLMConfig(saved.id, { baseUrl, apiKey: 'new-key' })
+      ).toThrow()
+      expect(() =>
+        repository.resolveLLMConfigForExecution({ ...saved, baseUrl })
+      ).toThrow()
+    }
+    expect(repository.resolveLLMConfigForExecution(saved).apiKey).toBe(
+      'secret-key'
+    )
+  })
+
+  it('清理只移除凭据及默认状态，保留可重新编辑的配置', () => {
+    const saved = repository.addLLMConfig(baseConfig)
+    expect(repository.clearStoredLLMCredentials()).toBe(1)
+    const remaining = repository.listLLMConfigs()
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]).toMatchObject({
+      id: saved.id,
+      name: saved.name,
+      model: saved.model,
+      baseUrl: saved.baseUrl,
+      hasStoredApiKey: false,
+      isDefault: false
+    })
+    expect(repository.getDefaultLLMConfig()).toBeNull()
+    expect(() => repository.resolveLLMConfigForExecution(remaining[0])).toThrow(
+      '请重新填写'
+    )
+    expect(() => repository.setDefaultLLMConfig(saved.id)).toThrow('请重新填写')
+    expect(repository.clearStoredLLMCredentials()).toBe(0)
+    repository.updateLLMConfig(saved.id, {
+      apiKey: 'replacement-key',
+      isDefault: true
+    })
+    expect(repository.getDefaultLLMConfig()?.apiKey).toBe('replacement-key')
   })
 })

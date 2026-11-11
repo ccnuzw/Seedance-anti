@@ -9,7 +9,8 @@ const eventHandlers = new Map<string, (data: unknown) => void>()
 vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows
-  }
+  },
+  app: { getPath: () => '/tmp/feicai-runtime-test' }
 }))
 
 vi.mock('../engine/state-machine', () => ({
@@ -39,6 +40,12 @@ vi.mock('../workflow/workflow-step-runner', () => ({
 vi.mock('./pipeline-service', () => ({
   getSkillsDir: vi.fn(() => '/tmp/skills')
 }))
+vi.mock('./project-service', () => ({
+  getRegisteredProject: vi.fn(),
+  getRegisteredProjectPlotBreakdownSummary: vi.fn(),
+  listProjectEpisodes: vi.fn()
+}))
+vi.mock('./batch-queue-recovery', () => ({ recoverBatchCommit: vi.fn() }))
 
 describe('pipeline-runtime-service', async () => {
   const service = await import('./pipeline-runtime-service')
@@ -61,12 +68,12 @@ describe('pipeline-runtime-service', async () => {
     expect(pipelineOn).toHaveBeenCalledTimes(6)
   })
 
-  it('会缓存 workflow runner 实例', () => {
+  it('每次提供独立 workflow runner，禁止共享可变provider上下文', () => {
     const first = service.getWorkflowRunnerRuntime()
     const second = service.getWorkflowRunnerRuntime()
 
-    expect(first).toBe(second)
-    expect(runnerConstructor).toHaveBeenCalledTimes(1)
+    expect(first).not.toBe(second)
+    expect(runnerConstructor).toHaveBeenCalledTimes(2)
     expect(runnerConstructor).toHaveBeenCalledWith('/tmp/skills')
   })
 

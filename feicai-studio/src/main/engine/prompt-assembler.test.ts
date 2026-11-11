@@ -144,7 +144,9 @@ describe('prompt-assembler', () => {
     expect(prompt.user).toContain('新的剧情点编号必须连续递增')
     expect(prompt.user).toContain('不得从【剧情1】重新开始')
     expect(prompt.user).toContain('只提取 7 分以上的核心冲突和情绪钩子')
-    expect(prompt.user).toContain('不得改编超出项目信息中“小说处理上限”的章节内容')
+    expect(prompt.user).toContain(
+      '不得改编超出项目信息中“小说处理上限”的章节内容'
+    )
   })
 
   it('assemble 在默认阶段会使用通用执行指令', () => {
@@ -177,7 +179,8 @@ describe('prompt-assembler', () => {
       '# output',
       '# script',
       '# director',
-      '# plot-breakdown'
+      '# plot-breakdown',
+      '# art-design'
     )
 
     expect(prompt.system).toContain('对抗性审核立场')
@@ -186,6 +189,11 @@ describe('prompt-assembler', () => {
     expect(prompt.user).toContain('# 原始剧本（对照用）')
     expect(prompt.user).toContain('# 导演讲戏本（对照用）')
     expect(prompt.user).toContain('# 剧情库存（对照用）')
-    expect(prompt.user).toContain('最终给出 PASS 或 FAIL 结论')
+    expect(prompt.user).toContain('# 本集服化道设计（对照用）')
+    expect(prompt.system).toContain('方法论说明')
+    expect(prompt.system).toContain('示例 A')
+    expect(prompt.system).toContain('指南 A')
+    expect(prompt.system).toContain('# 最终输出协议')
+    expect(prompt.user).toContain('最终 JSON 输出协议')
   })
 })

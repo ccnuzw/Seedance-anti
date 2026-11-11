@@ -243,6 +243,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
   padding: var(--spacing-md) var(--spacing-lg);
 }
 
@@ -269,6 +271,18 @@
   display: flex;
   gap: var(--spacing-xs);
   align-items: center;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.settings-section [role='status'],
+.settings-section [role='alert'] {
+  overflow-wrap: anywhere;
+  padding: var(--spacing-sm) var(--spacing-lg);
+}
+
+.settings-section [role='alert'] {
+  color: var(--color-danger);
 }
 
 /* Theme toggle buttons */

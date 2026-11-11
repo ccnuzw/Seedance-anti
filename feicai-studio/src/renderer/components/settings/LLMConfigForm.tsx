@@ -12,7 +12,8 @@ import {
   canFetchModelList,
   canSaveConfig,
   canTestConnection,
-  isOpenAIProvider
+  isOpenAIProvider,
+  modelTestNotice
 } from '@renderer/settings/llm-settings-helpers'
 import type {
   LLMFormState,
@@ -153,8 +154,8 @@ export function LLMConfigForm(props: Props) {
             <div className="form-group full-width">
               <label>图片接口</label>
               <div className="text-secondary">
-                当前图片 Provider 会使用固定端点
-                `/v1/images/generations`。这里保存的是默认参数，实际调用时可以覆盖。
+                仅用于验证 `/v1/images/generations`
+                与保存默认参数，尚未提供图片生成生产链。
               </div>
             </div>
             <div className="form-group">
@@ -230,24 +231,32 @@ export function LLMConfigForm(props: Props) {
           </>
         )}
         <div className="form-group full-width">
-          <label>
+          <label htmlFor="llm-base-url">
             Base URL{' '}
-            <span className="text-secondary">(代理需要以 /v1 结尾)</span>
+            <span className="text-secondary">（非本机端点必须使用 HTTPS）</span>
           </label>
           <input
+            id="llm-base-url"
+            aria-describedby="llm-key-binding-hint"
             className="input"
             value={form.baseUrl}
             onChange={(e) => onFormChange({ ...form, baseUrl: e.target.value })}
           />
+          <div id="llm-key-binding-hint" className="text-secondary">
+            更换端点或 Provider 会清空当前输入，必须重新输入 API
+            Key，不能沿用已保存密钥。
+          </div>
         </div>
         <div className="form-group full-width">
-          <label>API Key</label>
+          <label htmlFor="llm-api-key">API Key</label>
           {hasStoredApiKey && editingId && (
             <div className="text-secondary">
               已保存密钥 {maskedApiKey || '••••'}。留空则继续使用已保存密钥。
             </div>
           )}
           <input
+            id="llm-api-key"
+            autoComplete="new-password"
             className="input"
             type="password"
             placeholder={
@@ -317,12 +326,27 @@ export function LLMConfigForm(props: Props) {
         </div>
       )}
 
+      <p className="text-secondary" id="llm-test-cost-notice">
+        {modelTestNotice(form.category)}
+      </p>
       <div className="form-actions">
-        <button className="btn" onClick={onTestConnection} disabled={!canTest}>
-          {testing ? '⏳ 测试中...' : '🔌 测试连接'}
+        <button
+          className="btn"
+          onClick={onTestConnection}
+          disabled={!canTest || form.category === 'video'}
+          aria-describedby="llm-test-cost-notice"
+        >
+          {testing
+            ? '测试中...'
+            : form.category === 'video'
+              ? '暂不支持视频测试'
+              : '真实生成测试（可能收费）'}
         </button>
         {testResult && (
-          <span className={testResult.success ? 'text-success' : 'text-error'}>
+          <span
+            role="status"
+            className={testResult.success ? 'text-success' : 'text-error'}
+          >
             {testResult.message}
           </span>
         )}

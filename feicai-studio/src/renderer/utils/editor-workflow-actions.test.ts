@@ -265,10 +265,7 @@ describe('editor-workflow-actions', () => {
       expect.objectContaining({ stage: 'story_review', score: 8 })
     )
     expect(syncSingleEpisodeStatus).toHaveBeenCalledWith(2)
-    expect(addToast).toHaveBeenCalledWith(
-      'success',
-      'EP02 剧情拆解审核已通过'
-    )
+    expect(addToast).toHaveBeenCalledWith('success', 'EP02 剧情拆解审核已通过')
   })
 
   it('剧情审核未通过时只写入反馈并提示 warning', async () => {

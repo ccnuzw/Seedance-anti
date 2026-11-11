@@ -356,7 +356,9 @@ export default function ProjectHealthPage() {
                   {risk.actionLabel && risk.actionPath ? (
                     <button
                       className="btn btn-sm"
-                      onClick={() => navigate(risk.actionPath)}
+                      onClick={() => {
+                        if (risk.actionPath) navigate(risk.actionPath)
+                      }}
                     >
                       {risk.actionLabel}
                     </button>

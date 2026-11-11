@@ -1,436 +1,307 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-const handlers = new Map<string, Function>()
-const readFile = vi.fn()
-const writeFile = vi.fn()
-const listRegisteredProjects = vi.fn()
-const listProjectEpisodes = vi.fn()
-const syncRegisteredProjectStatus = vi.fn()
-const syncRegisteredProjectEpisodeStatus = vi.fn()
-const setDefaultLLM = vi.fn()
-const deleteLLMConfig = vi.fn()
-const updateLLMConfig = vi.fn()
-const addLLMConfig = vi.fn()
-const getRegisteredProject = vi.fn()
-const listLLMConfigs = vi.fn()
-const listLLMModels = vi.fn()
-const testLLMConnection = vi.fn()
-const getProjectPipelineState = vi.fn()
-const createProject = vi.fn()
-const deleteProject = vi.fn()
-const detectProjectDirectory = vi.fn()
-const migrateLegacyNovelDirectory = vi.fn()
-const repairProjectIssues = vi.fn()
-const registerProjectRoot = vi.fn()
-const registerProjectRoots = vi.fn()
-const assertRegisteredProjectRoot = vi.fn((input: string) => input)
-const assertTrustedProjectSelection = vi.fn((input: string) => input)
-const assertProjectFileReadAllowed = vi.fn((input: string) => input)
-const assertProjectFileWriteAllowed = vi.fn((input: string) => input)
-const rememberSelectedDirectory = vi.fn((input: string) => input)
-const rememberSelectedFile = vi.fn((input: string) => input)
-const registerPipelineHandlers = vi.fn()
-const registerAssetHandlers = vi.fn()
-const registerExportHandlers = vi.fn()
-const existsSync = vi.fn()
-const showOpenDialog = vi.fn()
-
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, handler: Function) => {
-      handlers.set(channel, handler)
-    }
-  },
-  dialog: {
-    showOpenDialog
-  }
-}))
-
-vi.mock('fs/promises', () => ({
-  readFile,
-  writeFile
-}))
-
-vi.mock('fs', () => ({
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
   existsSync
-}))
+} from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import type { Project } from '@shared/types'
+import { IPC } from '@shared/ipc-channels'
 
+const mocks = vi.hoisted(() => {
+  const frame = { url: 'file:///app/index.html' }
+  const sender = {
+    mainFrame: frame,
+    getURL: () => frame.url,
+    isDestroyed: () => false
+  }
+  return {
+    handlers: new Map<string, (...args: unknown[]) => unknown>(),
+    frame,
+    sender,
+    projects: [] as Project[],
+    showOpenDialog: vi.fn(),
+    createProject: vi.fn(),
+    updateProject: vi.fn(),
+    sync: vi.fn(),
+    syncEpisode: vi.fn(),
+    llmModels: vi.fn()
+  }
+})
+vi.mock('electron', () => ({
+  app: { getVersion: () => 'test-version' },
+  ipcMain: {
+    handle: (channel: string, callback: (...args: unknown[]) => unknown) =>
+      mocks.handlers.set(channel, callback)
+  },
+  BrowserWindow: {
+    fromWebContents: (sender: unknown) =>
+      sender === mocks.sender ? { id: 1 } : null
+  },
+  dialog: { showOpenDialog: mocks.showOpenDialog }
+}))
+vi.mock('./pipeline-handlers', () => ({ registerPipelineHandlers: vi.fn() }))
+vi.mock('./asset-handlers', () => ({ registerAssetHandlers: vi.fn() }))
+vi.mock('./export-handlers', () => ({ registerExportHandlers: vi.fn() }))
 vi.mock('../services/project-service', () => ({
-  listRegisteredProjects,
-  getRegisteredProject,
-  createProject,
-  deleteProject,
-  listProjectEpisodes,
-  syncRegisteredProjectStatus,
-  syncRegisteredProjectEpisodeStatus,
-  migrateLegacyNovelDirectory,
-  repairProjectIssues
+  listRegisteredProjects: () => mocks.projects,
+  getRegisteredProject: (id: string) =>
+    mocks.projects.find((project) => project.id === id) || null,
+  createProject: mocks.createProject,
+  updateProject: mocks.updateProject,
+  deleteProject: vi.fn(),
+  listProjectEpisodes: vi.fn(() => []),
+  listRegisteredProjectSourceChapters: vi.fn(() => []),
+  getRegisteredProjectPlotBreakdownSummary: vi.fn(),
+  migrateLegacyNovelDirectory: vi.fn(),
+  repairProjectIssues: vi.fn(),
+  syncRegisteredProjectStatus: mocks.sync,
+  syncRegisteredProjectEpisodeStatus: mocks.syncEpisode
 }))
-
 vi.mock('../services/llm-service', () => ({
-  listLLMConfigs,
-  addLLMConfig,
-  deleteLLMConfig,
-  updateLLMConfig,
-  setDefaultLLM,
-  testLLMConnection,
-  listLLMModels
+  listLLMConfigs: vi.fn(() => []),
+  addLLMConfig: vi.fn(),
+  deleteLLMConfig: vi.fn(),
+  updateLLMConfig: vi.fn(),
+  setDefaultLLM: vi.fn(),
+  testLLMConnection: vi.fn(),
+  listLLMModels: mocks.llmModels
 }))
-
 vi.mock('../services/project-state-service', () => ({
-  getProjectPipelineState
+  getProjectPipelineState: vi.fn()
 }))
-
 vi.mock('../project/project-detector', () => ({
-  detectProjectDirectory
+  detectProjectDirectory: vi.fn()
 }))
 
-vi.mock('../security/access-control', () => ({
-  assertProjectFileReadAllowed,
-  assertProjectFileWriteAllowed,
-  assertRegisteredProjectRoot,
-  assertTrustedProjectSelection,
+import { registerAllHandlers } from './register'
+import { setTrustedIpcRendererUrl } from '../security/safe-ipc'
+import {
   registerProjectRoot,
-  registerProjectRoots,
   rememberSelectedDirectory,
-  rememberSelectedFile
-}))
+  rememberSelectedFile,
+  resetAccessControl
+} from '../security/access-control'
+import { flushPendingWrites } from '../io/atomic-file'
 
-vi.mock('./pipeline-handlers', () => ({
-  registerPipelineHandlers
-}))
-
-vi.mock('./asset-handlers', () => ({
-  registerAssetHandlers
-}))
-
-vi.mock('./export-handlers', () => ({
-  registerExportHandlers
-}))
-
-describe('registerAllHandlers', async () => {
-  const { registerAllHandlers } = await import('./register')
-  const { IPC } = await import('@shared/ipc-channels')
-
-  beforeEach(() => {
-    handlers.clear()
-    vi.clearAllMocks()
-    registerAllHandlers()
-  })
-
-  it('初始化时会注册 pipeline asset export 子 handlers', () => {
-    expect(registerPipelineHandlers).toHaveBeenCalledTimes(1)
-    expect(registerAssetHandlers).toHaveBeenCalledTimes(1)
-    expect(registerExportHandlers).toHaveBeenCalledTimes(1)
-  })
-
-  it('列出项目时会注册所有项目根目录', async () => {
-    listRegisteredProjects.mockReturnValue([
-      { id: 'project-1', projectPath: '/tmp/project-1' },
-      { id: 'project-2', projectPath: '/tmp/project-2' }
-    ])
-
-    const handler = handlers.get(IPC.PROJECT_LIST)
-    const result = await handler?.({})
-
-    expect(registerProjectRoots).toHaveBeenCalledWith([
-      '/tmp/project-1',
-      '/tmp/project-2'
-    ])
-    expect(result).toEqual([
-      { id: 'project-1', projectPath: '/tmp/project-1' },
-      { id: 'project-2', projectPath: '/tmp/project-2' }
-    ])
-  })
-
-  it('获取单个项目时会注册该项目根目录', async () => {
-    getRegisteredProject.mockReturnValue({
-      id: 'project-1',
-      projectPath: '/tmp/project-1'
-    })
-
-    const handler = handlers.get(IPC.PROJECT_GET)
-    const result = await handler?.({}, 'project-1')
-
-    expect(getRegisteredProject).toHaveBeenCalledWith('project-1')
-    expect(registerProjectRoot).toHaveBeenCalledWith('/tmp/project-1')
-    expect(result).toEqual({
-      id: 'project-1',
-      projectPath: '/tmp/project-1'
-    })
-  })
-
-  it('读取项目流水线状态时会先校验路径再交给项目状态 service', async () => {
-    getProjectPipelineState.mockResolvedValue({
-      updatedAt: '2026-05-07T00:00:00.000Z'
-    })
-
-    const handler = handlers.get(IPC.PROJECT_GET_PIPELINE_STATE)
-    const result = await handler?.({}, '/tmp/project')
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(getProjectPipelineState).toHaveBeenCalledWith('/tmp/project')
-    expect(result).toEqual({ updatedAt: '2026-05-07T00:00:00.000Z' })
-  })
-
-  it('列出远程模型时会将参数转交给 llm service', async () => {
-    listLLMModels.mockResolvedValue({
-      success: true,
-      models: [{ id: 'gpt-4.1', name: 'gpt-4.1', owner: 'openai' }],
-      message: '获取到 1 个模型'
-    })
-
-    const handler = handlers.get(IPC.LLM_LIST_MODELS)
-    const payload = { baseUrl: 'https://example.com', configId: 'cfg-1' }
-    const result = await handler?.({}, payload)
-
-    expect(listLLMModels).toHaveBeenCalledWith(payload)
-    expect(result).toEqual({
-      success: true,
-      models: [{ id: 'gpt-4.1', name: 'gpt-4.1', owner: 'openai' }],
-      message: '获取到 1 个模型'
-    })
-  })
-
-  it('读取缺失文件时会返回 null 而不是抛出 ENOENT', async () => {
-    existsSync.mockReturnValue(true)
-    readFile.mockRejectedValueOnce(
-      Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-    )
-
-    const handler = handlers.get(IPC.FILE_READ)
-    const result = await handler?.({}, '/tmp/missing.md')
-
-    expect(assertProjectFileReadAllowed).toHaveBeenCalledWith('/tmp/missing.md')
-    expect(readFile).toHaveBeenCalledWith('/tmp/missing.md', 'utf-8')
-    expect(result).toBeNull()
-  })
-
-  it('文件不存在时不会尝试读取并直接返回 null', async () => {
-    existsSync.mockReturnValue(false)
-
-    const handler = handlers.get(IPC.FILE_READ)
-    const result = await handler?.({}, '/tmp/missing.md')
-
-    expect(assertProjectFileReadAllowed).toHaveBeenCalledWith('/tmp/missing.md')
-    expect(readFile).not.toHaveBeenCalled()
-    expect(result).toBeNull()
-  })
-
-  it('迁移旧版小说目录时会先校验项目根目录', async () => {
-    migrateLegacyNovelDirectory.mockResolvedValue({
-      success: true,
-      migrated: true,
-      sourcePath: '/tmp/project/source/novel.md',
-      legacyDirPath: '/tmp/project/novel',
-      migratedFiles: 30,
-      message: '已迁移 30 个章节到标准小说原文'
-    })
-
-    const handler = handlers.get(IPC.PROJECT_MIGRATE_LEGACY_NOVEL)
-    const result = await handler?.({}, '/tmp/project')
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(migrateLegacyNovelDirectory).toHaveBeenCalledWith('/tmp/project')
-    expect(result).toEqual({
-      success: true,
-      migrated: true,
-      sourcePath: '/tmp/project/source/novel.md',
-      legacyDirPath: '/tmp/project/novel',
-      migratedFiles: 30,
-      message: '已迁移 30 个章节到标准小说原文'
-    })
-  })
-
-  it('检查已导入项目目录时会走已注册项目根目录校验', async () => {
-    detectProjectDirectory.mockReturnValue({
-      resolvedPath: '/tmp/project',
-      configPath: '/tmp/project/project-config.json',
-      scriptDir: '/tmp/project/scripts',
-      outputsDir: '/tmp/project/outputs'
-    })
-
-    const handler = handlers.get(IPC.PROJECT_INSPECT)
-    const result = await handler?.({}, '/tmp/project')
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(assertTrustedProjectSelection).not.toHaveBeenCalledWith(
-      '/tmp/project'
-    )
-    expect(detectProjectDirectory).toHaveBeenCalledWith('/tmp/project')
-    expect(result).toEqual({
-      resolvedPath: '/tmp/project',
-      configPath: '/tmp/project/project-config.json',
-      scriptDir: '/tmp/project/scripts',
-      outputsDir: '/tmp/project/outputs'
-    })
-  })
-
-  it('创建项目时会校验受信目录并注册新项目根目录', async () => {
-    createProject.mockResolvedValue({
-      id: 'project-1',
-      projectPath: '/tmp/project'
-    })
-
-    const handler = handlers.get(IPC.PROJECT_CREATE)
-    const payload = {
-      name: '项目',
-      projectPath: '/tmp/project',
-      visualStyle: '现实',
+const directories: string[] = []
+function temporary(): string {
+  const directory = realpathSync.native(
+    mkdtempSync(join(tmpdir(), 'feicai-ipc-'))
+  )
+  directories.push(directory)
+  return directory
+}
+function project(root: string, id = 'project-1'): Project {
+  return {
+    id,
+    name: '测试',
+    projectPath: root,
+    visualStyle: '写实',
+    targetMedium: '短剧',
+    totalEpisodes: 2,
+    config: {
+      projectName: '测试',
+      visualStyle: '写实',
       targetMedium: '短剧',
-      totalEpisodes: 10,
-      config: { projectName: '项目' }
-    }
-    const result = await handler?.({}, payload)
+      totalEpisodes: 2,
+      createdAt: 'now'
+    },
+    createdAt: 'now',
+    updatedAt: 'now'
+  }
+}
+function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
+  const callback = mocks.handlers.get(channel)
+  if (!callback) throw new Error('handler missing')
+  return Promise.resolve().then(() =>
+    callback({ senderFrame: mocks.frame, sender: mocks.sender }, ...args)
+  )
+}
+beforeEach(() => {
+  vi.clearAllMocks()
+  resetAccessControl()
+  mocks.handlers.clear()
+  mocks.projects.length = 0
+  mocks.frame.url = 'file:///app/index.html'
+  setTrustedIpcRendererUrl(mocks.frame.url)
+  registerAllHandlers()
+})
+afterEach(async () => {
+  await flushPendingWrites()
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true })
+})
 
-    expect(assertTrustedProjectSelection).toHaveBeenCalledWith('/tmp/project')
-    expect(createProject).toHaveBeenCalledWith({
-      ...payload,
-      projectPath: '/tmp/project'
+describe('IPC真实文件能力边界', () => {
+  it('普通新文件可原子创建和读取，更新保留bak，读取缺失返回null', async () => {
+    const root = temporary()
+    mocks.projects.push(project(root))
+    await invoke(IPC.PROJECT_LIST)
+    const path = join(root, 'nested', 'draft.md')
+    expect(await invoke(IPC.FILE_WRITE, path, 'first')).toEqual({
+      success: true
     })
-    expect(registerProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(result).toEqual({
-      id: 'project-1',
-      projectPath: '/tmp/project'
+    expect(await invoke(IPC.FILE_READ, path)).toBe('first')
+    expect(await invoke(IPC.FILE_WRITE, path, 'second', 'first')).toEqual({
+      success: true
     })
+    expect(readFileSync(`${path}.bak`, 'utf8')).toBe('first')
+    expect(await invoke(IPC.FILE_READ, join(root, 'missing.md'))).toBeNull()
   })
 
-  it('修复已导入项目问题时会走已注册项目根目录校验', async () => {
-    repairProjectIssues.mockResolvedValue({
-      success: true,
-      appliedActions: ['apply_suggested_config'],
-      message: '已执行 1 项修复动作',
-      dryRun: false,
-      plannedChanges: ['更新或生成项目配置: /tmp/project/project-config.json'],
-      readyItems: [
-        {
-          label: '项目配置',
-          path: '/tmp/project/project-config.json',
-          exists: true
-        }
-      ],
-      detected: {
-        resolvedPath: '/tmp/project',
-        configPath: '/tmp/project/project-config.json',
-        scriptDir: '/tmp/project/scripts',
-        outputsDir: '/tmp/project/outputs'
-      }
+  it('草稿冲突保持磁盘内容，错误输入不改变文件', async () => {
+    const root = temporary()
+    registerProjectRoot(root)
+    const path = join(root, 'draft.md')
+    writeFileSync(path, 'external')
+    expect(await invoke(IPC.FILE_WRITE, path, 'mine', 'old')).toEqual({
+      success: false,
+      error: 'FILE_CONFLICT'
     })
+    await expect(invoke(IPC.FILE_WRITE, path, { text: 'bad' })).rejects.toThrow(
+      '字符串'
+    )
+    expect(readFileSync(path, 'utf8')).toBe('external')
+  })
 
-    const handler = handlers.get(IPC.PROJECT_REPAIR)
+  it('有效/悬空链接及父链接拒绝读写且不触碰外部文件', async () => {
+    const root = temporary()
+    const outside = temporary()
+    registerProjectRoot(root)
+    const secret = join(outside, 'secret.md')
+    writeFileSync(secret, 'secret')
+    symlinkSync(secret, join(root, 'valid.md'))
+    symlinkSync(join(outside, 'new.md'), join(root, 'dangling.md'))
+    symlinkSync(outside, join(root, 'parent'))
+    for (const path of [
+      join(root, 'valid.md'),
+      join(root, 'dangling.md'),
+      join(root, 'parent', 'new.md')
+    ]) {
+      await expect(invoke(IPC.FILE_READ, path)).rejects.toThrow('符号链接')
+      await expect(invoke(IPC.FILE_WRITE, path, 'escape')).rejects.toThrow(
+        '符号链接'
+      )
+    }
+    expect(readFileSync(secret, 'utf8')).toBe('secret')
+    expect(existsSync(join(outside, 'new.md'))).toBe(false)
+  })
+
+  it('只选目录不授予任意读取，选定文件不会授权兄弟文件', async () => {
+    const root = temporary()
+    const selected = join(root, 'selected.md')
+    writeFileSync(selected, 'selected')
+    writeFileSync(join(root, 'private.md'), 'private')
+    rememberSelectedDirectory(root)
+    await expect(invoke(IPC.FILE_READ, selected)).rejects.toThrow('未授权读取')
+    rememberSelectedFile(selected)
+    expect(await invoke(IPC.FILE_READ, selected)).toBe('selected')
+    await expect(
+      invoke(IPC.FILE_READ, join(root, 'private.md'))
+    ).rejects.toThrow('未授权读取')
+  })
+
+  it('所有注册入口拒绝远端页面及同URL子frame', async () => {
+    mocks.frame.url = 'https://evil.example/'
+    await expect(invoke(IPC.PROJECT_LIST)).rejects.toThrow('frame')
+    mocks.frame.url = 'file:///app/index.html'
+    const callback = mocks.handlers.get(IPC.FILE_READ)!
+    await expect(
+      Promise.resolve().then(() =>
+        callback(
+          { sender: mocks.sender, senderFrame: { url: mocks.frame.url } },
+          '/tmp/anything'
+        )
+      )
+    ).rejects.toThrow('frame')
+  })
+})
+
+describe('项目身份和运行时输入', () => {
+  it('同步不能混用另一个已注册项目目录，集数也必须合法', async () => {
+    const first = temporary()
+    const second = temporary()
+    mocks.projects.push(project(first), project(second, 'project-2'))
+    await invoke(IPC.PROJECT_LIST)
+    await expect(
+      invoke(IPC.PROJECT_SYNC_STATUS, 'project-1', second)
+    ).rejects.toThrow('不一致')
+    await expect(
+      invoke(IPC.PROJECT_SYNC_EPISODE_STATUS, {
+        projectId: 'project-1',
+        projectPath: first,
+        episodeNum: 0
+      })
+    ).rejects.toThrow('集数')
+    expect(mocks.sync).not.toHaveBeenCalled()
+    expect(mocks.syncEpisode).not.toHaveBeenCalled()
+  })
+
+  it('更新拒绝id/path注入，配置目录链接和穿越不能写入', async () => {
+    const root = temporary()
+    const outside = temporary()
+    mocks.projects.push(project(root))
+    await expect(
+      invoke(IPC.PROJECT_UPDATE, 'project-1', { id: 'project-2' })
+    ).rejects.toThrow('不允许')
+    await expect(
+      invoke(IPC.PROJECT_UPDATE, 'project-1', { projectPath: outside })
+    ).rejects.toThrow('不允许')
+    await expect(
+      invoke(IPC.PROJECT_UPDATE, 'project-1', {
+        config: { directories: { outputsDir: '../escape' } }
+      })
+    ).rejects.toThrow('相对路径')
+    symlinkSync(outside, join(root, 'linked'))
+    await expect(
+      invoke(IPC.PROJECT_UPDATE, 'project-1', {
+        config: { directories: { outputsDir: 'linked' } }
+      })
+    ).rejects.toThrow('符号链接')
+    expect(mocks.updateProject).not.toHaveBeenCalled()
+  })
+
+  it('创建不能绑定同一路径两次，不能指定id或未经选定的小说', async () => {
+    const root = temporary()
+    rememberSelectedDirectory(root)
+    mocks.projects.push(project(root))
     const payload = {
-      projectPath: '/tmp/project',
-      actionIds: ['apply_suggested_config'],
-      trustMode: 'registered'
+      name: 'new',
+      projectPath: root,
+      visualStyle: '写实',
+      targetMedium: '短剧',
+      totalEpisodes: 1,
+      config: {}
     }
-    const result = await handler?.({}, payload)
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(repairProjectIssues).toHaveBeenCalledWith(payload)
-    expect(result).toEqual({
-      success: true,
-      appliedActions: ['apply_suggested_config'],
-      message: '已执行 1 项修复动作',
-      dryRun: false,
-      plannedChanges: ['更新或生成项目配置: /tmp/project/project-config.json'],
-      readyItems: [
-        {
-          label: '项目配置',
-          path: '/tmp/project/project-config.json',
-          exists: true
-        }
-      ],
-      detected: {
-        resolvedPath: '/tmp/project',
-        configPath: '/tmp/project/project-config.json',
-        scriptDir: '/tmp/project/scripts',
-        outputsDir: '/tmp/project/outputs'
-      }
-    })
+    await expect(invoke(IPC.PROJECT_CREATE, payload)).rejects.toThrow('已关联')
+    await expect(
+      invoke(IPC.PROJECT_CREATE, { ...payload, id: 'injected' })
+    ).rejects.toThrow('不允许')
+    mocks.projects.length = 0
+    const file = join(root, 'novel.md')
+    writeFileSync(file, 'novel')
+    await expect(
+      invoke(IPC.PROJECT_CREATE, { ...payload, sourceNovelFilePath: file })
+    ).rejects.toThrow('选择的文件')
+    expect(mocks.createProject).not.toHaveBeenCalled()
   })
 
-  it('修复未导入目录问题时会走受信选择目录校验', async () => {
-    repairProjectIssues.mockResolvedValue({ success: true })
-
-    const handler = handlers.get(IPC.PROJECT_REPAIR)
-    const payload = {
-      projectPath: '/tmp/new-project',
-      actionIds: ['apply_suggested_config'],
-      trustMode: 'selected'
-    }
-
-    const result = await handler?.({}, payload)
-
-    expect(assertTrustedProjectSelection).toHaveBeenCalledWith(
-      '/tmp/new-project'
-    )
-    expect(assertRegisteredProjectRoot).not.toHaveBeenCalledWith(
-      '/tmp/new-project'
-    )
-    expect(repairProjectIssues).toHaveBeenCalledWith(payload)
-    expect(result).toEqual({ success: true })
-  })
-
-  it('同步项目状态时会先校验项目根目录', async () => {
-    syncRegisteredProjectStatus.mockResolvedValue([
-      { id: 'episode-1', episodeNumber: 1 }
-    ])
-
-    const handler = handlers.get(IPC.PROJECT_SYNC_STATUS)
-    const result = await handler?.({}, 'project-1', '/tmp/project')
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(syncRegisteredProjectStatus).toHaveBeenCalledWith({
-      projectId: 'project-1',
-      projectPath: '/tmp/project'
-    })
-    expect(result).toEqual([{ id: 'episode-1', episodeNumber: 1 }])
-  })
-
-  it('同步单集状态时会先校验项目根目录', async () => {
-    syncRegisteredProjectEpisodeStatus.mockResolvedValue({
-      id: 'episode-2',
-      episodeNumber: 2
-    })
-
-    const handler = handlers.get(IPC.PROJECT_SYNC_EPISODE_STATUS)
-    const payload = {
-      projectId: 'project-1',
-      projectPath: '/tmp/project',
-      episodeNum: 2
-    }
-    const result = await handler?.({}, payload)
-
-    expect(assertRegisteredProjectRoot).toHaveBeenCalledWith('/tmp/project')
-    expect(syncRegisteredProjectEpisodeStatus).toHaveBeenCalledWith(payload)
-    expect(result).toEqual({ id: 'episode-2', episodeNumber: 2 })
-  })
-
-  it('写文件时会先校验路径并以 utf-8 写入', async () => {
-    const handler = handlers.get(IPC.FILE_WRITE)
-    const result = await handler?.({}, '/tmp/project/file.md', '# content')
-
-    expect(assertProjectFileWriteAllowed).toHaveBeenCalledWith(
-      '/tmp/project/file.md'
-    )
-    expect(writeFile).toHaveBeenCalledWith(
-      '/tmp/project/file.md',
-      '# content',
-      'utf-8'
-    )
-    expect(result).toEqual({ success: true })
-  })
-
-  it('选择目录取消时返回 null', async () => {
-    showOpenDialog.mockResolvedValue({
-      canceled: true,
-      filePaths: []
-    })
-
-    const handler = handlers.get(IPC.FILE_SELECT_DIR)
-    const result = await handler?.({})
-
-    expect(result).toBeNull()
-    expect(rememberSelectedDirectory).not.toHaveBeenCalled()
+  it('未注册根和路径穿越拒绝FILE_WRITE，即使父目录存在', async () => {
+    const root = temporary()
+    mkdirSync(join(root, 'nested'))
+    await expect(
+      invoke(IPC.FILE_WRITE, join(root, 'nested', 'new.md'), 'x')
+    ).rejects.toThrow('未授权')
+    registerProjectRoot(root)
+    await expect(
+      invoke(IPC.FILE_WRITE, join(root, '..', 'escape.md'), 'x')
+    ).rejects.toThrow('未授权')
   })
 })

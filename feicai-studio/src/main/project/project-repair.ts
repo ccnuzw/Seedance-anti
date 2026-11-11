@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import {
   buildDefaultCharacterPromptsTemplate,
@@ -23,6 +23,8 @@ import {
 import { detectProjectDirectory } from './project-detector'
 import { migrateLegacyNovelDirectory } from './project-migration'
 import { updateProjectRecordByPath } from '../db/project-repository'
+import { assertPathWithinProject } from '../security/access-control'
+import { atomicWriteFile } from '../io/atomic-file'
 
 export interface ProjectRepairResult {
   success: boolean
@@ -45,16 +47,19 @@ function readDiskConfig(configPath: string): Partial<ProjectConfig> | null {
   }
 }
 
-function writeNormalizedConfig(
+async function writeNormalizedConfig(
   projectPath: string,
   config: ProjectConfig
-): void {
+): Promise<void> {
   const configPath = resolveProjectArtifactPath(
     projectPath,
     'projectConfig',
     config
   )
-  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  await atomicWriteFile(
+    assertPathWithinProject(projectPath, configPath),
+    JSON.stringify(config, null, 2)
+  )
 }
 
 function createMissingDirectories(
@@ -81,7 +86,9 @@ function createMissingDirectories(
   ]
 
   for (const dir of dirs) {
-    mkdirSync(join(projectPath, dir), { recursive: true })
+    mkdirSync(assertPathWithinProject(projectPath, join(projectPath, dir)), {
+      recursive: true
+    })
   }
 }
 
@@ -168,7 +175,7 @@ function collectMissingDirectories(
   ]
 
   return dirs
-    .map((dir) => join(projectPath, dir))
+    .map((dir) => assertPathWithinProject(projectPath, join(projectPath, dir)))
     .filter((dirPath) => !existsSync(dirPath))
 }
 
@@ -253,10 +260,12 @@ function syncRegisteredProjectConfig(
   })
 }
 
-function createMissingTemplates(
+async function createMissingTemplates(
   projectPath: string,
   config: ProjectConfig
-): void {
+): Promise<void> {
+  const writeTemplate = (path: string, content: string) =>
+    atomicWriteFile(assertPathWithinProject(projectPath, path), content)
   const characterPromptsPath = resolveProjectArtifactPath(
     projectPath,
     'characterPrompts',
@@ -274,15 +283,14 @@ function createMissingTemplates(
   )
 
   if (!existsSync(plotBreakdownPath)) {
-    writeFileSync(
+    await writeTemplate(
       plotBreakdownPath,
       buildDefaultPlotBreakdownTemplate({
         projectName: config.projectName,
         projectType: config.targetMedium || '待确定',
         totalEpisodes: config.totalEpisodes,
         chaptersPerEpisode: config.chaptersPerEpisode || 0
-      }),
-      'utf-8'
+      })
     )
   }
 
@@ -293,10 +301,9 @@ function createMissingTemplates(
       config
     )
     if (!existsSync(sourcePath)) {
-      writeFileSync(
+      await writeTemplate(
         sourcePath,
-        buildDefaultSourceTemplate(config.projectName),
-        'utf-8'
+        buildDefaultSourceTemplate(config.projectName)
       )
     }
   }
@@ -309,7 +316,7 @@ function createMissingTemplates(
       config
     )
     if (!existsSync(storyBeatPath)) {
-      writeFileSync(storyBeatPath, buildDefaultStoryBeatTemplate(1), 'utf-8')
+      await writeTemplate(storyBeatPath, buildDefaultStoryBeatTemplate(1))
     }
   }
 
@@ -321,20 +328,19 @@ function createMissingTemplates(
       config
     )
     if (!existsSync(scriptPath)) {
-      writeFileSync(scriptPath, buildDefaultScriptTemplate(1), 'utf-8')
+      await writeTemplate(scriptPath, buildDefaultScriptTemplate(1))
     }
   }
 
   if (!existsSync(characterPromptsPath)) {
-    writeFileSync(
+    await writeTemplate(
       characterPromptsPath,
-      buildDefaultCharacterPromptsTemplate(),
-      'utf-8'
+      buildDefaultCharacterPromptsTemplate()
     )
   }
 
   if (!existsSync(scenePromptsPath)) {
-    writeFileSync(scenePromptsPath, buildDefaultScenePromptsTemplate(), 'utf-8')
+    await writeTemplate(scenePromptsPath, buildDefaultScenePromptsTemplate())
   }
 }
 
@@ -344,7 +350,10 @@ export async function repairProjectIssues(
   const { projectPath, actionIds, dryRun = false } = params
   const detectedBefore = detectProjectDirectory(projectPath)
   const diskConfig = readDiskConfig(
-    resolveProjectArtifactPath(projectPath, 'projectConfig')
+    assertPathWithinProject(
+      projectPath,
+      resolveProjectArtifactPath(projectPath, 'projectConfig')
+    )
   )
   const suggestedConfig = detectedBefore.suggestedConfig || {}
   let config = mergeProjectConfig(diskConfig, suggestedConfig)
@@ -358,7 +367,7 @@ export async function repairProjectIssues(
       )
       if (dryRun) continue
       config = mergeProjectConfig(diskConfig, suggestedConfig)
-      writeNormalizedConfig(projectPath, config)
+      await writeNormalizedConfig(projectPath, config)
       syncRegisteredProjectConfig(projectPath, config)
       appliedActions.push(actionId)
       continue
@@ -388,7 +397,7 @@ export async function repairProjectIssues(
       )
       if (dryRun) continue
       createMissingDirectories(projectPath, config)
-      createMissingTemplates(projectPath, config)
+      await createMissingTemplates(projectPath, config)
       appliedActions.push(actionId)
       continue
     }
@@ -419,7 +428,7 @@ export async function repairProjectIssues(
     plannedChanges,
     readyItems: collectReadyItems(
       projectPath,
-      detected.suggestedConfig || config
+      mergeProjectConfig(config, detected.suggestedConfig)
     )
   }
 }

@@ -81,4 +81,20 @@ describe('secret-store', async () => {
     expect(secretStore.hasStoredSecret(undefined)).toBe(false)
     expect(secretStore.hasStoredSecret(null)).toBe(false)
   })
+
+  it('系统存储异常不泄露密钥或底层正文', () => {
+    encryptString.mockImplementation(() => {
+      throw new Error('private-key private-body')
+    })
+    decryptString.mockImplementation(() => {
+      throw new Error('private-key private-body')
+    })
+    expect(() => secretStore.encryptSecret('private-key')).toThrow('加密失败')
+    expect(() => secretStore.decryptSecret('enc:v1:YWJj')).toThrow('请重新输入')
+    try {
+      secretStore.encryptSecret('private-key')
+    } catch (error) {
+      expect((error as Error).message).not.toMatch(/private-key|private-body/)
+    }
+  })
 })

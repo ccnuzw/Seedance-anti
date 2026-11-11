@@ -1,84 +1,44 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs'
-import { join } from 'path'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { mkdtempSync } from 'fs'
+import { join } from 'path'
 import { PipelineStateMachine } from './state-machine'
-import { normalizeProjectConfig } from '@shared/workflow'
+import type {
+  WorkflowEngine,
+  WorkflowGenerateResult
+} from '../workflow/workflow-engine'
 import {
   resolveEpisodeArtifactPath,
   resolveProjectArtifactPath
 } from '@shared/path-resolver'
 
-function waitFor(check: () => boolean, timeoutMs = 2000): Promise<void> {
-  const startedAt = Date.now()
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      if (check()) {
-        resolve()
-        return
-      }
-      if (Date.now() - startedAt > timeoutMs) {
-        reject(new Error('waitFor timeout'))
-        return
-      }
-      setTimeout(tick, 20)
-    }
-    tick()
-  })
-}
-
-describe('PipelineStateMachine', () => {
-  const tempDirs: string[] = []
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('单阶段执行完成后停在对应阶段完成态，并写入自定义输出目录的状态文件', async () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), 'feicai-state-machine-'))
-    tempDirs.push(projectRoot)
-
-    const projectConfig = normalizeProjectConfig({
-      projectName: '自定义目录项目',
-      totalEpisodes: 1,
-      directories: {
-        scriptDir: 'custom-script',
-        outputsDir: 'custom-outputs',
-        reviewsDir: 'custom-reviews'
-      }
-    })
-
-    const scriptPath = resolveEpisodeArtifactPath(
-      projectRoot,
-      'script',
-      1,
-      projectConfig
-    )
-    mkdirSync(join(projectRoot, 'custom-script'), { recursive: true })
-    mkdirSync(join(projectRoot, 'custom-outputs'), { recursive: true })
-    writeFileSync(scriptPath, '# EP01\n', 'utf-8')
-
-    const machine = new PipelineStateMachine(projectRoot)
-    ;(machine as any).llmProvider = {}
-    ;(machine as any).workflowEngine.generateStage = vi.fn().mockResolvedValue({
-      stage: 'director',
-      outputPath: resolveEpisodeArtifactPath(
-        projectRoot,
-        'directorAnalysis',
-        1,
-        projectConfig
-      ),
-      content: '导演分析内容',
-      promptMetrics: { systemChars: 10, userChars: 20 }
-    })
-    ;(machine as any).workflowEngine.reviewStage = vi.fn().mockResolvedValue({
-      stage: 'director',
+const tempDirs: string[] = []
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'feicai-lifecycle-'))
+  tempDirs.push(root)
+  mkdirSync(join(root, 'script'), { recursive: true })
+  writeFileSync(resolveEpisodeArtifactPath(root, 'script', 1), '# EP01 剧本')
+  const machine = new PipelineStateMachine('/unused-skills')
+  // Inert injection: test the real state machine, never call a real model.
+  const internals = machine as unknown as {
+    llmProvider: unknown
+    workflowEngine: WorkflowEngine
+  }
+  internals.llmProvider = {}
+  const generate = vi
+    .spyOn(internals.workflowEngine, 'generateStage')
+    .mockImplementation(async (stage) => ({
+      stage,
+      content: '生成内容',
+      outputPath: join(root, `${stage}.md`),
+      promptMetrics: { systemChars: 1, userChars: 1 }
+    }))
+  const review = vi
+    .spyOn(internals.workflowEngine, 'reviewStage')
+    .mockImplementation(async (stage) => ({
+      stage,
       review: {
-        stage: 'director',
+        stage,
         reviewType: 'business',
         result: 'PASS',
         passed: true,
@@ -87,145 +47,143 @@ describe('PipelineStateMachine', () => {
         issues: [],
         createdAt: new Date().toISOString()
       }
-    })
-
-    await machine.start({
-      projectId: 'project-1',
-      projectPath: projectRoot,
-      episodeNum: 1,
-      projectConfig,
-      projectContext: {
-        projectName: '自定义目录项目',
-        visualStyle: '现实',
-        targetMedium: '短剧',
-        episodeNumber: 1
-      },
-      startStage: 'director',
-      singleStage: true
-    })
-
-    expect(machine.getState()).toBe('director_done')
-
-    const pipelineStatePath = resolveProjectArtifactPath(
-      projectRoot,
-      'pipelineState',
-      projectConfig
-    )
-    await waitFor(() => {
-      if (!existsSync(pipelineStatePath)) return false
-      const pipelineState = JSON.parse(
-        readFileSync(pipelineStatePath, 'utf-8')
-      ) as {
-        episodes: Record<string, { status: string }>
-      }
-      return pipelineState.episodes['1']?.status === 'director'
-    })
-  })
-
-  it('retry 会从指定阶段继续执行后续阶段', async () => {
-    const machine = new PipelineStateMachine('/tmp/skills')
-    ;(machine as any).projectContext = {
+    }))
+  const params = {
+    projectId: 'project',
+    projectPath: root,
+    episodeNum: 1,
+    projectContext: {
       projectName: '项目',
-      visualStyle: '现实',
+      visualStyle: '写实',
       targetMedium: '短剧',
       episodeNumber: 1
-    }
-    ;(machine as any).context = {
-      projectId: 'project-1',
-      projectPath: '/tmp/project',
-      episodeNum: 1,
-      currentStage: 'art',
-      state: 'error',
-      retryCount: 0,
-      reviews: [],
-      logs: []
-    }
-    ;(machine as any).workflowEngine.generateStage = vi
-      .fn()
-      .mockImplementation(async (stage: string) => ({
-        stage,
-        outputPath: `/tmp/${stage}.md`,
-        content: `${stage} output`,
-        promptMetrics: { systemChars: 10, userChars: 20 }
-      }))
-    ;(machine as any).workflowEngine.reviewStage = vi
-      .fn()
-      .mockImplementation(async (stage: string) => ({
-        stage,
-        review: {
-          stage,
-          reviewType: 'business',
-          result: 'PASS',
-          passed: true,
-          score: 8,
-          feedback: '通过',
-          issues: [],
-          createdAt: new Date().toISOString()
-        }
-      }))
+    },
+    startStage: 'director' as const,
+    singleStage: true
+  }
+  return { root, machine, generate, review, params }
+}
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const root of tempDirs.splice(0))
+    rmSync(root, { recursive: true, force: true })
+})
 
-    await machine.retry('art')
-
-    expect(
-      (machine as any).workflowEngine.generateStage
-    ).toHaveBeenNthCalledWith(1, 'art', expect.any(Object), expect.any(Object))
-    expect(
-      (machine as any).workflowEngine.generateStage
-    ).toHaveBeenNthCalledWith(
-      2,
-      'storyboard',
-      expect.any(Object),
-      expect.any(Object)
+describe('observable pipeline lifecycle', () => {
+  it('completes a stage only after durable status and permits the next task', async () => {
+    const { machine, root, params } = fixture()
+    await machine.start(params)
+    expect(machine.getState()).toBe('director_done')
+    expect(machine.isRunning()).toBe(false)
+    const state = JSON.parse(
+      readFileSync(resolveProjectArtifactPath(root, 'pipelineState'), 'utf8')
     )
-    expect(machine.getState()).toBe('episode_complete')
-  })
-
-  it('skipReview 会切换完成态并回写阶段状态', () => {
-    const machine = new PipelineStateMachine('/tmp/skills')
-    const markStageSkipped = vi.fn().mockResolvedValue(undefined)
-    const updateEpisodeStatus = vi.fn().mockResolvedValue(undefined)
-    ;(machine as any).context = {
-      projectId: 'project-1',
-      projectPath: '/tmp/project',
-      episodeNum: 3,
-      currentStage: 'art',
-      state: 'art_reviewing',
-      retryCount: 0,
-      reviews: [],
-      logs: []
-    }
-    ;(machine as any).statePersistence = {
-      markStageSkipped,
-      updateEpisodeStatus
-    }
-
-    machine.skipReview('art')
-
+    expect(state.episodes['1'].stageStates.director.status).toBe('passed')
+    expect(state.episodes['1'].status).toBe('director')
+    await machine.start({ ...params, startStage: 'art' })
     expect(machine.getState()).toBe('art_done')
-    expect(markStageSkipped).toHaveBeenCalledWith(3, 'art')
-    expect(updateEpisodeStatus).toHaveBeenCalledWith(3, 'art')
+    await machine.start({ ...params, startStage: 'storyboard' })
+    expect(machine.getState()).toBe('episode_complete')
+    expect(
+      JSON.parse(
+        readFileSync(resolveProjectArtifactPath(root, 'pipelineState'), 'utf8')
+      ).episodes['1'].status
+    ).toBe('complete')
   })
 
-  it('waitForCompletion 会在状态进入终止态后 resolve', async () => {
-    const machine = new PipelineStateMachine('/tmp/skills')
-    ;(machine as any).context = {
-      projectId: 'project-1',
-      projectPath: '/tmp/project',
-      episodeNum: 1,
-      currentStage: 'director',
-      state: 'director_analyzing',
-      retryCount: 0,
-      reviews: [],
-      logs: []
-    }
+  it('acquires its active slot synchronously and refuses a second start while initialization is pending', async () => {
+    const { machine, params } = fixture()
+    const first = machine.start(params)
+    expect(() => machine.start(params)).toThrow('任务仍在执行')
+    expect(machine.getContext().running).toBe(true)
+    await first
+  })
 
-    const completion = machine.waitForCompletion()
-    ;(machine as any).context.state = 'error'
-    machine.emit('stateChanged', { newState: 'error' })
-
-    await expect(completion).resolves.toEqual({
-      state: 'error',
-      stage: 'director'
+  it('pause retains the same coroutine and resume runs its pending review', async () => {
+    const { machine, params, generate, review } = fixture()
+    const entered = Promise.withResolvers<void>()
+    const generated = Promise.withResolvers<WorkflowGenerateResult>()
+    generate.mockImplementationOnce(async () => {
+      entered.resolve()
+      return generated.promise
     })
+    const running = machine.start(params)
+    await entered.promise
+    machine.pause()
+    generated.resolve({
+      stage: 'director',
+      content: '内容',
+      outputPath: '/output.md',
+      promptMetrics: { systemChars: 1, userChars: 1 }
+    })
+    await Promise.resolve()
+    expect(machine.getState()).toBe('paused')
+    expect(machine.isRunning()).toBe(true)
+    expect(review).not.toHaveBeenCalled()
+    machine.resume()
+    await running
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(machine.getState()).toBe('director_done')
+  })
+
+  it('stop waits for the old provider to settle and cannot leak a review into a new run', async () => {
+    const { machine, params, generate, review } = fixture()
+    const entered = Promise.withResolvers<void>()
+    const generated = Promise.withResolvers<WorkflowGenerateResult>()
+    generate.mockImplementationOnce(async (_stage, context) => {
+      entered.resolve()
+      expect(context.signal).toBeInstanceOf(AbortSignal)
+      return generated.promise
+    })
+    const running = machine.start(params)
+    await entered.promise
+    let stopped = false
+    const stopping = machine.abort().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    expect(() => machine.start(params)).toThrow()
+    generated.resolve({
+      stage: 'director',
+      content: '旧响应',
+      outputPath: '/old.md',
+      promptMetrics: { systemChars: 1, userChars: 1 }
+    })
+    await stopping
+    await running
+    expect(review).not.toHaveBeenCalled()
+    expect(machine.getState()).toBe('idle')
+    expect(machine.isRunning()).toBe(false)
+    await machine.start(params)
+    expect(review).toHaveBeenCalledTimes(1)
+  })
+
+  it('waitForCompletion tracks settle, not a prematurely emitted visual terminal state', async () => {
+    const { machine, params, generate } = fixture()
+    const entered = Promise.withResolvers<void>()
+    const generated = Promise.withResolvers<WorkflowGenerateResult>()
+    generate.mockImplementationOnce(async () => {
+      entered.resolve()
+      return generated.promise
+    })
+    const running = machine.start(params)
+    await entered.promise
+    let complete = false
+    const completion = machine.waitForCompletion().then(() => {
+      complete = true
+    })
+    machine.emit('stateChanged', { newState: 'episode_complete' })
+    await Promise.resolve()
+    expect(complete).toBe(false)
+    generated.resolve({
+      stage: 'director',
+      content: '内容',
+      outputPath: '/output.md',
+      promptMetrics: { systemChars: 1, userChars: 1 }
+    })
+    await running
+    await completion
+    expect(complete).toBe(true)
   })
 })

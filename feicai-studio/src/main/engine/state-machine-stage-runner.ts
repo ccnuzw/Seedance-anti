@@ -12,9 +12,19 @@ import {
   getPipelineStageName,
   PIPELINE_STAGE_STATES
 } from './state-machine-meta'
+import { readRegularFile } from '../io/atomic-file'
+import {
+  assertPathWithinProject,
+  isMissingFileError
+} from '../security/access-control'
+import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
+import { parseReviewMarkdown } from '@shared/review-artifacts'
 
 export interface StageGenerationContext {
   stage: AutomatedPipelineStage
+  signal?: AbortSignal
+  waitUntilResumed?: () => Promise<void>
+  operationId?: string
   workflowEngine: WorkflowEngine
   projectPath: string
   episodeNum: number
@@ -43,8 +53,11 @@ export interface StageGenerationContext {
 
 export interface StageReviewContext {
   stage: AutomatedPipelineStage
+  signal?: AbortSignal
+  waitUntilResumed?: () => Promise<void>
   workflowEngine: WorkflowEngine
   projectPath: string
+  operationId?: string
   episodeNum: number
   scriptPath?: string
   projectConfig: Partial<ProjectConfig> | null
@@ -76,6 +89,8 @@ export async function runStageGeneration(
   )
 
   try {
+    await ctx.waitUntilResumed?.()
+    ctx.signal?.throwIfAborted()
     if (ctx.statePersistence) {
       await ctx.statePersistence.markStageRunning(ctx.episodeNum, stage, {
         outputPath: ctx.getStageOutputPath(stage)
@@ -86,26 +101,64 @@ export async function runStageGeneration(
     const retryNote = ctx.reviewFeedback ? ' [带审核反馈]' : ''
     ctx.onLog('info', 'llm_calling', '调用 LLM 生成中...')
 
-    const result = await ctx.workflowEngine.generateStage(
-      stage,
-      {
-        projectPath: ctx.projectPath,
-        episodeNum: ctx.episodeNum,
-        projectContext: ctx.projectContext,
-        projectConfig: ctx.projectConfig
-      },
-      {
-        reviewFeedback: ctx.reviewFeedback,
-        timeoutMs: ctx.pipelineSettings.llmTimeoutSec * 1000,
-        onChunk: (chunk, totalLength) => {
-          if (ctx.shouldStop()) {
-            throw new Error('流水线已中断')
-          }
-          ctx.onStream({ stage, chunk, totalLength })
-        }
+    const outputPath = ctx.operationId
+      ? assertPathWithinProject(
+          ctx.projectPath,
+          resolveEpisodeArtifactPath(
+            ctx.projectPath,
+            stage === 'director'
+              ? 'directorAnalysis'
+              : stage === 'art'
+                ? 'artDesign'
+                : 'seedancePrompts',
+            ctx.episodeNum,
+            ctx.projectConfig
+          )
+        )
+      : ''
+    let committedContent: string | null = null
+    if (ctx.operationId) {
+      try {
+        const saved = (await readRegularFile(outputPath)).toString('utf8')
+        if (saved.includes(`<!-- feicai-operation:${ctx.operationId} -->`))
+          committedContent = saved
+      } catch (error) {
+        if (!isMissingFileError(error)) throw error
       }
-    )
+    }
+    const result =
+      committedContent !== null
+        ? {
+            content: committedContent,
+            outputPath,
+            promptMetrics: { systemChars: 0, userChars: 0 }
+          }
+        : await ctx.workflowEngine.generateStage(
+            stage,
+            {
+              operationId: ctx.operationId,
+              signal: ctx.signal,
+              waitUntilResumed: ctx.waitUntilResumed,
+              projectPath: ctx.projectPath,
+              episodeNum: ctx.episodeNum,
+              projectContext: ctx.projectContext,
+              projectConfig: ctx.projectConfig
+            },
+            {
+              signal: ctx.signal,
+              reviewFeedback: ctx.reviewFeedback,
+              timeoutMs: ctx.pipelineSettings.llmTimeoutSec * 1000,
+              onChunk: (chunk, totalLength) => {
+                if (ctx.shouldStop()) {
+                  throw new Error('流水线已中断')
+                }
+                ctx.onStream({ stage, chunk, totalLength })
+              }
+            }
+          )
 
+    await ctx.waitUntilResumed?.()
+    ctx.signal?.throwIfAborted()
     ctx.onLog(
       'info',
       'prompt_assembled',
@@ -129,7 +182,7 @@ export async function runStageGeneration(
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
-    if (errMsg === '流水线已中断') {
+    if (ctx.signal?.aborted || errMsg === '流水线已中断') {
       ctx.onLog('info', 'aborted_during_gen', '⚓ LLM 生成已中断')
       return
     }
@@ -140,7 +193,7 @@ export async function runStageGeneration(
       errMsg.includes('ECONNREFUSED') ||
       errMsg.includes('ETIMEDOUT')
     const hint = isTimeout
-      ? '（将自动重试）'
+      ? '（请求超时，请检查连接后重试）'
       : isNetwork
         ? '（网络错误，请检查连接）'
         : ''
@@ -156,18 +209,49 @@ export async function runStageReview(
   ctx.onLog('info', 'review_start', '⚠️ 开始审核 (对抗性立场 + 评分锚定 7 分)')
 
   try {
+    await ctx.waitUntilResumed?.()
+    ctx.signal?.throwIfAborted()
     const reviewStage = stage === 'storyboard' ? 'storyboard_review' : stage
+    if (stage === 'storyboard' && ctx.operationId) {
+      const path = assertPathWithinProject(
+        ctx.projectPath,
+        resolveEpisodeArtifactPath(
+          ctx.projectPath,
+          'storyboardReview',
+          ctx.episodeNum,
+          ctx.projectConfig
+        )
+      )
+      try {
+        const saved = (await readRegularFile(path)).toString('utf8')
+        if (saved.includes(`<!-- feicai-operation:${ctx.operationId} -->`)) {
+          const review = parseReviewMarkdown(saved, 'storyboard_review')
+          if (!review) throw new Error('已提交分镜审核收据损坏')
+          ctx.onReviewAppended(review)
+          ctx.onReviewResult({ stage, result: review })
+          return review
+        }
+      } catch (error) {
+        if (!isMissingFileError(error)) throw error
+      }
+    }
     const result = await ctx.workflowEngine.reviewStage(reviewStage, {
+      signal: ctx.signal,
+      operationId: ctx.operationId,
+      waitUntilResumed: ctx.waitUntilResumed,
       projectPath: ctx.projectPath,
       episodeNum: ctx.episodeNum,
       scriptPath: ctx.scriptPath,
       projectConfig: ctx.projectConfig
     })
 
+    await ctx.waitUntilResumed?.()
+    ctx.signal?.throwIfAborted()
     ctx.onReviewAppended(result.review)
     ctx.onReviewResult({ stage, result: result.review })
     return result.review
   } catch (error) {
+    if (ctx.signal?.aborted) return null
     ctx.onError('审核执行失败', error)
     return null
   }

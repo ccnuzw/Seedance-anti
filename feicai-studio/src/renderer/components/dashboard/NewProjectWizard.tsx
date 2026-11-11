@@ -19,8 +19,8 @@ interface Props {
   workflowMode: ProjectWorkflowMode
   selectedOption: EntryOption
   entryOptions: EntryOption[]
-  visualStyles: string[]
-  targetMediums: string[]
+  visualStyles: readonly string[]
+  targetMediums: readonly string[]
   onCancel: () => void
   onSelectDir: () => void
   onSelectSourceNovelFile: () => void
@@ -192,12 +192,16 @@ export default function NewProjectWizard(props: Props) {
                     value={sourceNovelFilePath}
                     readOnly
                   />
-                  <button className="btn btn-sm" onClick={onSelectSourceNovelFile}>
+                  <button
+                    className="btn btn-sm"
+                    onClick={onSelectSourceNovelFile}
+                  >
                     📄 选择
                   </button>
                 </div>
                 <p className="wizard-field-hint text-secondary">
-                  支持第1章、第001回、卷/部、Chapter 等常见章节分隔符；会写入 source/novel.md，并拆分到 source/chapters/。
+                  支持第1章、第001回、卷/部、Chapter 等常见章节分隔符；会写入
+                  source/novel.md，并拆分到 source/chapters/。
                 </p>
               </div>
             )}

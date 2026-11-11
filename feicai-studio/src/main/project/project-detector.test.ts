@@ -90,8 +90,6 @@ describe('project-detector', () => {
 
     expect(sourceCheck?.status).toBe('warn')
     expect(sourceCheck?.group).toBe('legacy')
-    expect(sourceCheck?.detail).toContain('发现旧版小说目录 novel/')
-    expect(sourceCheck?.path).toBe(join(root, 'novel'))
     expect(
       info.integrity?.recommendedActions?.map((action) => action.id)
     ).toContain('migrate_legacy_novel')

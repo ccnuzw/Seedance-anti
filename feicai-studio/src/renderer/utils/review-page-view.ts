@@ -34,7 +34,7 @@ export function buildReviewPageViewModel(params: {
     .sort((a, b) => a - b)
   const totalReviews = reviews.length
   const passCount = reviews.filter((r) => r.result === 'PASS').length
-  const failCount = reviews.filter((r) => r.result === 'FAIL').length
+  const failCount = reviews.filter((r) => r.result !== 'PASS').length
   const avgScore =
     totalReviews > 0
       ? Math.round(

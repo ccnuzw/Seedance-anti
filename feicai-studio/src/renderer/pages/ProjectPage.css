@@ -765,7 +765,7 @@
   gap: 14px;
 }
 
-.ep-num {
+.project-page .ep-num {
   font-family: var(--font-mono);
   font-size: 42px;
   font-weight: 800;
@@ -779,7 +779,7 @@
   user-select: none;
 }
 
-.ep-card--done .ep-num {
+.project-page .ep-card--done .ep-num {
   background: linear-gradient(135deg, #22c55e, #86efac);
   -webkit-background-clip: text;
   background-clip: text;
@@ -913,6 +913,30 @@
 
   .pipeline-settings-grid,
   .project-settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.project-page .episode-table-wrapper {
+  overflow-x: auto;
+}
+.project-page :is(button, a, input, select):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+@media (max-width: 720px) {
+  .project-page .project-header {
+    flex-wrap: wrap;
+    gap: var(--spacing-md);
+  }
+  .project-page .project-actions {
+    flex-wrap: wrap;
+  }
+  .project-page .project-meta {
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
+  }
+  .project-page .status-dashboard-grid {
     grid-template-columns: 1fr;
   }
 }
