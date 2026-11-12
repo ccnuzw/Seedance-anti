@@ -1,5 +1,6 @@
 // OpenAI / compatible native-fetch adapter. All retries share one cancellation scope.
-import { BaseLLMProvider } from './types'
+import { observeTextMetadata } from './text-metadata'
+import { BaseLLMProvider, resolveTextWireParameters } from './types'
 import {
   LLMRequestError,
   openAIBaseEndpoint,
@@ -73,12 +74,13 @@ export class OpenAIProvider extends BaseLLMProvider {
     stream: boolean
   ): Record<string, unknown> {
     const responses = this.config.wireApi === 'responses'
+    const parameters = resolveTextWireParameters(this.config, options)
     const body: Record<string, unknown> = responses
       ? {
           model: this.config.model,
           instructions: prompt.system,
           input: [{ role: 'user', content: prompt.user }],
-          max_output_tokens: this.getMaxTokens(options),
+          max_output_tokens: parameters.maxTokens,
           stream
         }
       : {
@@ -87,7 +89,7 @@ export class OpenAIProvider extends BaseLLMProvider {
             { role: 'system', content: prompt.system },
             { role: 'user', content: prompt.user }
           ],
-          max_tokens: this.getMaxTokens(options),
+          max_tokens: parameters.maxTokens,
           stream
         }
     if (
@@ -97,8 +99,8 @@ export class OpenAIProvider extends BaseLLMProvider {
     ) {
       body.reasoning = { effort: this.config.reasoningEffort || 'medium' }
     }
-    if (this.config.provider === 'openai' || options?.temperature !== undefined)
-      body.temperature = this.getTemperature(options)
+    if (parameters.temperature !== undefined)
+      body.temperature = parameters.temperature
     return body
   }
 
@@ -164,6 +166,7 @@ export class OpenAIProvider extends BaseLLMProvider {
         if (!data || typeof data !== 'object')
           throw new LLMRequestError('模型响应结构无效')
         const type = data.type || event.event
+        observeTextMetadata(options, 'openai', data, event.event)
         if (
           data.error ||
           data.response?.error ||

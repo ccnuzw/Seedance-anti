@@ -39,7 +39,12 @@ export class RequestScope {
 
   private abort(message: string): void {
     if (!this.signal.aborted)
-      this.controller.abort(new LLMRequestError(message))
+      this.controller.abort(
+        new LLMRequestError(
+          message,
+          message.includes('超时') ? 'timeout' : 'cancelled'
+        )
+      )
   }
 
   throwIfAborted(): void {
@@ -87,23 +92,31 @@ export async function requestJSON(
   scope: RequestScope
 ): Promise<Response> {
   scope.throwIfAborted()
-  return scope.wait(
-    fetch(url, {
-      method: body ? 'POST' : 'GET',
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: scope.signal,
-      // Never forward a credential to a redirect target, including same-origin paths.
-      redirect: 'error'
-    })
-  )
+  try {
+    return await scope.wait(
+      fetch(url, {
+        method: body ? 'POST' : 'GET',
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: scope.signal,
+        // Never forward a credential to a redirect target, including same-origin paths.
+        redirect: 'error'
+      })
+    )
+  } catch (error) {
+    if (scope.signal.aborted) throw scope.signal.reason
+    if (error instanceof TypeError)
+      throw new LLMRequestError(safeLLMError(error), 'network')
+    throw error
+  }
 }
 
 export async function* responseBytes(
   response: Response,
   scope: RequestScope
 ): AsyncGenerator<Uint8Array> {
-  if (!response.body) throw new LLMRequestError('模型响应体为空')
+  if (!response.body)
+    throw new LLMRequestError('模型响应体为空', 'invalid_output')
   const reader = response.body.getReader()
   const onAbort = () => {
     void reader.cancel().catch(() => {})
@@ -145,18 +158,32 @@ export async function readJSON(
   try {
     return JSON.parse(raw) as unknown
   } catch {
-    throw new LLMRequestError('无法解析模型 JSON 响应')
+    throw new LLMRequestError('无法解析模型 JSON 响应', 'invalid_output')
   }
 }
 
 export function assertResponseOK(response: Response): void {
   if (!response.ok)
-    throw new LLMRequestError(`模型服务返回 HTTP ${response.status}`)
+    throw new LLMRequestError(
+      `模型服务返回 HTTP ${response.status}`,
+      response.status === 401 || response.status === 403
+        ? 'authentication'
+        : response.status === 402
+          ? 'quota'
+          : response.status === 429
+            ? 'rate_limit'
+            : response.status >= 500
+              ? 'service'
+              : 'configuration'
+    )
 }
 
 export function assertNonEmpty(text: string): void {
   if (!text.trim())
-    throw new LLMRequestError('模型返回空结果，请检查模型能力或内容限制')
+    throw new LLMRequestError(
+      '模型返回空结果，请检查模型能力或内容限制',
+      'invalid_output'
+    )
 }
 
 export interface SSEEvent {
@@ -181,7 +208,7 @@ function parseEvent(raw: string): SSEEvent | null {
   try {
     return { event, data: JSON.parse(text) as unknown }
   } catch {
-    throw new LLMRequestError('模型 SSE 响应格式无效')
+    throw new LLMRequestError('模型 SSE 响应格式无效', 'invalid_output')
   }
 }
 
@@ -205,7 +232,7 @@ export async function* modelEvents(
       if (/^(?:event:|data:|:)/.test(start)) mode = 'sse'
       else if (start.startsWith('{') || start.startsWith('[')) mode = 'json'
       else if (start.length >= 6)
-        throw new LLMRequestError('无法识别模型响应格式')
+        throw new LLMRequestError('无法识别模型响应格式', 'invalid_output')
     }
     if (mode === 'sse') {
       let separator = /\r\n\r\n|\n\n|\r\r/.exec(buffer)
@@ -232,12 +259,13 @@ export async function* modelEvents(
       yield { event: 'json', data: JSON.parse(buffer) as unknown }
     } catch (error) {
       if (error instanceof LLMRequestError) throw error
-      throw new LLMRequestError('无法解析模型 JSON 响应')
+      throw new LLMRequestError('无法解析模型 JSON 响应', 'invalid_output')
     }
   }
 }
 
 export function providerFailure(error: unknown, scope: RequestScope): Error {
   if (scope.signal.aborted) return scope.signal.reason as Error
+  if (error instanceof LLMRequestError) return error
   return new LLMRequestError(safeLLMError(error))
 }

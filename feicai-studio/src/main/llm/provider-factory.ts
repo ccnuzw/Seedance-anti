@@ -3,6 +3,14 @@
 // ============================================================
 
 import type { LLMConfig } from '@shared/types'
+import type {
+  ModelDescriptor,
+  StageModelBinding
+} from '@shared/provider-capabilities'
+import {
+  LegacyTextCapabilityAdapter,
+  type TextGenerationProvider
+} from './text-capability-adapter'
 import type { ILLMProvider } from './types'
 import { GeminiProvider } from './gemini-provider'
 import { AnthropicProvider } from './anthropic-provider'
@@ -22,6 +30,21 @@ export function createProvider(config: LLMConfig): ILLMProvider {
     case 'openai-compatible':
       return new OpenAIProvider(config)
     default:
-      throw new LLMRequestError('不支持的 LLM Provider 类型')
+      throw new LLMRequestError('不支持的 LLM Provider 类型', 'configuration')
   }
+}
+
+/** Explicit capability entry point; does not infer support from category or model name. */
+export function createTextCapabilityProvider(
+  config: LLMConfig,
+  model: ModelDescriptor,
+  binding: StageModelBinding
+): TextGenerationProvider {
+  const snapshot = Object.freeze({ ...config })
+  return new LegacyTextCapabilityAdapter(
+    createProvider(snapshot),
+    snapshot,
+    model,
+    binding
+  )
 }

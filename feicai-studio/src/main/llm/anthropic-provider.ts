@@ -1,3 +1,4 @@
+import { observeTextMetadata } from './text-metadata'
 import { BaseLLMProvider } from './types'
 import { LLMRequestError, normalizeBaseEndpoint } from './endpoint-security'
 import {
@@ -58,6 +59,7 @@ export class AnthropicProvider extends BaseLLMProvider {
         if (!data || typeof data !== 'object')
           throw new LLMRequestError('模型响应结构无效')
         const type = data.type || event.event
+        observeTextMetadata(options, 'anthropic', data, event.event)
         if (event.event === 'error' || type === 'error' || data.error)
           throw new LLMRequestError('Anthropic 模型流返回错误')
         let text = ''
