@@ -124,9 +124,18 @@ const api: FeicaiAPI = {
   clearStoredCredentials: () => invoke(DATA_IPC.CLEAR_CREDENTIALS),
   startBatch: (params) => invoke(BATCH_IPC.START, params),
   getBatchState: () => invoke(BATCH_IPC.GET_STATE),
-  pauseBatch: () => invoke(BATCH_IPC.PAUSE),
-  resumeBatch: () => invoke(BATCH_IPC.RESUME),
-  stopBatch: () => invoke(BATCH_IPC.STOP),
+  pauseBatch: (queueId) =>
+    queueId === undefined
+      ? invoke(BATCH_IPC.PAUSE)
+      : invoke(BATCH_IPC.PAUSE, queueId),
+  resumeBatch: (queueId) =>
+    queueId === undefined
+      ? invoke(BATCH_IPC.RESUME)
+      : invoke(BATCH_IPC.RESUME, queueId),
+  stopBatch: (queueId) =>
+    queueId === undefined
+      ? invoke(BATCH_IPC.STOP)
+      : invoke(BATCH_IPC.STOP, queueId),
   onBatchState: (callback) => subscribe(BATCH_IPC.STATE_CHANGED, callback),
 
   onPipelineStateChanged: (callback) =>

@@ -381,7 +381,23 @@ export class BatchQueue {
     return result
   }
 
-  async pause(): Promise<BatchQueueState | null> {
+  private assertTarget(
+    queueId: string | undefined,
+    statuses: BatchQueueState['status'][]
+  ): void {
+    if (queueId === undefined) return
+    if (
+      !queueId ||
+      this.state?.id !== queueId ||
+      !statuses.includes(this.state.status)
+    )
+      throw new Error('队列不存在、已结束或控制目标已失效')
+    if (this.state.status !== 'interrupted' && !this.lease)
+      throw new Error('队列执行租约已失效')
+  }
+
+  async pause(queueId?: string): Promise<BatchQueueState | null> {
+    this.assertTarget(queueId, ['running'])
     if (this.lease && this.state?.status === 'running') {
       this.lease.pause()
       this.state.status = 'paused'
@@ -390,7 +406,8 @@ export class BatchQueue {
     return this.snapshot()
   }
 
-  async resume(): Promise<BatchQueueState | null> {
+  async resume(queueId?: string): Promise<BatchQueueState | null> {
+    this.assertTarget(queueId, ['paused'])
     if (this.lease && this.state?.status === 'paused') {
       this.state.status = 'running'
       await this.persist()
@@ -417,7 +434,8 @@ export class BatchQueue {
     }
   }
 
-  async stop(): Promise<BatchQueueState | null> {
+  async stop(queueId?: string): Promise<BatchQueueState | null> {
+    this.assertTarget(queueId, ['running', 'paused', 'interrupted'])
     if (this.lease) {
       this.lease.abort()
       if (this.state) {

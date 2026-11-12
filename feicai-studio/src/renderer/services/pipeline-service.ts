@@ -1,3 +1,4 @@
+import { assertExecutionAvailable } from './task-center-admission'
 import type { AutomatedPipelineStage } from '@shared/types'
 import type {
   PipelineControlTarget,
@@ -14,12 +15,14 @@ import type {
 export async function startPipeline(
   params: PipelineStartParams
 ): Promise<ServicePipelineStartResult> {
+  await assertExecutionAvailable()
   return await window.feicaiAPI.startPipeline(params)
 }
 
 export async function runPipelineAndWait(
   params: PipelineStartParams
 ): Promise<ServicePipelineStartResult> {
+  await assertExecutionAvailable()
   return await window.feicaiAPI.runPipelineAndWait(params)
 }
 
@@ -53,6 +56,7 @@ export async function retryPipeline(
   stage?: AutomatedPipelineStage,
   target?: PipelineControlTarget
 ): Promise<void> {
+  await assertExecutionAvailable()
   assertControlResult(
     await window.feicaiAPI.retryPipeline(target ? { stage, target } : stage)
   )
@@ -79,6 +83,7 @@ export async function listPipelineTasks(): Promise<PipelineTaskSnapshot[]> {
 export async function controlPipelineTask(
   request: PipelineTaskControl
 ): Promise<void> {
+  if (request.action === 'retry') await assertExecutionAvailable()
   assertControlResult(await window.feicaiAPI.controlPipelineTask(request))
 }
 
