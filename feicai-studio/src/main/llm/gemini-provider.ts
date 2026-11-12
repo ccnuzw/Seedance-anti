@@ -1,3 +1,4 @@
+import { observeTextMetadata } from './text-metadata'
 import { BaseLLMProvider } from './types'
 import { LLMRequestError, normalizeBaseEndpoint } from './endpoint-security'
 import {
@@ -62,6 +63,7 @@ export class GeminiProvider extends BaseLLMProvider {
         if (!data || typeof data !== 'object')
           throw new LLMRequestError('模型响应结构无效')
         const candidate = data.candidates?.[0]
+        observeTextMetadata(options, 'google', data, event.event)
         if (
           event.event === 'error' ||
           data.error ||

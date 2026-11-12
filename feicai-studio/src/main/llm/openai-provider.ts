@@ -1,4 +1,5 @@
 // OpenAI / compatible native-fetch adapter. All retries share one cancellation scope.
+import { observeTextMetadata } from './text-metadata'
 import { BaseLLMProvider } from './types'
 import {
   LLMRequestError,
@@ -164,6 +165,7 @@ export class OpenAIProvider extends BaseLLMProvider {
         if (!data || typeof data !== 'object')
           throw new LLMRequestError('模型响应结构无效')
         const type = data.type || event.event
+        observeTextMetadata(options, 'openai', data, event.event)
         if (
           data.error ||
           data.response?.error ||

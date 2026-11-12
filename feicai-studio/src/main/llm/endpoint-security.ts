@@ -1,8 +1,12 @@
 import type { LLMProviderType } from '@shared/types'
+import type { ProviderErrorCategory } from '@shared/provider-capabilities'
 
 /** Only application-authored messages may cross the provider/IPC boundary. */
 export class LLMRequestError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly category: ProviderErrorCategory = 'result_unknown'
+  ) {
     super(message.slice(0, 240))
     this.name = 'LLMRequestError'
   }
@@ -19,10 +23,13 @@ export function normalizeBaseEndpoint(baseUrl: string): string {
   try {
     url = new URL(baseUrl.trim())
   } catch {
-    throw new LLMRequestError('API 端点必须是有效的绝对 URL')
+    throw new LLMRequestError('API 端点必须是有效的绝对 URL', 'configuration')
   }
   if (url.username || url.password || url.search || url.hash) {
-    throw new LLMRequestError('API 端点不得包含 URL 凭据、查询参数或片段')
+    throw new LLMRequestError(
+      'API 端点不得包含 URL 凭据、查询参数或片段',
+      'configuration'
+    )
   }
   const hostname = url.hostname.toLowerCase()
   const loopback =
@@ -30,7 +37,10 @@ export function normalizeBaseEndpoint(baseUrl: string): string {
     hostname === '[::1]' ||
     /^127(?:\.\d{1,3}){3}$/.test(hostname)
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new LLMRequestError('非本机回环 API 端点必须使用 HTTPS')
+    throw new LLMRequestError(
+      '非本机回环 API 端点必须使用 HTTPS',
+      'configuration'
+    )
   }
   return url.toString().replace(/\/+$/, '')
 }

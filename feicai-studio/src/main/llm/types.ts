@@ -50,7 +50,10 @@ export abstract class BaseLLMProvider implements ILLMProvider {
   constructor(config: LLMConfig) {
     normalizeBaseEndpoint(config.baseUrl)
     if (!config.apiKey.trim())
-      throw new LLMRequestError('缺少 API Key，请重新填写并保存密钥')
+      throw new LLMRequestError(
+        '缺少 API Key，请重新填写并保存密钥',
+        'configuration'
+      )
     this.name = config.name
     this.providerType = config.provider
     this.config = config
