@@ -1,3 +1,4 @@
+import type { NovelProductionReadiness } from './novel-production-readiness'
 import type { Edge, Node } from '@xyflow/react'
 import { MarkerType } from '@xyflow/react'
 import {
@@ -284,7 +285,8 @@ export function getWorkflowActionAvailability(
   episode: Episode | undefined,
   stage: WorkflowActionId,
   entryStage: ProjectEntryStage,
-  hasSourceNovel: boolean
+  hasSourceNovel: boolean,
+  novelReadiness?: NovelProductionReadiness
 ): StageAvailability {
   const entry = getEntryRequirements(entryStage)
   if (stage === 'story') {
@@ -329,11 +331,12 @@ export function getWorkflowActionAvailability(
         reason: `缺少 ${describeProjectArtifact('sourceNovel')}，请先补齐小说原文或设定。`
       }
     }
-    return {
-      canStart: true,
-      reason:
-        '已满足剧本生成前置条件。若当前集没有未用剧情点，执行时会提示先补充剧情库存。'
-    }
+    return (
+      novelReadiness || {
+        canStart: false,
+        reason: '剧情库存状态尚未取得，请刷新准备状态。'
+      }
+    )
   }
 
   if (stage === 'story_review') {

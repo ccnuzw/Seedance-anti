@@ -95,7 +95,9 @@ export function usePipelinePageController() {
   const setReviewFeedback = useReviewFeedbackStore((s) => s.setReview)
 
   const currentEpisode = episodes.find(
-    (episode) => episode.episodeNumber === episodeNum
+    (episode) =>
+      episode.projectId === currentProject?.id &&
+      episode.episodeNumber === episodeNum
   )
   const projectConfig = normalizeProjectConfig(currentProject?.config)
   const entryStage = projectConfig.entryStage || 'novel'

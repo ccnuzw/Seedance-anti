@@ -138,12 +138,14 @@ export function useProjectPageController() {
       const hasSource =
         entry !== 'novel'
           ? null
-          : (sourceKnown && !!sourceResult.value?.trim()) ||
-              (waterline?.totalSourceChapters || 0) > 0
-            ? true
-            : sourceKnown && waterline
-              ? false
-              : null
+          : !sourceKnown
+            ? null
+            : !!sourceResult.value?.trim() ||
+                (waterline?.totalSourceChapters || 0) > 0
+              ? true
+              : waterline
+                ? false
+                : null
       const errors = results.flatMap((result, index) =>
         result.status === 'rejected'
           ? [

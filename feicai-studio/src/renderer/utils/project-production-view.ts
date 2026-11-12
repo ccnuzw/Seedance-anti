@@ -1,3 +1,4 @@
+import { getNovelProductionReadiness } from './novel-production-readiness'
 import { normalizeProjectConfig } from '@shared/project-config'
 import type {
   Episode,
@@ -15,6 +16,8 @@ export const PRODUCTION_STAGES = [
 ] as const
 export type ProductionStage = (typeof PRODUCTION_STAGES)[number]['id']
 export interface ProductionCell {
+  refresh?: boolean
+  actionLabel?: string
   stage: ProductionStage
   label: string
   status: string
@@ -82,8 +85,18 @@ export function buildProductionRows(params: {
         pipeline?.projectId === project.id
           ? pipeline.episodes[episodeNumber]?.stageStates
           : undefined
-      const inventoryUsed = params.usedEpisodeNumbers?.includes(episodeNumber)
-      const inventoryReady = params.readyEpisodeNumbers?.includes(episodeNumber)
+      const readiness = getNovelProductionReadiness({
+        hasSource,
+        waterline: params.readyEpisodeNumbers
+          ? {
+              readyEpisodeNumbers: [...params.readyEpisodeNumbers],
+              usedEpisodeNumbers: [...(params.usedEpisodeNumbers || [])]
+            }
+          : null,
+        projectId: project.id,
+        episodeNumber,
+        episode: ep
+      })
       const scriptPass = ep?.hasScript === true && ep.hasScriptReview === true
       const directorPass =
         scriptPass &&
@@ -124,8 +137,7 @@ export function buildProductionRows(params: {
           // Novel entry uses shared plot inventory, not the per-episode story review gate.
           const inventory = stage === 'story' && entry === 'novel'
           const satisfied = inventory
-            ? !!ep?.hasScript ||
-              (hasSource === true && inventoryReady === true && !inventoryUsed)
+            ? !!(ep?.hasScript || ep?.scriptPath) || readiness.canStart
             : stage === 'story'
               ? ep?.hasStoryBeat === true && ep.hasStoryReview === true
               : stage === 'script'
@@ -175,25 +187,13 @@ export function buildProductionRows(params: {
           let detail = `${exists ? '产物存在' : '无产物'}；${satisfied ? '当前审核有效' : '尚未满足当前审核门禁'}。`
           let targetPath = path
           if (inventory) {
-            status = ep?.hasScript
-              ? '已供给剧本'
-              : hasSource === null
-                ? '原文状态未知'
-                : !hasSource
-                  ? '缺少小说原文'
-                  : inventoryReady == null
-                    ? '库存状态未知'
-                    : inventoryUsed
-                      ? '库存已使用，需核对'
-                      : inventoryReady
-                        ? '本集库存可用'
-                        : '缺少剧情库存'
-            detail =
-              '小说入口使用共享剧情库存；分集剧情审核不作为门禁。进入原文或批处理页检查库存，不定位分集段落。'
+            status =
+              ep?.hasScript || ep?.scriptPath ? '已供给剧本' : readiness.label
+            detail = readiness.reason
             targetPath =
-              hasSource === false
+              readiness.action === 'source'
                 ? `/project/${encodeURIComponent(project.id)}/source`
-                : `/project/${encodeURIComponent(project.id)}/batch?mode=smart_next`
+                : productionPath(project.id, episodeNumber, 'story')
           } else if (!ep) {
             status = '状态未取得'
             detail = '尚无本集扫描结果，请刷新状态；可进入现有页面补齐输入。'
@@ -201,6 +201,8 @@ export function buildProductionRows(params: {
           if (!satisfied && missingInput && exists)
             detail += ' 上游门禁尚未满足，请先处理本集下一步。'
           return {
+            refresh: inventory && !satisfied && readiness.action === 'refresh',
+            actionLabel: inventory && !satisfied ? readiness.label : undefined,
             stage,
             label,
             path: targetPath,
