@@ -104,9 +104,30 @@ async function create(
 ): Promise<void> {
   generate.mockResolvedValueOnce(content)
   await engine.generateStage(stage, ctx)
-  expect(generate.mock.calls.at(-1)![0].system).toContain(
-    `${config.entryStage}（`
-  )
+  const prompt = generate.mock.calls.at(-1)![0]
+  expect(prompt.system).toContain(`${config.entryStage}（`)
+  if (stage === 'story' && config.entryStage === 'novel') {
+    for (const principle of [
+      '每个剧情点都必须能对应当前批次原文中的具体事件证据',
+      '不得仅凭沉默、表情、停顿或镜头切换断定角色的动机',
+      '明确为未成年人的角色不得被性化',
+      '明确标记阻塞并交由既有严格合规审核'
+    ]) {
+      expect(prompt.system).toContain(principle)
+    }
+    for (const principle of [
+      '每个剧情点须能映射到当前批次原文',
+      '不得仅凭沉默、表情或停顿推断意图',
+      '自尽被阻止、转场或人物醒来不等于重生',
+      '明确为未成年人的角色不得性化',
+      '源情节无法安全适配时标记阻塞',
+      '3-4 个剧情点，但只是建议而非硬指标',
+      '明确切集转折'
+    ]) {
+      expect(prompt.user).toContain(principle)
+    }
+    expect(prompt.user).toContain('已有最大剧情编号')
+  }
 }
 function entry(stage: ProjectEntryStage): void {
   config.entryStage = stage
