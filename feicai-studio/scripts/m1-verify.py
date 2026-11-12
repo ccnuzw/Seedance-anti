@@ -14,7 +14,15 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 shared = Path(os.environ["M1_SHARED_NODE_MODULES"]).resolve(strict=True)
 local = root / "node_modules"
-os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Keep the system toolchain deterministic, while allowing callers to provide
+# a known Node distribution when the shell PATH does not expose node/npm.
+node_bin = os.environ.get("M1_NODE_BIN")
+system_path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+if node_bin:
+    node_dir = str(Path(node_bin).resolve().parent)
+    os.environ["PATH"] = f"{node_dir}:{system_path}"
+else:
+    os.environ["PATH"] = system_path
 created = not local.exists() and not local.is_symlink()
 backup = tempfile.TemporaryDirectory(prefix="feicai-m1-tsbuildinfo-")
 originals = {}

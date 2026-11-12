@@ -24,7 +24,21 @@ import {
   resolveBatchExecutionEpisodes
 } from '@shared/batch'
 import { getPlotBreakdownSummary } from '@renderer/services/project-service'
-import type { ExecutionStatus } from '@shared/ipc-contracts'
+import type {
+  ExecutionStatus,
+  PlotBreakdownSummary
+} from '@shared/ipc-contracts'
+import {
+  BatchStartButton,
+  canStartBatch,
+  getBackgroundControlRequest,
+  getBackgroundStopRequest,
+  getBatchBackgroundView,
+  backgroundTaskLabel,
+  isBackgroundBusy,
+  refreshAfterExecutionReleases,
+  type BackgroundState
+} from '@renderer/utils/batch-page-state'
 import type { PipelineTaskSnapshot } from '@shared/pipeline-task'
 import './BatchPage.css'
 
@@ -82,29 +96,6 @@ function formatEpisodeList(nums: number[]): string {
   return nums.length > head.length
     ? `${head.join('、')} 等 ${nums.length} 集`
     : head.join('、')
-}
-
-type BackgroundState =
-  | 'pending'
-  | 'failed'
-  | 'ready'
-  | 'running'
-  | 'paused'
-  | 'stopping'
-
-function isBackgroundBusy(state: BackgroundState): boolean {
-  return ['running', 'paused', 'stopping'].includes(state)
-}
-
-function backgroundTaskLabel(task: PipelineTaskSnapshot | null): string {
-  if (!task) return '后台制作任务'
-  const kind = task.kind === 'workflow' ? '独立工作流' : '流水线任务'
-  const stage = task.identity.stage ? `（${task.identity.stage}）` : ''
-  return `${kind}${stage}`
-}
-
-function isActiveTask(task: PipelineTaskSnapshot): boolean {
-  return ['running', 'paused'].includes(task.status)
 }
 
 export default function BatchPage() {
@@ -230,24 +221,14 @@ export default function BatchPage() {
           listPipelineTasks()
         ])
         if (cancelled) return
-        const task =
-          tasks.find(
-            (candidate) =>
-              isActiveTask(candidate) &&
-              (!currentProject ||
-                candidate.identity.projectId === currentProject.id)
-          ) || null
-        setBackgroundTask(task)
-        setBackgroundOwner(execution.owner)
-        setBackgroundState(
-          execution.busy
-            ? execution.phase === 'paused'
-              ? 'paused'
-              : execution.phase === 'stopping'
-                ? 'stopping'
-                : 'running'
-            : 'ready'
+        const view = getBatchBackgroundView(
+          execution,
+          tasks,
+          currentProject?.id
         )
+        setBackgroundTask(view.task)
+        setBackgroundOwner(view.owner)
+        setBackgroundState(view.state)
       } catch {
         if (!cancelled) {
           setBackgroundTask(null)
@@ -314,13 +295,14 @@ export default function BatchPage() {
     [tasks]
   )
   const runningTask = tasks.find((task) => task.status === 'running')
-  const canRun =
-    (autoMode
-      ? !!plotBreakdownSummary && plotBreakdownSummary.nextActionMode !== 'done'
-      : selectedEps.size > 0) &&
-    backgroundState === 'ready' &&
-    !bgRunning &&
-    !pipelineRunning
+  const canRun = canStartBatch({
+    autoMode,
+    hasWaterline: !!plotBreakdownSummary,
+    waterlineDone: plotBreakdownSummary?.nextActionMode === 'done',
+    selectedCount: selectedEps.size,
+    backgroundState,
+    pipelineRunning
+  })
   const executionLabel = autoMode
     ? '按水位执行'
     : `批量执行 ${selectedEps.size} 集`
@@ -425,22 +407,20 @@ export default function BatchPage() {
     )
       return
     let cancelled = false
-    let attempts = 0
     let timer: number | undefined
     const refreshWhenIdle = async () => {
       try {
-        const execution = await getExecutionStatus()
-        if (cancelled) return
-        if (execution.busy && attempts < 5) {
-          attempts++
-          timer = window.setTimeout(() => void refreshWhenIdle(), 150 * attempts)
-          return
-        }
-        if (execution.busy) {
+        const result = await refreshAfterExecutionReleases({
+          getStatus: getExecutionStatus,
+          refresh: () => useProjectStore.getState().refreshProject(),
+          delay: (milliseconds) =>
+            new Promise((resolve) => {
+              timer = window.setTimeout(resolve, milliseconds)
+            }),
+          isCancelled: () => cancelled
+        })
+        if (result === 'still-busy' && !cancelled)
           addToast('warning', '后台任务仍在释放租约，请稍后手动刷新项目状态')
-          return
-        }
-        await useProjectStore.getState().refreshProject()
       } catch (error) {
         if (!cancelled)
           addToast(
@@ -556,15 +536,19 @@ export default function BatchPage() {
                 disabled={backgroundState === 'stopping'}
                 onClick={async () => {
                   try {
-                    await controlPipelineTask({
-                      action: backgroundState === 'paused' ? 'resume' : 'pause',
-                      target: backgroundTask.identity
-                    })
+                    await controlPipelineTask(
+                      getBackgroundControlRequest(
+                        backgroundState === 'paused' ? 'paused' : 'running',
+                        backgroundTask
+                      )
+                    )
                     setBackgroundRevision((value) => value + 1)
                   } catch (error) {
                     addToast(
                       'error',
-                      error instanceof Error ? error.message : '后台任务控制失败'
+                      error instanceof Error
+                        ? error.message
+                        : '后台任务控制失败'
                     )
                   }
                 }}
@@ -576,10 +560,9 @@ export default function BatchPage() {
                 disabled={backgroundState === 'stopping'}
                 onClick={async () => {
                   try {
-                    await controlPipelineTask({
-                      action: 'abort',
-                      target: backgroundTask.identity
-                    })
+                    await controlPipelineTask(
+                      getBackgroundStopRequest(backgroundTask)
+                    )
                     setBackgroundRevision((value) => value + 1)
                     addToast('warning', '后台任务已停止')
                   } catch (error) {
@@ -661,17 +644,15 @@ export default function BatchPage() {
               </button>
             )}
             {!isRunning ? (
-              <button
-                className="btn btn-primary btn-lg"
-                onClick={handleBatchRun}
+              <BatchStartButton
+                onClick={() => void handleBatchRun()}
+                label={executionLabel}
                 disabled={
                   !canRun ||
                   commandPending ||
                   snapshot?.status === 'interrupted'
                 }
-              >
-                ▶ {executionLabel}
-              </button>
+              />
             ) : (
               <div>
                 <button
