@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "lantern-river",
+  "datasetVersion": "1",
+  "inputSha256": "bbf49096b062b20c7ebddda239b2004f2c8cdf034d074d132fbaac5f4bc7bb2f",
+  "variantId": "candidate-v1",
+  "provenance": "synthetic_fixture",
+  "candidates": [
+    {
+      "sampleId": "short-story",
+      "output": { "objectId": "short-story", "version": "v1" },
+      "text": "妹妹林汀赶到旧渡口，林禾双手提起石箱，船靠岸了。",
+      "detectedIssueIds": [],
+      "observation": {
+        "projectId": "controlled",
+        "taskId": "evaluate",
+        "runId": "v1",
+        "operationId": "short-story",
+        "attemptId": "g1"
+      }
+    },
+    {
+      "sampleId": "episode-1",
+      "output": { "objectId": "episode-1", "version": "v1" },
+      "text": "林汀和周舟取走药箱，铜钥匙留在仓门。",
+      "detectedIssueIds": [],
+      "observation": {
+        "projectId": "controlled",
+        "taskId": "evaluate",
+        "runId": "v1",
+        "operationId": "episode-1",
+        "attemptId": "g2"
+      }
+    },
+    {
+      "sampleId": "episode-2",
+      "output": { "objectId": "episode-2", "version": "v1" },
+      "text": "林汀将铜钥匙交还沈伯。稍后林汀独自用铜钥匙开门，周舟收起蓝围巾。",
+      "detectedIssueIds": [],
+      "observation": {
+        "projectId": "controlled",
+        "taskId": "evaluate",
+        "runId": "v1",
+        "operationId": "episode-2",
+        "attemptId": "g3"
+      }
+    }
+  ],
+  "records": [
+    {
+      "schemaVersion": 1,
+      "identity": {
+        "projectId": "controlled",
+        "taskId": "evaluate",
+        "runId": "v1",
+        "operationId": "short-story",
+        "target": { "objectId": "short-story", "version": "source-1" },
+        "capability": "text.generate",
+        "provider": {
+          "name": "controlled-fixture",
+          "connectionId": "offline",
+          "endpointRevision": "offline-1",
+          "descriptorId": "synthetic-text",
+          "descriptorRevision": "1",
+          "modelId": "synthetic-v1"
+        },
+        "skill": {
+          "skillId": "controlled-writer",
+          "version": "1",
+          "contentHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "attemptId": "g1",
+      "kind": "generation",
+      "generationAttemptId": null,
+      "transportAction": null,
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "endedAt": "2026-01-01T00:00:01.000Z",
+      "status": "succeeded",
+      "completion": "complete",
+      "error": null,
+      "cancellation": null,
+      "jobId": null,
+      "outputs": [{ "objectId": "short-story", "version": "v1" }],
+      "usage": {}
+    },
+    {
+      "schemaVersion": 1,
+      "identity": {
+        "projectId": "controlled",
+        "taskId": "evaluate",
+        "runId": "v1",
+        "operationId": "episode-1",
+        "target": { "objectId": "episode-1", "version": "source-1" },
+        "capability": "text.generate",
+        "provider": {
+          "name": "controlled-fixture",
+          "connectionId": "offline",
+          "endpointRevision": "offline-1",
+          "descriptorId": "synthetic-text",
+          "descriptorRevision": "1",
+          "modelId": "synthetic-v1"
+        },
+        "skill": {
+          "skillId": "controlled-writer",
+          "version": "1",
+          "contentHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "attemptId": "g2",
+      "kind": "generation",
+      "generationAttemptId": null,
+      "transportAction": null,
+      "startedAt": "2026-01-01T00:00:02.000Z",
+      "endedAt": "2026-01-01T00:00:03.000Z",
+      "status": "succeeded",
+      "completion": "complete",
+      "error": null,
+      "cancellation": null,
+      "jobId": null,
+      "outputs": [{ "objectId": "episode-1", "version": "v1" }],
+      "usage": {}
+    },
+    {
+      "schemaVersion": 1,
+      "identity": {
+        "projectId": "controlled",
+        "taskId": "evaluate",
+        "runId": "v1",
+        "operationId": "episode-2",
+        "target": { "objectId": "episode-2", "version": "source-1" },
+        "capability": "text.generate",
+        "provider": {
+          "name": "controlled-fixture",
+          "connectionId": "offline",
+          "endpointRevision": "offline-1",
+          "descriptorId": "synthetic-text",
+          "descriptorRevision": "1",
+          "modelId": "synthetic-v1"
+        },
+        "skill": {
+          "skillId": "controlled-writer",
+          "version": "1",
+          "contentHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "attemptId": "g3",
+      "kind": "generation",
+      "generationAttemptId": null,
+      "transportAction": null,
+      "startedAt": "2026-01-01T00:00:04.000Z",
+      "endedAt": "2026-01-01T00:00:05.000Z",
+      "status": "succeeded",
+      "completion": "complete",
+      "error": null,
+      "cancellation": null,
+      "jobId": null,
+      "outputs": [{ "objectId": "episode-2", "version": "v1" }],
+      "usage": {}
+    }
+  ]
+}

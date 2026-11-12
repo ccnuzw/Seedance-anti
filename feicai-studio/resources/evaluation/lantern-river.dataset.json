@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "lantern-river",
+  "version": "1",
+  "provenance": "original_for_repository",
+  "license": "CC0-1.0",
+  "samples": [
+    {
+      "sampleId": "short-story",
+      "kind": "short_story",
+      "target": { "objectId": "short-story", "version": "source-1" },
+      "source": "《借来的灯》：渡口的修灯人林禾与妹妹林汀相依为命。林禾左手旧伤，不能提重物。暴雨前，他将唯一的铜钥匙交给妹妹，请她在旧渡口开仓取出应急灯。林汀先把蓝围巾系在仓门，约定这是安全信号。夜里水涨，林禾在岸边用三次灯闪引导迟归的船，不曾下水。黎明兄妹在旧渡口会合，将铜钥匙归还仓管沈伯。短篇到此结束，没有死亡或复活情节。",
+      "labels": [
+        {
+          "labelId": "signal",
+          "category": "key_event",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "三次灯闪"
+        },
+        {
+          "labelId": "injury",
+          "category": "character_continuity",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "forbidden_literal",
+          "value": "林禾双手提起石箱"
+        },
+        {
+          "labelId": "siblings",
+          "category": "relationship",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "妹妹林汀"
+        },
+        {
+          "labelId": "dock",
+          "category": "scene",
+          "severity": "minor",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "旧渡口"
+        },
+        {
+          "labelId": "prose",
+          "category": "style",
+          "severity": "minor",
+          "annotation": "authored_expectation",
+          "matcher": "human_only",
+          "value": null
+        }
+      ]
+    },
+    {
+      "sampleId": "episode-1",
+      "kind": "episode",
+      "target": { "objectId": "episode-1", "version": "source-1" },
+      "source": "连续短集《雾堤值夜》第一集：承接短篇。次日傍晚，沈伯把铜钥匙登记借给林汀。林汀在旧渡口试亮应急灯，蓝围巾仍系在仓门。她遇到运送药箱的周舟，二人只是同事。仓库封条破损，两人决定先报告沈伯。收尾时铜钥匙仍由林汀保管，林禾留在修灯铺养伤。本集不得让林禾搬运药箱。待改候选曾把林禾写成双手搬箱；审核应发现 issue-injury 的严重连续性问题。",
+      "labels": [
+        {
+          "labelId": "report",
+          "category": "key_event",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "报告沈伯"
+        },
+        {
+          "labelId": "key-holder",
+          "category": "prop_continuity",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "铜钥匙仍由林汀保管"
+        },
+        {
+          "labelId": "injury-review",
+          "category": "review_detection",
+          "severity": "critical",
+          "annotation": "authored_expectation",
+          "matcher": "review_detection",
+          "value": "issue-injury"
+        },
+        {
+          "labelId": "subtext-unlabelled",
+          "category": "style",
+          "severity": "minor",
+          "annotation": "unlabelled",
+          "matcher": "human_only",
+          "value": null
+        }
+      ]
+    },
+    {
+      "sampleId": "episode-2",
+      "kind": "episode",
+      "target": { "objectId": "episode-2", "version": "source-1" },
+      "source": "《雾堤值夜》第二集：当晚，林汀和周舟在旧渡口等待沈伯。林汀当面将铜钥匙交还沈伯，之后没有再取回。沈伯用钥匙打开仓门；蓝围巾被雨打湿，仍在仓门，尚未交给他人。周舟清点药箱后封仓。林禾仍在修灯铺。待改候选声称林汀已交钥匙，却又独自用同一钥匙开门；审核应发现 issue-key 的严重道具矛盾。",
+      "labels": [
+        {
+          "labelId": "return-key",
+          "category": "key_event",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "铜钥匙交还沈伯"
+        },
+        {
+          "labelId": "no-duplicate-key",
+          "category": "prop_continuity",
+          "severity": "major",
+          "annotation": "authored_expectation",
+          "matcher": "forbidden_literal",
+          "value": "林汀独自用铜钥匙开门"
+        },
+        {
+          "labelId": "scarf",
+          "category": "prop_continuity",
+          "severity": "minor",
+          "annotation": "authored_expectation",
+          "matcher": "required_literal",
+          "value": "蓝围巾仍在仓门"
+        },
+        {
+          "labelId": "key-review",
+          "category": "review_detection",
+          "severity": "critical",
+          "annotation": "authored_expectation",
+          "matcher": "review_detection",
+          "value": "issue-key"
+        }
+      ]
+    }
+  ]
+}
