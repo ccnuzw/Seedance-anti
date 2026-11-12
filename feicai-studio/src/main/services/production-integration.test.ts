@@ -11,6 +11,11 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ProjectConfig, ProjectPipelineState } from '@shared/types'
+import { buildDefaultPlotBreakdownTemplate } from '@shared/project-bootstrap'
+import {
+  summarizeProjectPlotBreakdown,
+  readPlotBreakdown
+} from '../project/plot-breakdown-store'
 import { IPC } from '@shared/ipc-channels'
 import {
   resolveEpisodeArtifactPath,
@@ -299,6 +304,191 @@ describe('registered project → workflow service → automatic pipeline → ass
       releaseExecutionLease(lease)
     }
   })
+
+  it.each(['current', 'legacy'] as const)(
+    '%s empty bootstrap starts at batch 1 / chapters 1–6, recovers publication, then consumes once',
+    async (template) => {
+      const config: ProjectConfig = {
+        projectName: '空模板联验',
+        entryStage: 'novel',
+        totalEpisodes: 2,
+        chaptersPerEpisode: 6,
+        visualStyle: '写实',
+        targetMedium: '短剧',
+        createdAt: '2026-01-01',
+        pipelineSettings: { scriptWordCountMin: 1, scriptWordCountMax: 5000 },
+        directories: {
+          sourceDir: 'custom/source',
+          outputsDir: 'custom/output',
+          reviewsDir: 'custom/reviews'
+        }
+      }
+      insertProjectRecord(initDatabase(), {
+        id: 'bootstrap',
+        name: config.projectName,
+        projectPath: root,
+        visualStyle: config.visualStyle,
+        targetMedium: config.targetMedium,
+        totalEpisodes: config.totalEpisodes,
+        configJson: JSON.stringify(config),
+        createdAt: config.createdAt,
+        updatedAt: config.createdAt
+      })
+      const projectPath = (
+        artifact: Parameters<typeof resolveProjectArtifactPath>[1]
+      ) => resolveProjectArtifactPath(root, artifact, config)
+      put(projectPath('projectConfig'), JSON.stringify(config))
+      put(projectPath('sourceNovel'), '# 临时原著\n林舟进入院子。')
+      for (let chapter = 1; chapter <= 12; chapter++) {
+        put(
+          join(
+            root,
+            'custom/source/chapters',
+            `chapter-${String(chapter).padStart(3, '0')}.md`
+          ),
+          `第${chapter}章\n临时原著第${chapter}章正文。`
+        )
+      }
+      let initial = buildDefaultPlotBreakdownTemplate(config)
+      if (template === 'legacy')
+        initial = initial.replace(
+          '> 暂无已发布剧情批次。首次拆解从第1批（第1-6章）开始，审核通过后追加到这里。',
+          '### 第1批（第1-6章）\n\n[后续批次剧情将追加到这里]'
+        )
+      put(projectPath('plotBreakdown'), initial)
+      const summary = () =>
+        summarizeProjectPlotBreakdown({ projectPath: root, config })
+      expect(summary()).toMatchObject({
+        totalBatches: 0,
+        totalEntries: 0,
+        nextBatchNumber: 1,
+        chapterEnd: null,
+        nextChapterStart: 1,
+        nextChapterEnd: 6
+      })
+      expect(readFileSync(projectPath('plotBreakdown'), 'utf8')).toBe(initial)
+      expect(new ProductionCommitStore(root, config).list()).toEqual([])
+      const params = {
+        projectId: 'bootstrap',
+        projectPath: root,
+        episodeNum: 1,
+        projectName: config.projectName,
+        visualStyle: config.visualStyle,
+        targetMedium: config.targetMedium,
+        operationId: 'bootstrap-first-production'
+      }
+      const runner = () =>
+        new WorkflowStepRunner(join(process.cwd(), 'resources/builtin-skills'))
+      runtime.generate.mockResolvedValueOnce(
+        '【剧情1】院子，林舟逼问守卫，第1集，状态：未用'
+      )
+      expect(
+        await runWorkflowAction(runner(), 'runStoryGeneration', params)
+      ).toMatchObject({ success: true })
+      expect(runtime.generate.mock.calls[0][0].user).toContain('章节范围：1-6')
+      expect(
+        readFileSync(
+          resolveEpisodeArtifactPath(root, 'storyBeat', 1, config),
+          'utf8'
+        )
+      ).toContain('feicai-story-batch:1')
+      expect(readFileSync(projectPath('plotBreakdown'), 'utf8')).toBe(initial)
+      runtime.generate.mockResolvedValueOnce(pass).mockResolvedValueOnce(pass)
+      let interrupted = false
+      const original = ProductionCommitStore.prototype.install
+      const inject = vi
+        .spyOn(ProductionCommitStore.prototype, 'install')
+        .mockImplementation(function (this: ProductionCommitStore, record) {
+          if (record.key === 'review:story_review:1') {
+            inject.mockRestore()
+            return original.call(
+              new ProductionCommitStore(root, config, (point) => {
+                if (point === 'installed:0') {
+                  interrupted = true
+                  expect(
+                    new ProductionCommitStore(root, config).get(
+                      params.operationId,
+                      'review:story_review:1'
+                    )?.phase
+                  ).toBe('prepared')
+                  throw new Error('first publication interrupted')
+                }
+              }),
+              record
+            )
+          }
+          return original.call(this, record)
+        })
+      try {
+        expect(
+          await runWorkflowAction(runner(), 'runStoryReview', params)
+        ).toMatchObject({ success: false })
+      } finally {
+        inject.mockRestore()
+      }
+      expect(interrupted).toBe(true)
+      // The service repairs the failed runner's prepared write set before it
+      // releases its lease; a fresh runner then reuses the completed receipt.
+      expect(
+        new ProductionCommitStore(root, config).get(
+          params.operationId,
+          'review:story_review:1'
+        )
+      ).toMatchObject({ phase: 'committed', projected: true })
+      for (let replay = 0; replay < 2; replay++) {
+        expect(
+          await runWorkflowAction(runner(), 'runStoryReview', params)
+        ).toMatchObject({ success: true })
+      }
+      expect(runtime.generate).toHaveBeenCalledTimes(3)
+      expect(summary()).toMatchObject({
+        totalBatches: 1,
+        totalEntries: 1,
+        nextBatchNumber: 2,
+        chapterStart: 1,
+        chapterEnd: 6,
+        nextChapterStart: 7,
+        nextChapterEnd: 12
+      })
+      const published = readPlotBreakdown({ projectPath: root, config })
+        .document.batches[0].entries[0]
+      runtime.generate
+        .mockResolvedValueOnce(script)
+        .mockResolvedValueOnce(pass)
+        .mockResolvedValueOnce(pass)
+      expect(
+        await runWorkflowAction(runner(), 'runScriptGeneration', params)
+      ).toMatchObject({ success: true })
+      for (let replay = 0; replay < 2; replay++) {
+        expect(
+          await runWorkflowAction(runner(), 'runScriptReview', params)
+        ).toMatchObject({ success: true })
+      }
+      expect(runtime.generate).toHaveBeenCalledTimes(6)
+      expect(
+        readPlotBreakdown({ projectPath: root, config }).document.batches[0]
+          .entries[0]
+      ).toMatchObject({
+        id: published.id,
+        index: published.index,
+        status: '已用'
+      })
+      expect(summary()).toMatchObject({
+        totalBatches: 1,
+        totalEntries: 1,
+        usedEntries: 1,
+        unusedEntries: 0,
+        nextBatchNumber: 2,
+        chapterEnd: 6
+      })
+      expect(
+        new ProductionCommitStore(root, config)
+          .list()
+          .every((record) => record.phase === 'committed' && record.projected)
+      ).toBe(true)
+      expect(getExecutionLease()).toBeNull()
+    }
+  )
 
   it.each(['novel', 'story', 'script'] as const)(
     '%s completes under the shared lease, exports, and rejects changed visual inputs',
