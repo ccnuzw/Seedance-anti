@@ -37,6 +37,8 @@ describe('pipeline identity preload adapter', async () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith(IPC.PIPELINE_SKIP, 'director')
     await api.getPipelineState()
     expect(mocks.invoke).toHaveBeenLastCalledWith(IPC.PIPELINE_GET_STATE)
+    await api.getExecutionStatus()
+    expect(mocks.invoke).toHaveBeenLastCalledWith(IPC.EXECUTION_GET_STATUS)
   })
 
   it('forwards supplied identities without discarding or converting them to legacy controls', async () => {

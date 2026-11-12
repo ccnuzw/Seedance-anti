@@ -151,6 +151,18 @@ describe('useProjectStore', async () => {
     expect(useProjectStore.getState().episodes).toEqual([])
   })
 
+  it('刷新项目状态只读取 episode 列表，不触发受租约保护的同步写入', async () => {
+    listProjectEpisodes.mockResolvedValue([
+      createEpisode({ status: 'complete' })
+    ])
+
+    await useProjectStore.getState().refreshProject()
+
+    expect(listProjectEpisodes).toHaveBeenCalledWith('project-1')
+    expect(syncProjectStatus).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().episodes[0]?.status).toBe('complete')
+  })
+
   it('同步单集状态时会先清理缓存并覆盖已有 episode', async () => {
     syncSingleEpisodeStatus.mockResolvedValue(
       createEpisode({
