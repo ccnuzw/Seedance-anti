@@ -60,7 +60,7 @@ function readProjectConfigFromDisk(
   return config as Partial<Project['config']>
 }
 
-function initializeProjectDirectories(
+export function initializeProjectDirectories(
   projectPath: string,
   config: Project['config']
 ): void {

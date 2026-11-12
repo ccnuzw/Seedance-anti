@@ -259,7 +259,12 @@ describe('registered project → workflow service → automatic pipeline → ass
       const nextConfig = normalizeProjectConfig({
         ...config,
         projectName: '设置后',
-        totalEpisodes: 4
+        totalEpisodes: 4,
+        directories: {
+          ...config.directories,
+          assetsDir: 'recovered-assets',
+          scriptDir: 'recovered-script'
+        }
       })
       const nextConfigText = JSON.stringify(nextConfig, null, 2)
       put(configPath, oldConfigText)
@@ -357,6 +362,8 @@ describe('registered project → workflow service → automatic pipeline → ass
       await recoverProjectSettingsCommits(projectPath, config, undefined, id)
       expect(readFileSync(configPath, 'utf8')).toBe(nextConfigText)
       expect(readFileSync(plotPath, 'utf8')).toBe('new planning')
+      expect(existsSync(join(projectPath, 'recovered-assets'))).toBe(true)
+      expect(existsSync(join(projectPath, 'recovered-script'))).toBe(true)
       expect(getProject(id)).toMatchObject({
         name: nextConfig.projectName,
         totalEpisodes: nextConfig.totalEpisodes,
@@ -406,14 +413,27 @@ describe('registered project → workflow service → automatic pipeline → ass
         visualStyle: '写实',
         targetMedium: '短剧',
         totalEpisodes: 4,
-        config: { chaptersPerEpisode: 5 }
+        config: {
+          chaptersPerEpisode: 5,
+          directories: {
+            assetsDir: 'updated-assets',
+            scriptDir: 'updated-script'
+          }
+        }
       })
       expect(getExecutionLease()).toBe(lease)
       expect(updated.name).toBe('设置后')
       expect(getProject('settings')).toMatchObject({
         name: '设置后',
         totalEpisodes: 4,
-        config: { projectName: '设置后', chaptersPerEpisode: 5 }
+        config: {
+          projectName: '设置后',
+          chaptersPerEpisode: 5,
+          directories: {
+            assetsDir: 'updated-assets',
+            scriptDir: 'updated-script'
+          }
+        }
       })
       expect(JSON.parse(readFileSync(configPath, 'utf8'))).toMatchObject({
         projectName: '设置后',
@@ -431,6 +451,8 @@ describe('registered project → workflow service → automatic pipeline → ass
       expect(
         new ProductionCommitStore(root, config).list('project-settings')
       ).toMatchObject([{ phase: 'committed', projected: true }])
+      expect(existsSync(join(root, 'updated-assets'))).toBe(true)
+      expect(existsSync(join(root, 'updated-script'))).toBe(true)
     } finally {
       releaseExecutionLease(lease)
     }

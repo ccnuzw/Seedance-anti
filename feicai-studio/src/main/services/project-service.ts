@@ -2,6 +2,7 @@ import {
   createProject as createProjectRecord,
   deleteProject as deleteProjectRecord,
   getProject,
+  initializeProjectDirectories,
   listEpisodes,
   listProjects,
   migrateLegacyNovelDirectory as migrateLegacyNovelDirectoryRecord,
@@ -223,8 +224,31 @@ export async function projectSettingsRecord(
     JSON.stringify(current.config) === value.configJson &&
     current.updatedAt === value.updatedAt
   const alreadyProjected = matches(projection.next)
+  if (!alreadyProjected && !matches(projection.previous))
+    throw new FileConflictError()
+
+  let nextConfig: unknown
+  try {
+    nextConfig = JSON.parse(projection.next.configJson)
+  } catch {
+    throw new Error('项目设置提交配置投影损坏')
+  }
+  if (
+    !nextConfig ||
+    typeof nextConfig !== 'object' ||
+    Array.isArray(nextConfig)
+  )
+    throw new Error('项目设置提交配置投影损坏')
+  const config = nextConfig as Project['config']
+  if (
+    config.projectName !== projection.next.name ||
+    config.visualStyle !== projection.next.visualStyle ||
+    config.targetMedium !== projection.next.targetMedium ||
+    config.totalEpisodes !== projection.next.totalEpisodes
+  )
+    throw new Error('项目设置提交配置投影不匹配')
+  initializeProjectDirectories(current.projectPath, config)
   if (alreadyProjected) return
-  if (!matches(projection.previous)) throw new FileConflictError()
   updateProjectProjection({ id: current.id, ...projection.next })
 }
 

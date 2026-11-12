@@ -17,6 +17,7 @@ import type {
   ProjectPipelineState
 } from '@shared/types'
 import { buildProductionRows } from '@renderer/utils/project-production-view'
+import { refreshSettingsSummary } from '@renderer/utils/refresh-settings-summary'
 import {
   pipelineSettingsDraft,
   validatePipelineSettingsDraft,
@@ -297,6 +298,7 @@ export function useProjectPageController() {
           pipelineSettings: settings
         }
       })
+      addToast('success', '项目设置已保存')
       if (useProjectStore.getState().currentProject?.id === currentProject.id) {
         useProjectStore.setState((state) => ({
           currentProject: updated,
@@ -305,14 +307,22 @@ export function useProjectPageController() {
           )
         }))
         invalidateCachedTextFile(configPath)
-        const summary = await getPlotBreakdownSummary(currentProject.id)
-        setProduction((previous) =>
-          previous?.projectId === currentProject.id
-            ? { ...previous, waterline: summary }
-            : previous
+        const refreshed = await refreshSettingsSummary(() =>
+          getPlotBreakdownSummary(currentProject.id)
         )
+        if (refreshed.ok) {
+          setProduction((previous) =>
+            previous?.projectId === currentProject.id
+              ? { ...previous, waterline: refreshed.summary }
+              : previous
+          )
+        } else {
+          addToast(
+            'warning',
+            `项目设置已保存，但剧情规划状态刷新失败：${getExceptionMessage(refreshed.error, '刷新失败')}`
+          )
+        }
       }
-      addToast('success', '项目设置已保存')
     } catch (error) {
       addToast('error', getExceptionMessage(error, '保存失败'))
     }

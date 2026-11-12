@@ -75,7 +75,8 @@ npm test -- --run \
   src/main/asset/asset-manager.test.ts \
   src/main/workflow/workflow-engine.test.ts \
   src/main/engine/art-output-merger.test.ts \
-  src/main/engine/state-machine-production-retry.test.ts
+  src/main/engine/state-machine-production-retry.test.ts \
+  src/renderer/utils/refresh-settings-summary.test.ts
 
 node_modules/.bin/prettier --check \
   src/main/asset/asset-manager.ts \
@@ -93,6 +94,8 @@ node_modules/.bin/prettier --check \
   src/preload/index.ts \
   src/renderer/hooks/useProjectPageController.ts \
   src/renderer/services/project-service.ts \
+  src/renderer/utils/refresh-settings-summary.ts \
+  src/renderer/utils/refresh-settings-summary.test.ts \
   src/shared/ipc-channels.ts \
   src/shared/ipc-contracts.ts \
   src/shared/production-commit.ts
