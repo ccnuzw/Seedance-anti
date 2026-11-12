@@ -64,6 +64,19 @@ export class ToolInvocationService {
     input: unknown,
     signal?: AbortSignal
   ): Promise<ToolInvocationResult> {
+    const startedAt = performance.now()
+    let deadline = Infinity
+    const controller = new AbortController()
+    const interruptedKind = (): 'cancel' | 'timeout' | undefined =>
+      signal?.aborted
+        ? 'cancel'
+        : performance.now() >= deadline
+          ? 'timeout'
+          : undefined
+    const checkBudget = (): void => {
+      const kind = interruptedKind()
+      if (kind) throw new Denied(kind === 'cancel' ? 'cancelled' : 'timeout')
+    }
     const receipt: ToolReceipt = {
       schemaVersion: 1,
       invocationId: null,
@@ -91,13 +104,36 @@ export class ToolInvocationService {
         resources
       }
     }
+    const finishInterrupted = (
+      kind: 'cancel' | 'timeout'
+    ): ToolInvocationResult => {
+      receipt.status = kind === 'timeout' ? 'timed-out' : 'cancelled'
+      receipt.code = kind === 'timeout' ? 'timeout' : 'cancelled'
+      controller.abort()
+      return finish()
+    }
     let invocation: ToolInvocation
     let tool: RegisteredTool
     let root: string
     let grant: ToolGrant
     let validated: unknown
+    const checkPolicy = (): void => {
+      if (this.grants.get(grant.grantId) !== grant)
+        throw new Denied('grant-denied')
+      const currentRoot = this.options.resolveRun(
+        structuredClone(invocation.identity)
+      )
+      if (!currentRoot) throw new Denied('identity-denied')
+      try {
+        if (assertRegisteredProjectRoot(currentRoot) !== root)
+          throw new Error('Root changed')
+      } catch {
+        throw new Denied('identity-denied')
+      }
+    }
     try {
       invocation = structuredClone(parseToolInvocation(input))
+      deadline = startedAt + invocation.timeoutMs
       Object.assign(receipt, {
         invocationId: invocation.invocationId,
         identity: invocation.identity,
@@ -106,6 +142,7 @@ export class ToolInvocationService {
         grantId: invocation.grantId,
         reason: invocation.reason
       })
+      checkBudget()
       if (this.usedIds.has(invocation.invocationId))
         throw new Denied('duplicate-invocation')
       this.usedIds.add(invocation.invocationId)
@@ -137,6 +174,7 @@ export class ToolInvocationService {
         )
       )
         throw new Denied('scope-denied')
+      checkBudget()
       try {
         validated = parseToolPayload(tool.input, invocation.input)
       } catch {
@@ -148,14 +186,20 @@ export class ToolInvocationService {
             ? Object.keys(validated).length
             : 0
       }
-      if (signal?.aborted) {
-        receipt.status = 'cancelled'
-        receipt.code = 'cancelled'
-        return finish()
-      }
-      for (const reference of tool.adapter.inputResources(validated))
-        this.inspect(reference, invocation, root, tool, grant)
+      checkBudget()
+      const references = tool.adapter.inputResources(validated)
+      checkBudget()
+      for (const reference of references)
+        this.inspect(reference, invocation, root, tool, grant, checkBudget)
+      checkBudget()
     } catch (error) {
+      if (
+        error instanceof Denied &&
+        (error.code === 'timeout' || error.code === 'cancelled')
+      )
+        return finishInterrupted(
+          error.code === 'timeout' ? 'timeout' : 'cancel'
+        )
       receipt.code =
         error instanceof Denied
           ? error.code
@@ -164,34 +208,13 @@ export class ToolInvocationService {
             : 'scope-denied'
       return finish()
     }
-    if (signal?.aborted) {
-      receipt.status = 'cancelled'
-      receipt.code = 'cancelled'
-      return finish()
-    }
     // A timed-out/cancelled adapter retains the capacity until its promise actually settles.
     this.busy = true
-    const controller = new AbortController()
-    const deadline = performance.now() + invocation.timeoutMs
-    const interruptedKind = (): 'cancel' | 'timeout' | undefined =>
-      signal?.aborted
-        ? 'cancel'
-        : performance.now() >= deadline
-          ? 'timeout'
-          : undefined
-    const finishInterrupted = (
-      kind: 'cancel' | 'timeout'
-    ): ToolInvocationResult => {
-      receipt.status = kind === 'timeout' ? 'timed-out' : 'cancelled'
-      receipt.code = kind === 'timeout' ? 'timeout' : 'cancelled'
-      controller.abort()
-      return finish()
-    }
     let timer: ReturnType<typeof setTimeout> | undefined
     let onAbort: (() => void) | undefined
     type Outcome =
       | { kind: 'result'; value: unknown }
-      | { kind: 'error' }
+      | { kind: 'error'; code: ToolFailureCode }
       | { kind: 'timeout' }
       | { kind: 'cancel' }
     const interrupted = new Promise<Outcome>((resolveOutcome) => {
@@ -200,37 +223,46 @@ export class ToolInvocationService {
         resolveOutcome({ kind: 'cancel' })
       }
       signal?.addEventListener('abort', onAbort, { once: true })
-      timer = setTimeout(() => {
-        controller.abort()
-        resolveOutcome({ kind: 'timeout' })
-      }, invocation.timeoutMs)
+      timer = setTimeout(
+        () => {
+          controller.abort()
+          resolveOutcome({ kind: 'timeout' })
+        },
+        Math.max(0, deadline - performance.now())
+      )
     })
     const execution: Promise<Outcome> = Promise.resolve()
       .then(() => {
-        if (controller.signal.aborted) throw new Denied('cancelled')
+        checkBudget()
+        checkPolicy()
+        checkBudget()
+        receipt.execution = 'unknown'
         return tool.adapter.execute(validated, {
           signal: controller.signal,
           inspectFile: (reference) => {
-            if (controller.signal.aborted || interruptedKind())
-              throw new Denied('cancelled')
-            // Recheck policy on each read, including revocation after dispatch.
-            if (
-              this.grants.get(grant.grantId) !== grant ||
-              this.options.resolveRun(invocation.identity) !== root
+            checkBudget()
+            checkPolicy()
+            return this.inspect(
+              reference,
+              invocation,
+              root,
+              tool,
+              grant,
+              checkBudget
             )
-              throw new Denied('grant-denied')
-            return this.inspect(reference, invocation, root, tool, grant)
           }
         })
       })
       .then(
         (value): Outcome => ({ kind: 'result', value }),
-        (): Outcome => ({ kind: 'error' })
+        (error): Outcome => ({
+          kind: 'error',
+          code: error instanceof Denied ? error.code : 'adapter-error'
+        })
       )
       .finally(() => {
         this.busy = false
       })
-    receipt.execution = 'unknown'
     const outcome = await Promise.race([execution, interrupted])
     if (timer) clearTimeout(timer)
     if (onAbort) signal?.removeEventListener('abort', onAbort)
@@ -240,20 +272,21 @@ export class ToolInvocationService {
         : interruptedKind()
     if (interruption) return finishInterrupted(interruption)
     if (outcome.kind !== 'result') {
-      receipt.status = 'unknown'
-      receipt.code = 'adapter-error'
+      receipt.status =
+        receipt.execution === 'not-started' ? 'rejected' : 'unknown'
+      receipt.code =
+        outcome.kind === 'error' && receipt.execution === 'not-started'
+          ? outcome.code
+          : 'adapter-error'
       return finish()
     }
     try {
-      if (
-        this.grants.get(grant.grantId) !== grant ||
-        this.options.resolveRun(invocation.identity) !== root
-      )
-        throw new Denied('grant-denied')
+      checkBudget()
+      checkPolicy()
       const result = parseToolAdapterResult(outcome.value)
       const data = structuredClone(parseToolPayload(tool.output, result.data))
       const resources = result.resources.map((reference) => ({
-        ...this.inspect(reference, invocation, root, tool, grant),
+        ...this.inspect(reference, invocation, root, tool, grant, checkBudget),
         disposition: 'pending-registration' as const
       }))
       const finalInterruption = interruptedKind()
@@ -278,8 +311,10 @@ export class ToolInvocationService {
     invocation: ToolInvocation,
     root: string,
     tool: RegisteredTool,
-    grant: ToolGrant
+    grant: ToolGrant,
+    checkBudget: () => void
   ): ToolFileReference {
+    checkBudget()
     let reference: ToolFileReference
     try {
       reference = parseToolFileReference(input)
@@ -299,6 +334,7 @@ export class ToolInvocationService {
       resolve(root, reference.relativePath)
     )
     assertProjectFileReadAllowed(path)
+    checkBudget()
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const before = fstatSync(fd)
@@ -312,7 +348,11 @@ export class ToolInvocationService {
       const buffer = Buffer.alloc(64 * 1024)
       let count = 0
       let bytes = 0
-      while ((count = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      while (true) {
+        checkBudget()
+        count = readSync(fd, buffer, 0, buffer.length, null)
+        checkBudget()
+        if (count === 0) break
         bytes += count
         if (bytes > reference.byteLength) throw new Denied('scope-denied')
         digest.update(buffer.subarray(0, count))
@@ -326,6 +366,7 @@ export class ToolInvocationService {
         digest.digest('hex') !== reference.contentHash
       )
         throw new Denied('scope-denied')
+      checkBudget()
       return reference
     } finally {
       closeSync(fd)

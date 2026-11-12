@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import * as fs from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createHash } from 'crypto'
@@ -21,6 +22,8 @@ import {
   registerProjectRoot,
   resetAccessControl
 } from '../security/access-control'
+
+vi.mock('fs', { spy: true })
 
 const identity = { projectId: 'p', taskId: 't', runId: 'r' }
 const descriptor: ToolDescriptor = {
@@ -442,10 +445,17 @@ describe('cancel, timeout and unknown completion', () => {
     }
   )
   it('checks the monotonic deadline even if synchronous execution prevented the timer from firing', async () => {
-    setupTestTool()
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const { execute } = setupTestTool(
+      vi.fn(async () => {
+        now = 20
+        return result
+      })
+    )
     service.installGrant(grant)
-    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(20)
     const response = await service.invoke(request({ timeoutMs: 10 }))
+    expect(execute).toHaveBeenCalledOnce()
     expect(response.receipt).toMatchObject({
       status: 'timed-out',
       execution: 'unknown',
@@ -459,9 +469,109 @@ describe('cancel, timeout and unknown completion', () => {
     const controller = new AbortController()
     const pending = service.invoke(request(), controller.signal)
     controller.abort()
-    expect((await pending).receipt.status).toBe('cancelled')
+    expect((await pending).receipt).toMatchObject({
+      status: 'cancelled',
+      code: 'cancelled',
+      execution: 'not-started',
+      retryAllowed: false
+    })
     expect(execute).not.toHaveBeenCalled()
   })
+  it.each([
+    'revoke',
+    'replace-grant',
+    'end-run',
+    'switch-root',
+    'unregister-root',
+    'deadline'
+  ])('rechecks %s immediately before execute', async (change) => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const { execute } = setupTestTool()
+    let activeRoot: string | null = root
+    service = new ToolInvocationService({
+      registry,
+      resolveRun: () => activeRoot
+    })
+    service.installGrant(grant)
+    const pending = service.invoke(request({ timeoutMs: 10 }))
+    if (change === 'revoke' || change === 'replace-grant') {
+      service.revokeGrant('grant')
+      if (change === 'replace-grant') service.installGrant(grant)
+    }
+    if (change === 'end-run') activeRoot = null
+    if (change === 'switch-root') {
+      const other = join(directory, 'other')
+      mkdirSync(other)
+      activeRoot = registerProjectRoot(other)
+    }
+    if (change === 'unregister-root') resetAccessControl()
+    if (change === 'deadline') now = 20
+    const response = await pending
+    expect(response.receipt).toMatchObject({
+      status: change === 'deadline' ? 'timed-out' : 'rejected',
+      code:
+        change === 'deadline'
+          ? 'timeout'
+          : change === 'revoke' || change === 'replace-grant'
+            ? 'grant-denied'
+            : 'identity-denied',
+      execution: 'not-started',
+      retryAllowed: false
+    })
+    expect(execute).not.toHaveBeenCalled()
+    // Rejected dispatch releases its capacity after the scheduled promise settles.
+    activeRoot = registerProjectRoot(root)
+    now = 0
+    service.revokeGrant('grant')
+    service.installGrant(grant)
+    expect(
+      (await service.invoke(request({ invocationId: 'next' }))).receipt.status
+    ).toBe('succeeded')
+  })
+  it.each(['parameters', 'resources', 'read-chunk'])(
+    'includes %s preflight in the deadline',
+    async (stage) => {
+      let now = 0
+      vi.spyOn(performance, 'now').mockImplementation(() => now)
+      const schema = object({ text: body })
+      registry.registerSchema(descriptor.inputSchema, {
+        read(value, path, issues) {
+          const validated = schema.read(value, path, issues)
+          if (stage === 'parameters') now = 20
+          return validated
+        }
+      })
+      registry.registerSchema(descriptor.outputSchema, schema)
+      const execute = vi.fn(async () => result)
+      registry.register(descriptor, {
+        inputResources: () => {
+          if (stage === 'resources') now = 20
+          return stage === 'read-chunk' ? [file] : []
+        },
+        execute
+      })
+      const originalRead = (await vi.importActual<typeof fs>('fs')).readSync
+      const read = vi
+        .spyOn(fs, 'readSync')
+        .mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+          const count = originalRead(...args)
+          if (stage === 'read-chunk') now = 20
+          return count
+        })
+      service.installGrant(grant)
+      const response = await service.invoke(request({ timeoutMs: 10 }))
+      expect(response.receipt).toMatchObject({
+        status: 'timed-out',
+        code: 'timeout',
+        execution: 'not-started',
+        retryAllowed: false
+      })
+      expect(execute).not.toHaveBeenCalled()
+      expect(read).toHaveBeenCalledTimes(stage === 'read-chunk' ? 1 : 0)
+      expect(response.resources).toEqual([])
+    }
+  )
   it('blocks adoption of a result when grant is revoked during execution', async () => {
     setupTestTool(
       vi.fn(async () => {
