@@ -140,6 +140,38 @@ describe('recoverable production file installation', () => {
     }
   )
 
+  it.each(['before-install', 'installed:0', 'installed:1'])(
+    'stops before the next artifact when the prepared journal changes at %s',
+    async (boundary) => {
+      const changeJournal = (store: ProductionCommitStore) => {
+        const path = join(
+          store.directory,
+          readdirSync(store.directory).find((name) => name.endsWith('.json'))!
+        )
+        // Still valid JSON and schema: a different prepared record is not ours.
+        const changed = JSON.parse(readFileSync(path, 'utf8'))
+        changed.result = { external: true }
+        put(path, JSON.stringify(changed, null, 2))
+        return path
+      }
+      const store = new ProductionCommitStore(root, config, (point) => {
+        if (point === boundary) changeJournal(store)
+      })
+      const record = await prepare(store)
+      if (boundary === 'before-install') changeJournal(store)
+      await expect(store.install(record)).rejects.toThrow('FILE_CONFLICT')
+      const installed =
+        boundary === 'before-install' ? 0 : Number(boundary.slice(-1)) + 1
+      for (const [index, file] of record.files.entries()) {
+        expect(existsSync(join(root, file.path))).toBe(index < installed)
+      }
+      expect(store.list()[0]).toMatchObject({
+        phase: 'prepared',
+        result: { external: true }
+      })
+    }
+  )
+
   it('fences operation subkeys and input reuse, and guards intent inputs against external edits', async () => {
     const store = new ProductionCommitStore(root, config)
     const record = await prepare(store)

@@ -282,6 +282,13 @@ export class ProductionCommitStore {
     if (r.phase !== 'prepared') return r
     // Validate the ENTIRE set before making any further change, including already installed members.
     const verify = () => {
+      // A prepared payload is authoritative only while we still own these exact
+      // journal bytes. Check before the first artifact and every later step.
+      if (
+        readCommitText(this.journalPath(r.operationId, r.key)) !==
+        JSON.stringify(r, null, 2)
+      )
+        throw new FileConflictError()
       for (const guard of r.guards ?? []) {
         const current = hashText(readCommitText(this.checked(guard.path)))
         const installed = r.files.find((file) => file.path === guard.path)

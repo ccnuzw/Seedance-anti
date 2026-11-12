@@ -10,6 +10,7 @@
 //
 
 import { ProductionCommitStore } from '../io/production-commit-store'
+import type { ProductionCommitRecord } from '@shared/production-commit'
 import { ProjectStatePersistence } from './project-state'
 //   任何 reviewing 状态:
 //     → (FAIL) 回退到对应的 executing 状态（自动重试）
@@ -52,7 +53,8 @@ import {
 import { handleReviewCycleResult } from './state-machine-review-cycle'
 import {
   runStageGeneration,
-  runStageReview
+  runStageReview,
+  restoreStageReviewAttempt
 } from './state-machine-stage-runner'
 
 export class PipelineStateMachine extends EventEmitter {
@@ -70,6 +72,7 @@ export class PipelineStateMachine extends EventEmitter {
   private controller: AbortController | null = null
   private runId = ''
   private operationId?: string
+  private reviewPhase?: ProductionCommitRecord['phase']
   private pauseGate: Promise<void> | null = null
   private openPauseGate: (() => void) | null = null
   private externalCheckpoint?: () => Promise<void>
@@ -170,7 +173,7 @@ export class PipelineStateMachine extends EventEmitter {
     )
     this.controller = new AbortController()
     this.runId = params.runId || randomUUID()
-    this.operationId = params.operationId
+    this.operationId = params.operationId ?? randomUUID()
     this.externalCheckpoint = params.waitUntilResumed
     const cancel = () => {
       this.controller?.abort()
@@ -283,19 +286,18 @@ export class PipelineStateMachine extends EventEmitter {
     this.context.retryCount = 0
     this.context.lastReviewFeedback = undefined
     this._reviewSkipped = false
-    const saved = this.statePersistence?.getEpisode(this.context.episodeNum)
-      ?.stageStates[stage]
-    if (
-      this.operationId &&
-      saved?.operationId === this.operationId &&
-      saved.lastReview &&
-      !saved.lastReview.passed
-    ) {
-      this.context.retryCount = Math.max(
-        0,
-        saved.attempts - (saved.status === 'running' ? 1 : 0)
+    this.reviewPhase = undefined
+    if (this.operationId) {
+      const attempt = restoreStageReviewAttempt(
+        this.context.projectPath,
+        this.projectConfig,
+        this.operationId,
+        stage,
+        this.context.episodeNum
       )
-      this.context.lastReviewFeedback = saved.lastReview.feedback
+      this.context.retryCount = attempt.retryCount
+      this.context.lastReviewFeedback = attempt.reviewFeedback
+      this.reviewPhase = attempt.reviewPhase
       if (this.context.retryCount > this.pipelineSettings.maxRetries) {
         this.handleError(`${stage} 阶段审核失败超过最大重试次数`, null)
         return
@@ -354,6 +356,7 @@ export class PipelineStateMachine extends EventEmitter {
 
       this.context.retryCount = outcome.nextRetryCount
       this.context.lastReviewFeedback = outcome.nextReviewFeedback
+      this.reviewPhase = undefined
 
       if (outcome.exhausted) {
         this.handleError(
@@ -371,6 +374,7 @@ export class PipelineStateMachine extends EventEmitter {
   private async executeStage(stage: AutomatedPipelineStage): Promise<void> {
     await runStageGeneration({
       stage,
+      reviewPhase: this.reviewPhase,
       operationId: this.operationId
         ? `${this.operationId}:generation:${stage}:${this.context.retryCount}`
         : undefined,
