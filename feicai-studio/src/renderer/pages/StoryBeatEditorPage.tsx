@@ -1,13 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { usePipelineStore } from '@renderer/stores/pipelineStore'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
 import { useDocumentEditorActions } from '@renderer/hooks/useDocumentEditorActions'
 import { useEpisodeParam } from '@renderer/hooks/useEpisodeParam'
 import { useEpisodeTextFile } from '@renderer/hooks/useEpisodeTextFile'
 import { useLatestStageReview } from '@renderer/hooks/useLatestStageReview'
 import {
-  runScriptGeneration,
   runStoryGeneration,
   runStoryReview
 } from '@renderer/services/workflow-actions'
@@ -15,45 +15,19 @@ import { useToastStore } from '@renderer/stores/toastStore'
 import { useReviewFeedbackStore } from '@renderer/stores/reviewFeedbackStore'
 import DocumentWorkflowPage from '@renderer/components/editor/DocumentWorkflowPage'
 import ReviewFeedbackPanel from '@renderer/components/review/ReviewFeedbackPanel'
+import { executeStoryReviewAction } from '@renderer/utils/editor-workflow-actions'
 import {
-  executeScriptGenerationAction,
-  executeRegenerateStoryAndReviewAction,
-  executeStoryReviewAction
-} from '@renderer/utils/editor-workflow-actions'
+  novelDraftState,
+  novelReadyEpisode,
+  novelInventoryUnknown,
+  novelNextAction
+} from '@renderer/utils/novel-draft-state'
 import { normalizeProjectConfig } from '@shared/project-config'
 import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
+import type { Episode } from '@shared/types'
+import type { PlotBreakdownSummary } from '@shared/ipc-contracts'
 import { useShallow } from 'zustand/react/shallow'
 import './ScriptEditorPage.css'
-
-function createDefaultBeatTemplate(ep: number): string {
-  const epStr = String(ep).padStart(2, '0')
-  return `# EP${epStr} 剧情拆解
-
-## 本集定位
-
-- 主线目标：
-- 主视角角色：
-- 情绪基调：
-
-## 开场钩子
-
-用 2-4 句话写本集开场如何抓人。
-
-## Beats
-
-### Beat 1
-
-- 场景：
-- 参与角色：
-- 事件推进：
-- 情绪变化：
-- 对后续的作用：
-
-## 结尾钩子
-
-说明本集结尾如何把用户带进下一集。
-`
-}
 
 export default function StoryBeatEditorPage() {
   const { currentProject, episodes, loadEpisodes, syncSingleEpisodeStatus } =
@@ -69,34 +43,84 @@ export default function StoryBeatEditorPage() {
   const setReviewFeedback = useReviewFeedbackStore((s) => s.setReview)
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const urlEp = parseInt(searchParams.get('ep') || '1')
-  const [currentEp] = useEpisodeParam(urlEp)
-  const { running: runningAction, run: runAsyncAction } = useAsyncAction()
-
+  const [currentEp] = useEpisodeParam(parseInt(searchParams.get('ep') || '1'))
   const config = normalizeProjectConfig(currentProject?.config)
-  const isNovelEntry = config.entryStage === 'novel'
-  const latestStoryReview = useLatestStageReview(
+  const novel = config.entryStage === 'novel'
+  const { running, run } = useAsyncAction()
+  const pipelineBusy = usePipelineStore((s) => s.isRunning)
+  const key = `${currentProject?.id}:${currentEp}`
+  const active = useRef(key)
+  active.current = key
+  useEffect(
+    () => () => {
+      active.current = ''
+    },
+    []
+  )
+  const [context, setContext] = useState<{
+    key: string
+    summary: PlotBreakdownSummary | null
+    model: boolean
+    episodes: Episode[] | null
+    passed: boolean
+    error?: string
+  } | null>(null)
+  const [failure, setFailure] = useState<{
+    key: string
+    message: string
+  } | null>(null)
+  const [revision, setRevision] = useState(0)
+  const actionLock = useRef(false)
+  const latestReview = useLatestStageReview(
     currentProject?.projectPath,
     currentEp,
     'story_review'
   )
-
   useEffect(() => {
-    if (currentProject && episodes.length === 0) {
-      loadEpisodes(currentProject.id)
+    if (currentProject && episodes.length === 0)
+      void loadEpisodes(currentProject.id)
+  }, [currentProject?.id, episodes.length, loadEpisodes])
+  useEffect(() => {
+    if (!currentProject) return
+    let cancelled = false
+    Promise.all([
+      novel
+        ? window.feicaiAPI.getPlotBreakdownSummary(currentProject.id)
+        : Promise.resolve(null),
+      window.feicaiAPI.listLLMConfigs(),
+      window.feicaiAPI.getProjectPipelineState(currentProject.projectPath),
+      window.feicaiAPI.listProjectEpisodes(currentProject.id)
+    ])
+      .then(([summary, models, pipeline, loadedEpisodes]) => {
+        if (!cancelled)
+          setContext({
+            key,
+            summary,
+            episodes: loadedEpisodes.filter(
+              (ep) => ep.projectId === currentProject.id
+            ),
+            model: models.some((m) => !m.category || m.category === 'llm'),
+            passed:
+              pipeline?.episodes[currentEp]?.stageStates?.story_review
+                ?.status === 'passed'
+          })
+      })
+      .catch((error) => {
+        if (!cancelled)
+          setContext({
+            key,
+            summary: null,
+            episodes: null,
+            model: false,
+            passed: false,
+            error: `读取工作流失败：${String(error)}`
+          })
+      })
+    return () => {
+      cancelled = true
     }
-  }, [currentProject?.id, episodes.length])
-
-  const {
-    content,
-    setContent,
-    saved,
-    loading,
-    reload: loadStoryBeat,
-    save,
-    documentSession,
-    overwriteConflict
-  } = useEpisodeTextFile({
+  }, [key, revision, novel, currentProject])
+  const doc = useEpisodeTextFile({
     enabled: !!currentProject,
     episodeNum: currentEp,
     getFilePath: (ep) =>
@@ -106,245 +130,356 @@ export default function StoryBeatEditorPage() {
         ep,
         currentProject!.config
       ),
-    emptyContent: createDefaultBeatTemplate,
-    onLoadMissing: (ep) =>
-      addToast(
-        'info',
-        `EP${String(ep).padStart(2, '0')} 尚未创建剧情拆解，已载入模板`
-      ),
+    emptyContent: '',
     onSaveSuccess: async () => {
       await syncSingleEpisodeStatus(currentEp)
-      addToast('success', '剧情拆解已保存')
+      addToast('success', '剧情草稿已保存')
     }
   })
-
   const {
-    importMarkdown: handleImportMarkdown,
-    saveDocument: handleSave,
-    ensureSaved
-  } = useDocumentEditorActions({
+    content,
     setContent,
+    saved,
+    loading,
+    reload,
     save,
-    addToast,
-    documentKey: `${currentProject?.id}:${currentEp}`
-  })
-
-  const handleRunScriptGeneration = async () => {
-    if (!currentProject) return
-    const savedOk = await ensureSaved(saved)
-    if (!savedOk) return
-
-    await runAsyncAction(async () => {
-      await executeScriptGenerationAction(currentProject, currentEp, {
-        runScriptGeneration,
-        syncSingleEpisodeStatus,
-        addToast,
-        navigate
-      })
+    documentSession,
+    overwriteConflict
+  } = doc
+  const [edited, setEdited] = useState<string | null>(null)
+  const { importMarkdown, saveDocument, ensureSaved } =
+    useDocumentEditorActions({
+      setContent: (value) => {
+        setEdited(key)
+        setContent(value)
+      },
+      save,
+      addToast,
+      documentKey: key
     })
-  }
+  const ctx = context?.key === key ? context : null
+  const state = novelDraftState(content, ctx?.summary ?? null)
+  const passed = !!ctx?.passed && edited !== key && saved && !doc.conflict
+  const busy = running || pipelineBusy || loading || !ctx || doc.saving
+  const error = failure?.key === key ? failure.message : doc.error || ctx?.error
+  const scriptEp = novelReadyEpisode(
+    ctx?.summary ?? null,
+    ctx?.episodes ?? null,
+    currentProject?.id ?? ''
+  )
+  const nextAction = novelNextAction(
+    state.batch,
+    passed,
+    ctx?.summary ?? null,
+    scriptEp,
+    novelInventoryUnknown(
+      ctx?.summary ?? null,
+      ctx?.episodes ?? null,
+      currentProject?.id ?? ''
+    )
+  )
+  const canScript = novel ? !!scriptEp : passed
+  const review = !passed && latestReview?.passed ? null : latestReview
 
-  const handleRunStoryReview = async () => {
-    if (!currentProject) return
-    const savedOk = await ensureSaved(saved)
-    if (!savedOk) return
-
-    await runAsyncAction(async () => {
-      await executeStoryReviewAction(currentProject, currentEp, {
-        runStoryReview,
-        syncSingleEpisodeStatus,
-        setReviewFeedback,
-        addToast
-      })
-    })
-  }
-
-  const handleRegenerateStoryWithReviewFeedback = async () => {
-    if (!currentProject || !latestStoryReview) return
-    if (!(await ensureSaved(saved))) return
-
-    await runAsyncAction(async () => {
-      await executeRegenerateStoryAndReviewAction(
-        currentProject,
-        currentEp,
-        latestStoryReview,
-        {
-          runStoryGeneration,
-          runStoryReview,
-          syncSingleEpisodeStatus,
-          setReviewFeedback,
-          addToast,
-          navigate,
-          reloadDocument: loadStoryBeat
-        }
+  const act = async (mode: 'generate' | 'review' | 'revise') => {
+    if (!currentProject || busy || actionLock.current) return
+    const origin = key
+    const valid = () =>
+      active.current === origin &&
+      useProjectStore.getState().currentProject?.id === currentProject.id
+    if (!ctx?.model) {
+      navigate('/settings')
+      return
+    }
+    if (
+      mode !== 'review' &&
+      content.trim() &&
+      !window.confirm(
+        '生成将替换磁盘上的剧情草稿。请先保存或导出手写修改。确定继续生成？'
       )
-    })
-  }
-
-  const handleEpSwitch = (ep: number) => {
-    if (currentProject) {
-      navigate(`/project/${currentProject.id}/story?ep=${ep}`)
+    )
+      return
+    if (mode !== 'review' && (!saved || doc.conflict || doc.recovery)) {
+      setFailure({ key, message: '请先保存或导出手写修改，再生成草稿。' })
+      return
+    }
+    actionLock.current = true
+    setFailure(null)
+    try {
+      await run(async () => {
+        try {
+          if (mode !== 'review') {
+            const result = await runStoryGeneration({
+              projectPath: currentProject.projectPath,
+              episodeNum: currentEp,
+              batchNumber:
+                mode === 'revise'
+                  ? (state.batch ?? undefined)
+                  : ctx?.summary?.nextBatchNumber,
+              projectName: currentProject.name,
+              visualStyle: currentProject.visualStyle,
+              targetMedium: currentProject.targetMedium,
+              reviewFeedback: mode === 'revise' ? review?.feedback : undefined
+            })
+            if (!valid()) return
+            if (!result.success)
+              throw new Error(result.error || '剧情草稿生成失败，请重试')
+            await reload(currentEp)
+            if (!valid()) return
+            const fresh = documentSession.getSnapshot()
+            if (fresh.conflict || !fresh.saved)
+              throw new Error(
+                '生成期间检测到手写修改，已保留修改；请先处理磁盘冲突。'
+              )
+            if (
+              fresh.error ||
+              !fresh.loaded ||
+              !novelDraftState(fresh.content, null).batch
+            )
+              throw new Error(fresh.error || '生成产物缺少有效批次身份，请重试')
+            await syncSingleEpisodeStatus(currentEp)
+            if (!valid()) return
+            setRevision((v) => v + 1)
+            if (mode === 'generate') return
+          }
+          if (
+            novel &&
+            !novelDraftState(documentSession.getSnapshot().content, null).batch
+          )
+            return
+          if (!(await ensureSaved(saved)) || !valid()) return
+          const result = await executeStoryReviewAction(
+            currentProject,
+            currentEp,
+            {
+              runStoryReview,
+              syncSingleEpisodeStatus: async (ep) => {
+                if (valid()) await syncSingleEpisodeStatus(ep)
+              },
+              setReviewFeedback: (...args) => {
+                if (valid()) setReviewFeedback(...args)
+              },
+              addToast: (...args) => {
+                if (valid()) addToast(...args)
+              }
+            }
+          )
+          if (!valid()) return
+          if (!result.success)
+            setFailure({
+              key: origin,
+              message: result.error || '审核未通过，请查看反馈并修订草稿。'
+            })
+          setEdited(null)
+          setRevision((v) => v + 1)
+        } catch (e) {
+          if (valid()) setFailure({ key: origin, message: String(e) })
+        }
+      })
+    } finally {
+      actionLock.current = false
     }
   }
-
+  const primaryLabel =
+    doc.error || ctx?.error
+      ? '重新读取草稿与状态'
+      : !ctx
+        ? '读取状态中…'
+        : novel && nextAction === 'refresh'
+          ? '刷新核对集数'
+          : novel && nextAction === 'complete'
+            ? '核对既有剧本'
+            : (!novel && passed) || (novel && nextAction === 'script')
+              ? '前往可制作剧本'
+              : !ctx.model
+                ? '配置文本模型'
+                : novel && nextAction === 'next'
+                  ? '生成下一批剧情草稿'
+                  : novel && nextAction === 'generate'
+                    ? '生成剧情草稿'
+                    : '保存并审核草稿'
+  const primary = () => {
+    if (doc.error || ctx?.error) {
+      void reload()
+      setRevision((v) => v + 1)
+      return
+    }
+    if (novel && nextAction === 'refresh') {
+      setRevision((v) => v + 1)
+      return
+    }
+    if (novel && nextAction === 'complete') {
+      navigate(`/project/${currentProject?.id}`)
+      return
+    }
+    if ((novel && nextAction === 'script') || (!novel && passed)) {
+      navigate(
+        `/project/${currentProject?.id}/script?ep=${scriptEp ?? currentEp}`
+      )
+      return
+    }
+    if (!ctx?.model) {
+      navigate('/settings')
+      return
+    }
+    void act(
+      novel && (nextAction === 'generate' || nextAction === 'next')
+        ? 'generate'
+        : 'review'
+    )
+  }
   return (
     <DocumentWorkflowPage
       episodes={episodes}
       currentEp={currentEp}
-      onEpisodeSelect={handleEpSwitch}
-      isEpisodeDone={(ep) => ep.hasStoryBeat}
-      reviewPanel={
-        latestStoryReview ? (
-          <ReviewFeedbackPanel
-            title={`EP${String(currentEp).padStart(2, '0')} 最近一次剧情审核反馈`}
-            review={latestStoryReview}
-            secondaryActionLabel="查看审核页"
-            onSecondaryAction={() =>
-              currentProject &&
-              navigate(
-                `/project/${currentProject.id}/review?ep=${currentEp}&stage=story_review`
-              )
-            }
-            primaryActionLabel={
-              latestStoryReview.passed
-                ? '执行剧本生成'
-                : isNovelEntry
-                  ? '按反馈重写并复审'
-                  : '保存修改并复审'
-            }
-            onPrimaryAction={() => {
-              if (latestStoryReview.passed) {
-                void handleRunScriptGeneration()
-                return
-              }
-              if (isNovelEntry) void handleRegenerateStoryWithReviewFeedback()
-              else void handleRunStoryReview()
-            }}
-          />
-        ) : null
+      onEpisodeSelect={(ep) =>
+        navigate(`/project/${currentProject?.id}/story?ep=${ep}`)
       }
+      isEpisodeDone={(ep) => ep.hasStoryBeat}
       title={
-        isNovelEntry
-          ? `🧩 第${currentEp}批剧情草稿`
+        novel
+          ? `🧩 剧情草稿${state.batch ? ` · 第${state.batch}批` : ctx?.summary ? ` · 待生成第${ctx.summary.nextBatchNumber}批` : ''}`
           : `🧩 EP${String(currentEp).padStart(2, '0')}`
       }
-      lineCount={content.split('\n').length}
       description={
         config.entryStage === 'script'
-          ? '当前项目从剧本起步，此页通常可跳过'
-          : isNovelEntry
-            ? '审核通过后写入 story/plot-breakdown.md，供剧本生成消耗'
-            : '作为剧本生成的上游输入'
+          ? '当前项目从剧本起步，此页可作为参考。'
+          : novel
+            ? '先生成草稿，检查后点击审核；通过后前往可制作剧本。'
+            : '编辑剧情，审核通过后进入剧本。'
       }
-      saved={saved}
       content={content}
-      onContentChange={setContent}
+      onContentChange={(value) => {
+        setEdited(key)
+        setContent(value)
+      }}
+      lineCount={content.split('\n').length}
+      saved={saved}
       documentSession={documentSession}
       onOverwriteConflict={overwriteConflict}
-      onReload={loadStoryBeat}
-      onSave={handleSave}
+      onReload={reload}
+      onSave={saveDocument}
+      reviewPanel={
+        <>
+          {novel && nextAction === 'refresh' && (
+            <p>
+              库存目标集的状态尚未确认，请刷新核对集数。确认前不会重复制作或生成下一批。
+            </p>
+          )}
+          {novel && nextAction === 'complete' && (
+            <p>
+              当前章节拆解已完成，或库存已用于剧本。请核对既有剧本；已用剧情缺少剧本时请检查文件，不重复生成。
+            </p>
+          )}
+          {error && <p role="alert">{error}</p>}
+          {novel && content.trim() && !state.batch && (
+            <p>
+              当前内容缺少有效批次身份，不能作为小说批次审核。请先保存或导出手写内容，再生成剧情草稿。
+            </p>
+          )}
+          {review && (
+            <ReviewFeedbackPanel
+              title="最近一次剧情审核反馈"
+              review={review}
+              secondaryActionLabel="查看审核页"
+              onSecondaryAction={() =>
+                navigate(
+                  `/project/${currentProject?.id}/review?ep=${currentEp}&stage=story_review`
+                )
+              }
+            />
+          )}
+          {review && !review.passed && novel && state.batch && (
+            <button
+              className="btn"
+              disabled={busy || !saved}
+              onClick={() => void act('revise')}
+            >
+              按反馈重写并复审
+            </button>
+          )}
+        </>
+      }
       workflow={{
-        title: isNovelEntry ? '确认剧情库存批次' : '确认剧情拆解',
-        description:
-          config.entryStage === 'script'
-            ? '当前项目从剧本起步，剧情拆解通常只作为参考。'
-            : isNovelEntry
-              ? '先让批次审核通过，再把新增剧情点写入剧情库存。'
-              : '先让剧情审核通过，再进入剧本生成。',
+        title: '剧情草稿与审核',
+        description: novel
+          ? '生成和审核分两次点击执行。小说批次由草稿标记与库存决定。'
+          : '保存修改并审核剧情。',
         steps: [
           {
-            id: 'story',
-            label: isNovelEntry ? '批次草稿' : '剧情拆解',
-            description: isNovelEntry
-              ? '当前 6 章提取的新增剧情点，审核通过前不会入库'
-              : '当前集剧情节奏、关键事件和结尾钩子',
-            state: content.trim() ? 'done' : 'active',
-            stateLabel: content.trim() ? '已填写' : '待填写'
+            id: 'draft',
+            label: '剧情草稿',
+            description: novel
+              ? '生成后检查内容，可继续手动编辑'
+              : '填写或导入剧情',
+            state: (novel ? !!state.batch : !!content.trim())
+              ? 'done'
+              : 'active',
+            stateLabel: loading
+              ? '读取中'
+              : (novel ? !!state.batch : !!content.trim())
+                ? '已生成 / 可编辑'
+                : '待生成'
           },
           {
             id: 'review',
-            label: isNovelEntry ? '批次审核' : '剧情审核',
-            description: latestStoryReview?.passed
-              ? '最近一次审核已通过'
-              : isNovelEntry
-                ? '通过后自动写入剧情库存'
-                : '生成剧本前必须通过剧情审核',
-            state: latestStoryReview?.passed
+            label: '审核草稿',
+            description: '审核通过后才可用于制作',
+            state: passed
               ? 'done'
-              : latestStoryReview
+              : review && !review.passed
                 ? 'warning'
                 : 'ready',
-            stateLabel: latestStoryReview?.passed
+            stateLabel: passed
               ? '已通过'
-              : latestStoryReview
-                ? '需修改'
-                : '待审核'
+              : review && !review.passed
+                ? '需修订'
+                : '待审核 / 修改后需重审'
           },
           {
             id: 'script',
-            label: '剧本生成',
-            description: latestStoryReview?.passed
-              ? isNovelEntry
-                ? '剧情点已入库后，可以继续生成对应剧本'
-                : '可以基于审核通过的剧情生成剧本'
-              : '请先完成剧情审核',
-            state: latestStoryReview?.passed ? 'ready' : 'blocked',
-            stateLabel: latestStoryReview?.passed ? '可生成' : '等待审核'
+            label: '制作剧本',
+            description: canScript ? '已有可制作剧情' : '先完成草稿审核',
+            state: canScript ? 'ready' : 'blocked',
+            stateLabel: canScript ? '可前往' : '等待审核'
           }
         ],
         primaryAction: {
-          label: runningAction
-            ? '执行中...'
-            : latestStoryReview?.passed
-              ? '保存并生成剧本'
-              : isNovelEntry
-                ? '保存并审核批次'
-                : '保存并审核剧情',
-          onClick: latestStoryReview?.passed
-            ? handleRunScriptGeneration
-            : handleRunStoryReview,
-          disabled: runningAction || loading || config.entryStage === 'script',
-          variant: 'primary'
+          label: running ? '执行中…' : primaryLabel,
+          onClick: primary,
+          disabled:
+            busy ||
+            config.entryStage === 'script' ||
+            !!doc.conflict ||
+            !!doc.recovery
         },
         secondaryActions: [
-          {
-            label: '保存',
-            onClick: handleSave,
-            disabled: saved
-          },
+          { label: '保存', onClick: saveDocument, disabled: saved || running },
           {
             label: '导入 Markdown',
-            onClick: handleImportMarkdown
+            onClick: importMarkdown,
+            disabled: running
           },
           {
             label: '前往剧本',
             onClick: () =>
-              currentProject &&
-              navigate(`/project/${currentProject.id}/script?ep=${currentEp}`)
+              navigate(
+                `/project/${currentProject?.id}/script?ep=${scriptEp ?? currentEp}`
+              )
           }
         ]
       }}
       toolbarActions={
-        <>
-          <button className="btn btn-sm" onClick={handleImportMarkdown}>
-            📥 导入 Markdown
-          </button>
-          <button
-            className="btn btn-sm"
-            onClick={() =>
-              currentProject &&
-              navigate(`/project/${currentProject.id}/script?ep=${currentEp}`)
-            }
-          >
-            📖 前往剧本
-          </button>
-          <button
-            className="btn btn-sm"
-            onClick={() => loadStoryBeat(currentEp)}
-          >
-            ↻ 重新加载
-          </button>
-        </>
+        <button
+          className="btn btn-sm"
+          disabled={running}
+          onClick={() => {
+            void reload()
+            setRevision((v) => v + 1)
+          }}
+        >
+          ↻ 重新加载
+        </button>
       }
     />
   )

@@ -53,12 +53,12 @@ function buildRecommendedSteps(
       {
         label: '完善小说原文',
         path: `/project/${projectId}/source`,
-        description: '先补齐 source/novel.md，再进入剧情拆解。'
+        description: '先补齐 source/novel.md，再生成剧情草稿。'
       },
       {
-        label: '进入剧情拆解',
+        label: '生成剧情草稿',
         path: `/project/${projectId}/story?ep=1`,
-        description: '原文和设定已经齐备时，直接开始 EP01 拆解。'
+        description: '原文和设定齐备后，先生成剧情草稿，检查后再审核。'
       }
     ]
   }
@@ -156,13 +156,22 @@ export default function ProjectHealthPage() {
     })
     navigate(`/project/${currentProject.id}/batch?${params.toString()}`)
   }
+  const sourceReady =
+    report?.checks.some(
+      (check) => check.id === 'source_novel' && check.status === 'pass'
+    ) === true
   const recommendedSteps = currentProject
-    ? buildRecommendedSteps(currentProject.id, config.entryStage)
+    ? buildRecommendedSteps(currentProject.id, config.entryStage).filter(
+        (step) =>
+          config.entryStage !== 'novel' ||
+          sourceReady ||
+          !step.path.includes('/story')
+      )
     : []
   const nextPath = !currentProject
     ? '/'
     : config.entryStage === 'novel'
-      ? `/project/${currentProject.id}/source`
+      ? `/project/${currentProject.id}/${sourceReady ? 'story' : 'source'}`
       : config.entryStage === 'story'
         ? `/project/${currentProject.id}/story?ep=1`
         : `/project/${currentProject.id}/script?ep=1`
