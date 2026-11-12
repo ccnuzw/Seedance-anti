@@ -108,6 +108,22 @@
 - 改 IPC / service 契约：覆盖可观察权限、状态、边界与错误；不增加只断言转发参数或复制文案的测试。
 - 改状态机、审核、落盘路径：补 main engine / workflow 测试。
 
+## 小说首次制作与 T03 合并联验（8196d67）
+
+在仓库根目录执行（仅复用现有依赖，不安装或重建）：
+
+```bash
+make -f feicai-studio/scripts/novel-integration.Makefile verify
+```
+
+默认依赖为 `/Users/apple/Progame/Seedance-anti/feicai-studio/node_modules`；其他环境可用 `M1_SHARED_NODE_MODULES=/absolute/path/node_modules` 覆盖。入口复用 `m1-verify.py` 隔离本地依赖缓存并按原字节恢复两份 tsbuildinfo；拒绝已有的整个 node_modules 符号链接，结束删除自建依赖目录。构建产物留在忽略的 `out/`。
+
+本轮实际通过 **18 文件、168 测试**（首次草稿 renderer 27、制作总控/矩阵 renderer 42、所选 backend/shared 回归 99），两套 Electron DOM **各 31 项断言**，共同 readiness **8 fixtures，`draft helper compared: true`**（显式传入当前 checkout 的 `novel-draft-state.ts` 绝对路径）。force typecheck、lint、build 各集中执行一次通过，`git diff --check` 通过；两份 tsbuildinfo 运行前后 SHA-256 一致，自建依赖目录已清理。
+
+- Backend 的 `production-integration.test.ts`（6 项）覆盖新旧空模板首次批 1 / 第 1–6 章、审核发布中断及恢复、重复审核不重复调用 provider、对应第 1 集库存消费一次、下一批水位 2 / 第 7–12 章，以及 novel/story/script 三入口下游审核、导出及输入变更失效。下一批章节为水位断言，不代表已生成第二批。
+- T03 选择提交存储恢复、状态机 FAIL 重试/恢复、剧情存储、入口工作流及 shared plot-breakdown/bootstrap/batch 回归；其中 `state-machine-production-retry.test.ts` 12 项、`production-commit-store.test.ts` 23 项。本轮没有重跑历史全部 394 项或额外 native SQLite 入口。
+- DOM 挂载实际 renderer，但 **feicaiAPI 是合成实现**；backend 使用临时项目文件/SQLite 和受控 provider。未访问真实项目、userData 或凭据，未调用真实模型；这些结果不能证明真实模型质量或真实哑妃解析问题的根因。build 是编译验证，不是打包发布验收。
+
 ## M1/T11 集成验收（2026-11-12）
 
 本轮基于已合并的 F01 Provider、F02 Skill、T02 production-contracts、T01 分集矩阵独立复跑。下方基础集成及较早记录属于历史证据，不能作为本轮额外 native/performance 检查的结果。环境为 macOS arm64、Node 26.12.1、Electron 42.11.18 / 内嵌 Node 24.19.0；复用已有依赖，无安装或 native 重建。
