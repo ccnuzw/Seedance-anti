@@ -179,6 +179,90 @@ describe('plot-breakdown', () => {
   })
 })
 
+describe('plot-breakdown published batches', () => {
+  it('空批次混合有效批次时只累计已发布范围与编号，往返不改变结果', () => {
+    const doc = parsePlotBreakdownMarkdown(`## 剧情列表
+### 第99批（第100-600章）
+[待追加]
+### 第1批（第1-6章）
+【剧情1】人工剧情，状态：已用
+### 第2批（第7-12章）
+### 第3批（第13-18章）
+【剧情2】后批剧情，第3集，状态：未用
+### 第100批（第601-606章）
+`)
+    for (const parsed of [
+      doc,
+      parsePlotBreakdownMarkdown(serializePlotBreakdownMarkdown(doc))
+    ]) {
+      expect(summarizePlotBreakdown(parsed)).toEqual({
+        totalEntries: 2,
+        usedEntries: 1,
+        unusedEntries: 1,
+        totalBatches: 2
+      })
+      expect(summarizePlotBreakdownWaterline(parsed)).toMatchObject({
+        totalBatches: 2,
+        chapterStart: 1,
+        chapterEnd: 18,
+        nextBatchNumber: 4,
+        readyEpisodeNumbers: [3],
+        usedEpisodeNumbers: []
+      })
+    }
+  })
+
+  it('只有空内容或无效序号的批次不能声明章节已处理', () => {
+    const doc = parsePlotBreakdownMarkdown(`## 剧情列表
+### 第8批（第1-48章）
+【剧情1】，第1集，状态：未用
+【剧情0】内容，第1集，状态：未用
+`)
+    expect(summarizePlotBreakdownWaterline(doc)).toMatchObject({
+      totalBatches: 0,
+      chapterStart: null,
+      chapterEnd: null,
+      nextBatchNumber: 1
+    })
+  })
+
+  it.each([
+    ['### 第8批（第1-6章）', 9, 6],
+    ['### 第1-6章', 1, 6],
+    ['', 1, null]
+  ])(
+    '人工有效库存 %s 使用显式编号，不用批次数推断范围',
+    (heading, nextBatchNumber, chapterEnd) => {
+      const doc = parsePlotBreakdownMarkdown(
+        `## 剧情列表\n${heading}\n【剧情1】人工保留内容，状态：已用`
+      )
+      expect(summarizePlotBreakdownWaterline(doc)).toMatchObject({
+        totalBatches: 1,
+        totalEntries: 1,
+        usedEntries: 1,
+        unusedEntries: 0,
+        nextBatchNumber,
+        chapterEnd
+      })
+    }
+  )
+
+  it('多个未编号旧批次不会凭批次数跳过章节或批次', () => {
+    const doc = parsePlotBreakdownMarkdown(`## 剧情列表
+### 第1-2章
+【剧情1】甲
+### 第3-4章
+【剧情2】乙
+`)
+    expect(summarizePlotBreakdownWaterline(doc)).toMatchObject({
+      totalBatches: 2,
+      chapterStart: 1,
+      chapterEnd: 4,
+      nextBatchNumber: 1
+    })
+  })
+})
+
 describe('plot-breakdown stable identity', () => {
   it('替换旧批次不重编号其他批次，保留已用身份并在往返后稳定', () => {
     const base = parsePlotBreakdownMarkdown(
