@@ -39,6 +39,14 @@ export const useBatchStore = create<BatchStore>((set, get) => {
       set({ commandPending: false })
     }
   }
+  const queueCommand = (
+    action: (queueId: string) => Promise<BatchQueueState | null>
+  ) => {
+    const queueId = get().snapshot?.id
+    if (!queueId)
+      return Promise.reject(new Error('队列身份尚未取得，请刷新后重试'))
+    return command(() => action(queueId))
+  }
   return {
     snapshot: null,
     commandPending: false,
@@ -70,8 +78,8 @@ export const useBatchStore = create<BatchStore>((set, get) => {
       }
     },
     start: (params) => command(() => batchService.startBatch(params)),
-    pause: () => command(batchService.pauseBatch),
-    resume: () => command(batchService.resumeBatch),
-    stop: () => command(batchService.stopBatch)
+    pause: () => queueCommand(batchService.pauseBatch),
+    resume: () => queueCommand(batchService.resumeBatch),
+    stop: () => queueCommand(batchService.stopBatch)
   }
 })

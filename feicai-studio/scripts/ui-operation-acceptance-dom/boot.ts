@@ -112,7 +112,26 @@ const api: any = {
     return structuredClone(f.execution)
   },
   getPipelineState: async () => ({ state: 'idle', context: null, logs: [] }),
-  getBatchState: async () => structuredClone(f.queue),
+  getBatchState: async () => {
+    if (f.failQueue) throw new Error('合成队列查询失败')
+    return structuredClone(f.queue)
+  },
+  resumeBatch: async (queueId: string) => {
+    record('resumeBatch', [queueId])
+    if (
+      queueId !== f.queue?.id ||
+      !['paused', 'interrupted'].includes(f.queue.status)
+    )
+      throw new Error('队列身份或恢复状态不匹配')
+    await new Promise<void>((resolve) => {
+      f.finishResume = resolve
+    })
+    f.queue.status = 'running'
+    f.queue.updatedAt++
+    f.execution = { busy: true, phase: 'running', owner: 'batch' }
+    emit('batch')
+    return structuredClone(f.queue)
+  },
   runStoryGeneration: async (args: any) => {
     record('runStoryGeneration', [args])
     const runId = `generation-${++f.runCount}`

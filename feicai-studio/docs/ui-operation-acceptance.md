@@ -23,9 +23,11 @@ make -f scripts/ui-operation-acceptance.Makefile verify
 
 本轮修复基础设置的项目名称、风格、媒介、总集数、每集章节数五个标签缺少输入关联的问题；修复小说草稿已通过后，制作步骤仍一律提示“等待审核”的误导文案，按库存状态改为等待下一批、集数待核对或核对既有剧本，并补真实 DOM 回归。修复旧 suite 与当前全局准入/后台状态 API 不匹配造成的验收失效，保留真实页面调用路径。
 
+补充中断队列定向恢复验收：真实批量页将原 queue ID 传给 `resumeBatch`，跨项目任务中心的来源链接返回原项目核对；后台查询失败或队列读取失败时禁用恢复，提交未结算时禁用重复请求。已停止的未完成队列不再显示无效的恢复入口；任务中心同样不显示继续。renderer store 的暂停、继续、停止均携带已观察队列 ID，缺少身份时拒绝控制。新增 12 条 DOM 断言、3 张截图与 2 项 store 回归；不修改 main，fixture 恢复成功不代表已验证真实后端新租约。
+
 390px 体验限制：多条底部通知可暂时遮挡页面底部操作，关闭通知后主操作可达；动画完成后通知文本与关闭按钮未横向裁切。实际关闭通知并验证后续原文主操作的命中。诊断截图 `diagnostics/transient-toast-overlay-390.png` 另存，未把此临时遮挡宣称为已消除。
 
-本轮结果：五个 suite 全部通过，共 **159 条 DOM 断言、30 张 PNG**；renderer **37 个文件、181 项测试通过**；`tsc --build --noEmit --force`、全仓 ESLint、改动文件 Prettier、`git diff --check` 全部通过。
+本轮结果：五个 suite 全部通过，共 **171 条 DOM 断言、33 张 PNG**；renderer **37 个文件、183 项测试通过**；`tsc --build --noEmit --force`、全仓 ESLint、改动文件 Prettier、`git diff --check` 全部通过。
 
 | Suite                          | DOM 断言 | 截图 |
 | ------------------------------ | -------: | ---: |
@@ -33,7 +35,7 @@ make -f scripts/ui-operation-acceptance.Makefile verify
 | task-center                    |       21 |    3 |
 | novel-draft                    |       32 |    2 |
 | novel-production               |       31 |    2 |
-| operations（本轮真实路由场景） |       40 |   12 |
+| operations（本轮真实路由场景） |       52 |   15 |
 
 截图经实际读取复核，包括390px抽屉、批量主按钮、设置通知与下一批操作；原始断言和全部截图索引见 `/tmp/feicai-ui-operation-acceptance-task-3/report.json` 与 `gallery.html`。
 

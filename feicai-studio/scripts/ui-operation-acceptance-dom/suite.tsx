@@ -9,6 +9,7 @@ import Story from '@renderer/pages/StoryBeatEditorPage'
 import Source from '@renderer/pages/SourceEditorPage'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useTaskCenterStore } from '@renderer/stores/taskCenterStore'
+import { useBatchStore } from '@renderer/stores/batchStore'
 import '@renderer/styles/theme.css'
 import '@renderer/styles/global.css'
 const w = window as any
@@ -389,6 +390,128 @@ async function main() {
   await click('刷新核对集数')
   await until(() => button('前往可制作剧本'))
   assert(true, '未知集恢复后真实刷新按钮解锁可制作剧本导航')
+  await router.navigate('/project/b/batch?mode=script')
+  await until(() => document.querySelector('.batch-page'))
+  f.tasks = []
+  f.queue = {
+    id: 'interrupted-original-a',
+    projectId: 'a',
+    projectPath: '/synthetic/a',
+    mode: 'script',
+    status: 'interrupted',
+    cursor: 1,
+    tasks: [
+      { episodeNum: 1, status: 'done', steps: { script: { success: true } } },
+      { episodeNum: 2, status: 'pending', steps: {} }
+    ],
+    updatedAt: 10
+  }
+  f.execution = { busy: false, phase: 'idle' }
+  await useBatchStore.getState().refresh()
+  await refresh()
+  await until(
+    () => button('恢复未完成队列') && !button('恢复未完成队列')!.disabled
+  )
+  assert(start().disabled, 'interrupted 队列待核对时不能另启批量任务')
+  await click('任务中心')
+  const interruptedCard = () =>
+    [...document.querySelectorAll<HTMLElement>('.task-center-card')].find(
+      (card) => card.textContent?.includes('interrupted-original-a')
+    )!
+  await until(() => interruptedCard())
+  assert(
+    interruptedCard().textContent?.includes('验收项目 A') &&
+      ![...interruptedCard().querySelectorAll('button')].some(
+        (b) => b.textContent === '继续'
+      ),
+    '项目 B 的任务中心保留原项目 A 中断队列身份并引导来源页核对'
+  )
+  ;(interruptedCard().querySelector('a') as HTMLElement).click()
+  await until(
+    () =>
+      router.state.location.pathname === '/project/a/batch' &&
+      !document.querySelector('dialog')?.open
+  )
+  await until(
+    () => button('恢复未完成队列') && !button('恢复未完成队列')!.disabled
+  )
+  assert(
+    useProjectStore.getState().currentProject?.id === 'a',
+    '中断队列来源链接实际同步到原项目 A 批量页'
+  )
+  f.failStatus = true
+  await until(() => text().includes('后台任务状态读取失败'))
+  assert(
+    button('恢复未完成队列')!.disabled,
+    '后台执行状态未知时中断队列恢复按钮禁用'
+  )
+  await refresh()
+  await click('任务中心')
+  assert(
+    ![...interruptedCard().querySelectorAll('button')].some((b) =>
+      ['继续', '停止'].includes(b.textContent || '')
+    ),
+    '任务中心状态未知时不开放中断队列控制'
+  )
+  await click('关闭')
+  f.failStatus = false
+  await click('重新检查后台任务')
+  await until(() => !button('恢复未完成队列')!.disabled)
+  f.failQueue = true
+  await useBatchStore
+    .getState()
+    .refresh()
+    .catch(() => {})
+  await delay()
+  assert(
+    button('恢复未完成队列')!.disabled,
+    '队列读取失败即使保留旧 interrupted 快照也不开放恢复'
+  )
+  f.failQueue = false
+  await useBatchStore.getState().refresh()
+  await until(() => !button('恢复未完成队列')!.disabled)
+  await refresh()
+  await reachable(
+    button('恢复未完成队列')!,
+    '390px 中断队列恢复操作可聚焦且可点击'
+  )
+  await w.testCapture('batch-interrupted-resume-390')
+  await click('恢复未完成队列')
+  await until(() => f.finishResume)
+  assert(
+    f.calls.filter((c: any) => c.method === 'resumeBatch').at(-1).args[0] ===
+      'interrupted-original-a',
+    '真实中断恢复点击定向发送原队列 ID，不使用无参兼容路径'
+  )
+  assert(button('恢复未完成队列')!.disabled, '中断恢复请求未结算时禁用重复恢复')
+  f.finishResume()
+  await until(() => text().includes('队列正在运行') || !!button('暂停队列'))
+  assert(
+    f.queue.cursor === 1 &&
+      f.queue.tasks[0].status === 'done' &&
+      !button('恢复未完成队列'),
+    '恢复快照切换运行态并保留已提交任务与原游标'
+  )
+  f.queue.status = 'stopped'
+  f.queue.updatedAt++
+  f.execution = { busy: false, phase: 'idle' }
+  await useBatchStore.getState().refresh()
+  await refresh()
+  await until(() => text().includes('队列已停止'))
+  assert(
+    !button('恢复未完成队列') && !button('继续执行'),
+    '已停止且未完成的真实批量页不再提供不可用的继续或恢复动作'
+  )
+  await w.testCapture('batch-stopped-no-resume-390')
+  await click('任务中心')
+  assert(
+    ![...interruptedCard().querySelectorAll('button')].some(
+      (b) => b.textContent === '继续'
+    ),
+    '已停止队列在任务中心同样不显示继续动作'
+  )
+  await w.testCapture('task-center-stopped-no-resume-390')
+  await click('关闭')
   assert(
     !f.calls.some((c: any) => c.method.startsWith('FORBIDDEN:')),
     '所有真实页面调用均限于明确受控 API'

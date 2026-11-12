@@ -41,6 +41,9 @@ const formatFiles = [
   'scripts/ui-operation-acceptance-dom',
   'src/renderer/components/project/ProjectPipelineSettingsPanel.tsx',
   'src/renderer/pages/StoryBeatEditorPage.tsx',
+  'src/renderer/pages/BatchPage.tsx',
+  'src/renderer/stores/batchStore.ts',
+  'src/renderer/stores/batchStore.test.ts',
   'docs/ui-operation-acceptance.md'
 ]
 const report = {
