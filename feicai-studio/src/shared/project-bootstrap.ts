@@ -106,9 +106,7 @@ export function buildDefaultPlotBreakdownTemplate(
 
 ## 剧情列表
 
-### 第1批（第1-6章）
-
-[后续批次剧情将追加到这里]
+> 暂无已发布剧情批次。首次拆解从第1批（第1-6章）开始，审核通过后追加到这里。
 
 ---
 
