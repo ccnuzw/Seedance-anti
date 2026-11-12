@@ -156,13 +156,22 @@ export default function ProjectHealthPage() {
     })
     navigate(`/project/${currentProject.id}/batch?${params.toString()}`)
   }
+  const sourceReady =
+    report?.checks.some(
+      (check) => check.id === 'source_novel' && check.status === 'pass'
+    ) === true
   const recommendedSteps = currentProject
-    ? buildRecommendedSteps(currentProject.id, config.entryStage)
+    ? buildRecommendedSteps(currentProject.id, config.entryStage).filter(
+        (step) =>
+          config.entryStage !== 'novel' ||
+          sourceReady ||
+          !step.path.includes('/story')
+      )
     : []
   const nextPath = !currentProject
     ? '/'
     : config.entryStage === 'novel'
-      ? `/project/${currentProject.id}/story`
+      ? `/project/${currentProject.id}/${sourceReady ? 'story' : 'source'}`
       : config.entryStage === 'story'
         ? `/project/${currentProject.id}/story?ep=1`
         : `/project/${currentProject.id}/script?ep=1`

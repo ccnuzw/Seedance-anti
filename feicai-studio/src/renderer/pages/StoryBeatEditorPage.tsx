@@ -16,9 +16,14 @@ import { useReviewFeedbackStore } from '@renderer/stores/reviewFeedbackStore'
 import DocumentWorkflowPage from '@renderer/components/editor/DocumentWorkflowPage'
 import ReviewFeedbackPanel from '@renderer/components/review/ReviewFeedbackPanel'
 import { executeStoryReviewAction } from '@renderer/utils/editor-workflow-actions'
-import { novelDraftState } from '@renderer/utils/novel-draft-state'
+import {
+  novelDraftState,
+  novelReadyEpisode,
+  novelNextAction
+} from '@renderer/utils/novel-draft-state'
 import { normalizeProjectConfig } from '@shared/project-config'
 import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
+import type { Episode } from '@shared/types'
 import type { PlotBreakdownSummary } from '@shared/ipc-contracts'
 import { useShallow } from 'zustand/react/shallow'
 import './ScriptEditorPage.css'
@@ -55,6 +60,7 @@ export default function StoryBeatEditorPage() {
     key: string
     summary: PlotBreakdownSummary | null
     model: boolean
+    episodes: Episode[] | null
     passed: boolean
     error?: string
   } | null>(null)
@@ -81,13 +87,17 @@ export default function StoryBeatEditorPage() {
         ? window.feicaiAPI.getPlotBreakdownSummary(currentProject.id)
         : Promise.resolve(null),
       window.feicaiAPI.listLLMConfigs(),
-      window.feicaiAPI.getProjectPipelineState(currentProject.projectPath)
+      window.feicaiAPI.getProjectPipelineState(currentProject.projectPath),
+      window.feicaiAPI.listProjectEpisodes(currentProject.id)
     ])
-      .then(([summary, models, pipeline]) => {
+      .then(([summary, models, pipeline, loadedEpisodes]) => {
         if (!cancelled)
           setContext({
             key,
             summary,
+            episodes: loadedEpisodes.filter(
+              (ep) => ep.projectId === currentProject.id
+            ),
             model: models.some((m) => !m.category || m.category === 'llm'),
             passed:
               pipeline?.episodes[currentEp]?.stageStates?.story_review
@@ -99,6 +109,7 @@ export default function StoryBeatEditorPage() {
           setContext({
             key,
             summary: null,
+            episodes: null,
             model: false,
             passed: false,
             error: `读取工作流失败：${String(error)}`
@@ -150,7 +161,17 @@ export default function StoryBeatEditorPage() {
   const passed = !!ctx?.passed && edited !== key && saved && !doc.conflict
   const busy = running || pipelineBusy || loading || !ctx || doc.saving
   const error = failure?.key === key ? failure.message : doc.error || ctx?.error
-  const scriptEp = ctx?.summary?.readyEpisodeNumbers[0]
+  const scriptEp = novelReadyEpisode(
+    ctx?.summary ?? null,
+    ctx?.episodes ?? null,
+    currentProject?.id ?? ''
+  )
+  const nextAction = novelNextAction(
+    state.batch,
+    passed,
+    ctx?.summary ?? null,
+    scriptEp
+  )
   const canScript = novel ? !!scriptEp : passed
   const review = !passed && latestReview?.passed ? null : latestReview
 
@@ -185,6 +206,10 @@ export default function StoryBeatEditorPage() {
             const result = await runStoryGeneration({
               projectPath: currentProject.projectPath,
               episodeNum: currentEp,
+              batchNumber:
+                mode === 'revise'
+                  ? (state.batch ?? undefined)
+                  : ctx?.summary?.nextBatchNumber,
               projectName: currentProject.name,
               visualStyle: currentProject.visualStyle,
               targetMedium: currentProject.targetMedium,
@@ -250,32 +275,32 @@ export default function StoryBeatEditorPage() {
     }
   }
   const primaryLabel =
-    error && (!ctx || ctx.error || doc.error)
+    doc.error || ctx?.error
       ? '重新读取草稿与状态'
       : !ctx
         ? '读取状态中…'
-        : canScript
-          ? '前往可制作剧本'
-          : !ctx.model
-            ? '配置文本模型'
-            : novel && !state.batch
-              ? '生成剧情草稿'
-              : passed
-                ? novel
-                  ? '重新读取可制作库存'
-                  : '前往剧本'
-                : '保存并审核草稿'
+        : novel && nextAction === 'complete'
+          ? '核对既有剧本'
+          : (!novel && passed) || (novel && nextAction === 'script')
+            ? '前往可制作剧本'
+            : !ctx.model
+              ? '配置文本模型'
+              : novel && nextAction === 'next'
+                ? '生成下一批剧情草稿'
+                : novel && nextAction === 'generate'
+                  ? '生成剧情草稿'
+                  : '保存并审核草稿'
   const primary = () => {
     if (doc.error || ctx?.error) {
       void reload()
       setRevision((v) => v + 1)
       return
     }
-    if (novel && passed && !canScript) {
-      setRevision((v) => v + 1)
+    if (novel && nextAction === 'complete') {
+      navigate(`/project/${currentProject?.id}`)
       return
     }
-    if (canScript || (!novel && passed)) {
+    if ((novel && nextAction === 'script') || (!novel && passed)) {
       navigate(
         `/project/${currentProject?.id}/script?ep=${scriptEp ?? currentEp}`
       )
@@ -285,7 +310,11 @@ export default function StoryBeatEditorPage() {
       navigate('/settings')
       return
     }
-    void act(novel && !state.batch ? 'generate' : 'review')
+    void act(
+      novel && (nextAction === 'generate' || nextAction === 'next')
+        ? 'generate'
+        : 'review'
+    )
   }
   return (
     <DocumentWorkflowPage
@@ -320,6 +349,11 @@ export default function StoryBeatEditorPage() {
       onSave={saveDocument}
       reviewPanel={
         <>
+          {novel && nextAction === 'complete' && (
+            <p>
+              当前章节拆解已完成，或库存已用于剧本。请核对既有剧本；已用剧情缺少剧本时请检查文件，不重复生成。
+            </p>
+          )}
           {error && <p role="alert">{error}</p>}
           {novel && content.trim() && !state.batch && (
             <p>

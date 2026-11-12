@@ -4,6 +4,10 @@ const state: any = {
   calls: [],
   batch: 7,
   ready: [],
+  used: [],
+  remaining: 12,
+  source: true,
+  episodes: [],
   model: true,
   status: 'pending',
   fail: false,
@@ -28,7 +32,9 @@ const record = (method: string, args: any[]) =>
     state.model ? [{ id: 'mock', category: 'llm' }] : [],
   getPlotBreakdownSummary: async () => ({
     nextBatchNumber: state.batch,
-    readyEpisodeNumbers: state.ready
+    readyEpisodeNumbers: state.ready,
+    usedEpisodeNumbers: state.used,
+    unprocessedChapterCount: state.remaining
   }),
   getProjectPipelineState: async () => ({
     episodes: {
@@ -38,14 +44,18 @@ const record = (method: string, args: any[]) =>
       }
     }
   }),
-  listProjectEpisodes: async () => [ep],
+  listProjectEpisodes: async () => {
+    if (state.episodeFail) throw new Error('合成集数读取失败')
+    return [ep, ...state.episodes]
+  },
   syncSingleEpisodeStatus: async () => ep,
   runStoryGeneration: async (args: any) => {
     record('generate', [args])
     if (state.defer) await state.defer
     if (state.fail) return { success: false, error: '合成零剧情点错误' }
     state.files[state.storyPath] =
-      '<!-- feicai-story-batch:7 -->\n【剧情1】测试'
+      `<!-- feicai-story-batch:${args.batchNumber} -->\n【剧情1】测试`
+    state.status = 'pending'
     return { success: true }
   },
   runStoryReview: async (args: any) => {
@@ -66,7 +76,11 @@ const record = (method: string, args: any[]) =>
     }
   },
   selectFile: async () => null,
-  inspectProjectDirectory: async () => ({}),
+  inspectProjectDirectory: async () => ({
+    integrity: {
+      checks: [{ id: 'source_novel', status: state.source ? 'pass' : 'fail' }]
+    }
+  }),
   repairProjectIssues: async () => ({ readyItems: [] }),
   listSourceChapters: async () => [],
   getSourceNovelSummary: async () => ({ exists: false })

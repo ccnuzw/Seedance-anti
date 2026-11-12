@@ -73,6 +73,8 @@ export default function SourceEditorPage() {
     content,
     setContent,
     saved,
+    loading,
+    diskContent,
     reload: loadSource,
     save,
     documentSession,
@@ -304,20 +306,25 @@ export default function SourceEditorPage() {
           }
         ],
         primaryAction: {
-          label: '保存原文',
-          onClick: handleSave,
-          disabled: saved,
+          label: !saved
+            ? '保存原文'
+            : sourceChapters.length > 0 ||
+                (diskContent?.trim() && diskContent !== emptySourceTemplate)
+              ? '前往准备剧情草稿'
+              : '导入小说原文',
+          onClick: !saved
+            ? handleSave
+            : sourceChapters.length > 0 ||
+                (diskContent?.trim() && diskContent !== emptySourceTemplate)
+              ? () => navigate(`/project/${currentProject?.id}/story`)
+              : handleImportMarkdown,
+          disabled: loading,
           variant: 'primary'
         },
         secondaryActions: [
           {
             label: '导入 Markdown',
             onClick: handleImportMarkdown
-          },
-          {
-            label: '前往生成剧情草稿',
-            onClick: () =>
-              currentProject && navigate(`/project/${currentProject.id}/story`)
           }
         ]
       }}

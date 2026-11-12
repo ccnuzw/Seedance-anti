@@ -80,7 +80,10 @@ async function remount() {
       button('生成剧情草稿') ||
       button('保存并审核草稿') ||
       button('前往可制作剧本') ||
-      button('配置文本模型')
+      button('配置文本模型') ||
+      button('生成下一批剧情草稿') ||
+      button('核对既有剧本') ||
+      button('重新读取草稿与状态')
   )
 }
 try {
@@ -119,8 +122,63 @@ try {
     document.body.innerText.includes('/script?ep=12'),
     'passed inventory routes to actual ready episode'
   )
+  // A real pending draft must win over inventory and remaining chapters.
+  f.ready = [12]
+  f.used = [12]
+  f.status = 'pending'
+  await remount()
+  assert(
+    !!button('保存并审核草稿'),
+    'pending draft is reviewed before next generation'
+  )
+  f.status = 'passed'
+  f.batch = 8
+  await remount()
+  await until(() => button('生成下一批剧情草稿'))
+  w.confirm = () => true
+  await click('生成下一批剧情草稿')
+  await until(() =>
+    document.querySelector('textarea')?.value.includes('feicai-story-batch:8')
+  )
+  assert(
+    f.calls.filter((c: any) => c.method === 'generate').at(-1).args[0]
+      .batchNumber === 8,
+    'consumed passed batch explicitly generates batch8 in same EP slot'
+  )
+  f.status = 'passed'
+  f.batch = 9
+  f.remaining = 0
+  await remount()
+  assert(
+    !!button('核对既有剧本') && document.body.innerText.includes('拆解已完成'),
+    'exhausted chapters show completion instead of refresh loop'
+  )
+  f.ready = [12, 13, 14, 15]
+  f.used = [12, 13]
+  f.episodes = [
+    { projectId: 'a', episodeNumber: 14, scriptPath: '/synthetic/script14.md' }
+  ]
+  await remount()
+  await click('前往可制作剧本')
+  assert(
+    document.body.innerText.includes('/script?ep=15'),
+    'mixed ready used and existing scripts selects only unused missing script'
+  )
+  f.episodeFail = true
+  await remount()
+  await until(() => button('重新读取草稿与状态'))
+  assert(
+    !button('前往可制作剧本'),
+    'episode read failure cannot claim missing scripts'
+  )
+  f.episodeFail = false
   f.status = 'stale'
   f.ready = []
+  f.used = []
+  f.remaining = 12
+  f.batch = 7
+  f.episodes = []
+  f.files[f.storyPath] = '<!-- feicai-story-batch:7 -->\n测试'
   await remount()
   assert(!!button('保存并审核草稿'), 'stale pass requires review')
   f.files[f.storyPath] = '手写内容'
@@ -184,9 +242,18 @@ try {
   )
   f.defer = null
   useProjectStore.setState({ currentProject: project })
+  f.files[
+    resolveEpisodeArtifactPath(
+      project.projectPath,
+      'storyBeat',
+      1,
+      project.config
+    )
+  ] = null
+  f.files['/synthetic/a/source/novel.md'] = '真实合成原文'
   navigate('/project/a/source')
-  await until(() => button('前往生成剧情草稿'))
-  await click('前往生成剧情草稿')
+  await until(() => button('前往准备剧情草稿'))
+  await click('前往准备剧情草稿')
   assert(
     document.body.innerText.includes('/story'),
     'source enters executable story page'
@@ -200,6 +267,42 @@ try {
   assert(
     document.body.innerText.includes('/story'),
     'health enters executable story page'
+  )
+  navigate('/project/a/source')
+  await until(() => button('前往准备剧情草稿'))
+  const sourceEditor = document.querySelector('textarea')!
+  Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )!.set!.call(sourceEditor, '未保存原文修改')
+  sourceEditor.dispatchEvent(new Event('input', { bubbles: true }))
+  await until(() => button('保存原文'))
+  assert(
+    !button('保存原文').disabled,
+    'source unsaved content prioritizes save'
+  )
+  await click('保存原文')
+  await until(() => button('前往准备剧情草稿'))
+  navigate('/empty')
+  await delay()
+  f.files['/synthetic/a/source/novel.md'] = null
+  navigate('/project/a/source')
+  await until(() => button('导入小说原文'))
+  assert(
+    !button('导入小说原文').disabled,
+    'missing source primary action imports instead of disabled save'
+  )
+  f.source = false
+  navigate('/project/a/health')
+  await until(() => document.body.innerText.includes('完善小说原文'))
+  assert(
+    !button('生成剧情草稿'),
+    'health missing source does not recommend generation'
+  )
+  await click('进入项目')
+  assert(
+    document.querySelector('output')?.textContent?.includes('/source'),
+    'health missing source routes to preparation'
   )
   navigate('/empty')
   await delay()
