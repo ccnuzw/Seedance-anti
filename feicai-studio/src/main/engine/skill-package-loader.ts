@@ -172,10 +172,13 @@ export class SkillPackageLoader {
         entrypoints: [
           {
             stage,
+            // Novel batches are generated; both novel batches and imported
+            // stories are reviewed. Script entry also uses script generation
+            // to revise an existing script (WorkflowEngine.generateStage).
             entries:
-              stage === 'story' || stage === 'story_review'
+              stage === 'story'
                 ? ['novel']
-                : stage === 'script'
+                : stage === 'story_review'
                   ? ['novel', 'story']
                   : ['novel', 'story', 'script'],
             promptRef: `${selection.skillName}/SKILL.md`

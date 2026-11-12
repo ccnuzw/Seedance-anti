@@ -14,8 +14,10 @@ import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import type {
   SkillPackageDefinition,
-  SkillPackageManifest
+  SkillPackageManifest,
+  SkillStage
 } from '@shared/skill-package'
+import type { ProjectEntryStage } from '@shared/types'
 import { PromptAssembler } from './prompt-assembler'
 import { SkillLoader } from './skill-loader'
 import {
@@ -325,6 +327,109 @@ describe('explicit project packages', () => {
 })
 
 describe('builtin compatibility packages', () => {
+  // Expected applicability from WorkflowEngine's generation/review gates. In
+  // particular, script generation also revises imported scripts; it is not
+  // limited to novel/story sources. No project inventory is needed to load the
+  // skills for a first novel batch. Review roles have separate contract stages.
+  const builtinEntryMatrix: Array<{
+    skillName: string
+    stage: SkillStage
+    entries: ProjectEntryStage[]
+  }> = [
+    {
+      skillName: 'feicai-producer-skill',
+      stage: 'producer',
+      entries: ['novel', 'story', 'script']
+    },
+    { skillName: 'story-breakdown-skill', stage: 'story', entries: ['novel'] },
+    {
+      skillName: 'story-breakdown-review-skill',
+      stage: 'story_review',
+      entries: ['novel', 'story']
+    },
+    {
+      skillName: 'script-generation-skill',
+      stage: 'script',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'script-review-skill',
+      stage: 'script_review',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'director-skill',
+      stage: 'director',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'script-analysis-review-skill',
+      stage: 'director_review',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'character-design-skill',
+      stage: 'character',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'art-design-skill',
+      stage: 'art',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'art-direction-review-skill',
+      stage: 'art_review',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'seedance-storyboard-skill',
+      stage: 'storyboard',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'seedance-prompt-review-skill',
+      stage: 'storyboard_review',
+      entries: ['novel', 'story', 'script']
+    },
+    {
+      skillName: 'compliance-review-skill',
+      stage: 'compliance_review',
+      entries: ['novel', 'story', 'script']
+    }
+  ]
+  it.each(
+    builtinEntryMatrix.flatMap(({ skillName, stage, entries }) =>
+      (['novel', 'story', 'script'] as const).map((entry) => ({
+        skillName,
+        stage,
+        entry,
+        applicable: entries.includes(entry)
+      }))
+    )
+  )(
+    '$skillName / $stage / $entry applies=$applicable',
+    async ({ skillName, stage, entry, applicable }) => {
+      const loading = new SkillPackageLoader(builtinRoot).load(skillName, {
+        stage,
+        entry
+      })
+      if (applicable) {
+        await expect(loading).resolves.toMatchObject({
+          manifest: {
+            skillId: skillName,
+            entrypoints: [{ stage, entries: expect.arrayContaining([entry]) }]
+          },
+          source: { kind: 'builtin' }
+        })
+      } else {
+        await expect(loading).rejects.toThrow(
+          `Skill is not applicable to stage/entry: ${stage}/${entry}`
+        )
+      }
+    }
+  )
+
   it('maps every real builtin and preserves legacy prompt/template output', async () => {
     const legacyLoader = new SkillLoader(builtinRoot)
     const loader = new SkillPackageLoader(builtinRoot)
