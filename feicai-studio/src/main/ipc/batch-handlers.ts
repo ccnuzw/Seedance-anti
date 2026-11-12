@@ -29,6 +29,13 @@ export function validateBatchStartParams(value: unknown): BatchStartParams {
   }
 }
 
+export function validateBatchTarget(value: unknown): string | undefined {
+  if (value === undefined) return undefined // Existing capacity-one callers.
+  if (typeof value !== 'string' || !value.trim() || value.length > 256)
+    throw new Error('无效队列标识')
+  return value
+}
+
 export function registerBatchHandlers(): void {
   registerSafeIpcHandler(BATCH_IPC.START, (_event, params) =>
     getBatchQueueRuntime().start(validateBatchStartParams(params))
@@ -38,9 +45,13 @@ export function registerBatchHandlers(): void {
     await queue.initialize()
     return queue.snapshot()
   })
-  registerSafeIpcHandler(BATCH_IPC.PAUSE, () => getBatchQueueRuntime().pause())
-  registerSafeIpcHandler(BATCH_IPC.RESUME, () =>
-    getBatchQueueRuntime().resume()
+  registerSafeIpcHandler(BATCH_IPC.PAUSE, (_event, queueId) =>
+    getBatchQueueRuntime().pause(validateBatchTarget(queueId))
   )
-  registerSafeIpcHandler(BATCH_IPC.STOP, () => getBatchQueueRuntime().stop())
+  registerSafeIpcHandler(BATCH_IPC.RESUME, (_event, queueId) =>
+    getBatchQueueRuntime().resume(validateBatchTarget(queueId))
+  )
+  registerSafeIpcHandler(BATCH_IPC.STOP, (_event, queueId) =>
+    getBatchQueueRuntime().stop(validateBatchTarget(queueId))
+  )
 }

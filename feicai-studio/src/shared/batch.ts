@@ -498,8 +498,8 @@ export interface BatchQueueState {
 export interface BatchAPI {
   startBatch(params: BatchStartParams): Promise<BatchQueueState>
   getBatchState(): Promise<BatchQueueState | null>
-  pauseBatch(): Promise<BatchQueueState | null>
-  resumeBatch(): Promise<BatchQueueState | null>
-  stopBatch(): Promise<BatchQueueState | null>
+  pauseBatch(queueId?: string): Promise<BatchQueueState | null>
+  resumeBatch(queueId?: string): Promise<BatchQueueState | null>
+  stopBatch(queueId?: string): Promise<BatchQueueState | null>
   onBatchState(callback: (state: BatchQueueState) => void): () => void
 }

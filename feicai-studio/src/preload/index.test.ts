@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { BATCH_IPC } from '@shared/batch'
 import { IPC } from '@shared/ipc-channels'
 import type { FeicaiAPI } from '@shared/ipc-contracts'
 
@@ -69,6 +70,19 @@ describe('pipeline identity preload adapter', async () => {
       action: 'pause',
       target
     })
+  })
+
+  it('forwards batch queue targets and preserves legacy no-argument calls', async () => {
+    for (const [method, channel] of [
+      [api.pauseBatch, BATCH_IPC.PAUSE],
+      [api.resumeBatch, BATCH_IPC.RESUME],
+      [api.stopBatch, BATCH_IPC.STOP]
+    ] as const) {
+      await method('queue-a')
+      expect(mocks.invoke).toHaveBeenLastCalledWith(channel, 'queue-a')
+      await method()
+      expect(mocks.invoke).toHaveBeenLastCalledWith(channel)
+    }
   })
 
   it('removes the exact task event listener when unsubscribed', () => {

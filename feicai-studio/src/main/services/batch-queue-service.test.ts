@@ -82,6 +82,31 @@ afterEach(async () => {
 })
 
 describe('durable main-owned batch queue', () => {
+  it('rejects stale/unknown/settled directed controls and retains legacy callers', async () => {
+    const { queue, deps, completed } = fixture()
+    await expect(queue.pause('missing')).rejects.toThrow('目标已失效')
+    await expect(queue.resume('missing')).rejects.toThrow('目标已失效')
+    await expect(queue.stop('missing')).rejects.toThrow('目标已失效')
+    expect(await queue.pause()).toBeNull()
+    expect(await queue.stop()).toBeNull()
+    const wait = Promise.withResolvers<WorkflowActionResult>()
+    vi.mocked(deps.workflow).mockReturnValueOnce(wait.promise)
+    const state = await queue.start(params)
+    await expect(queue.pause('other')).rejects.toThrow('目标已失效')
+    expect((await queue.pause(state.id))?.status).toBe('paused')
+    expect((await queue.resume(state.id))?.status).toBe('running')
+    await queue.pause() // Existing capacity-one renderer calls remain valid.
+    await queue.resume()
+    const stopping = queue.stop(state.id)
+    expect(queue.snapshot()?.status).toBe('stopping')
+    wait.resolve({ success: true })
+    await stopping
+    await completed.promise
+    await expect(queue.pause(state.id)).rejects.toThrow('目标已失效')
+    await expect(queue.resume(state.id)).rejects.toThrow('目标已失效')
+    await expect(queue.stop(state.id)).rejects.toThrow('目标已失效')
+  })
+
   it('commits each substep and cursor and runs without a renderer connection', async () => {
     const { queue, deps, completed } = fixture()
     await queue.start(params)
