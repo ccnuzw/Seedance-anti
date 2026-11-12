@@ -31,7 +31,8 @@ const runtime = vi.hoisted(() => {
     handlers: new Map<string, (...args: unknown[]) => unknown>(),
     saveDialog: vi.fn(),
     generate: vi.fn(),
-    stream: vi.fn()
+    stream: vi.fn(),
+    worker: vi.fn()
   }
 })
 vi.mock('electron', () => ({
@@ -60,11 +61,58 @@ vi.mock('better-sqlite3', async () => {
       pragma(sql: string) {
         return this.prepare(`PRAGMA ${sql}`).all()
       }
+      transaction<T>(callback: () => T) {
+        return () => {
+          this.exec('BEGIN')
+          try {
+            const result = callback()
+            this.exec('COMMIT')
+            return result
+          } catch (error) {
+            this.exec('ROLLBACK')
+            throw error
+          }
+        }
+      }
     }
   }
 })
 // The bundled worker URL is not executed by this service/IPC regression.
 vi.mock('../workers/project-sync-worker?modulePath', () => ({ default: '' }))
+vi.mock('../db/episode-sync-worker', async () => ({
+  invalidateProjectScanCache: vi.fn(),
+  runProjectSyncWorker: async (data: {
+    mode: string
+    projectPath: string
+    config: ProjectConfig
+    episodeNumber: number
+    totalEpisodes: number
+  }) => {
+    const { scanEpisodeFilesystem, scanProjectFilesystem } =
+      await import('../project-sync/scan')
+    const hasSourceNovel = existsSync(
+      resolveProjectArtifactPath(data.projectPath, 'sourceNovel', data.config)
+    )
+    const result =
+      data.mode === 'episode'
+        ? {
+            hasSourceNovel,
+            episode: scanEpisodeFilesystem(
+              data.projectPath,
+              data.config,
+              data.episodeNumber,
+              hasSourceNovel
+            )
+          }
+        : scanProjectFilesystem(
+            data.projectPath,
+            data.config,
+            data.totalEpisodes
+          )
+    await runtime.worker(data)
+    return result
+  }
+}))
 vi.mock('../db/llm-config-repository', () => ({
   getDefaultLLMConfig: () => ({ model: 'controlled-no-network' })
 }))
@@ -99,6 +147,15 @@ import {
 } from '../security/access-control'
 import { setTrustedIpcRendererUrl } from '../security/safe-ipc'
 import { flushPendingWrites } from '../io/atomic-file'
+import {
+  ProductionCommitStore,
+  commitHash
+} from '../io/production-commit-store'
+import {
+  syncFreshProductionEpisodes,
+  syncSingleEpisodeStatus
+} from '../db/episode-sync-repository'
+import { recoverProductionCommits } from './production-commit-service'
 
 let root: string
 function put(path: string, text: string): void {
@@ -124,6 +181,7 @@ beforeEach(() => {
   runtime.handlers.clear()
   runtime.generate.mockReset()
   runtime.stream.mockReset()
+  runtime.worker.mockReset()
   runtime.saveDialog.mockReset()
   registerExportHandlers()
   registerAssetHandlers()
@@ -139,6 +197,109 @@ afterEach(async () => {
 })
 
 describe('registered project → workflow service → automatic pipeline → asset/export IPC', () => {
+  it('drains an older scan, projects to disk SQLite, and recovers after projection before its receipt under the same lease', async () => {
+    const config: ProjectConfig = {
+      projectName: '恢复',
+      entryStage: 'script',
+      totalEpisodes: 1,
+      chaptersPerEpisode: 1,
+      visualStyle: '写实',
+      targetMedium: '短剧',
+      createdAt: '2026-01-01',
+      directories: { outputsDir: 'custom-output' }
+    }
+    const db = initDatabase()
+    insertProjectRecord(db, {
+      id: 'recovery',
+      name: config.projectName,
+      projectPath: root,
+      visualStyle: config.visualStyle,
+      targetMedium: config.targetMedium,
+      totalEpisodes: 1,
+      configJson: JSON.stringify(config),
+      createdAt: config.createdAt,
+      updatedAt: config.createdAt
+    })
+    const entered = Promise.withResolvers<void>()
+    const resume = Promise.withResolvers<void>()
+    runtime.worker.mockImplementationOnce(async () => {
+      entered.resolve()
+      await resume.promise
+    })
+    const oldScan = syncSingleEpisodeStatus('recovery', root, 1)
+    await entered.promise
+    const store = new ProductionCommitStore(root, config, (point) => {
+      if (point === 'projection') throw new Error('receipt crash')
+    })
+    const intent = await store.intent(
+      'disk-operation',
+      'script:1',
+      commitHash(script),
+      [1]
+    )
+    const record = await store.prepare(intent, [
+      {
+        path: resolveEpisodeArtifactPath(root, 'script', 1, config),
+        expected: null,
+        content: script
+      }
+    ])
+    const lease = acquireExecutionLease('test-production')
+    try {
+      let finished = false
+      const recovering = store
+        .recover((episodes) => {
+          expect(getExecutionLease()).toBe(lease)
+          return syncFreshProductionEpisodes('recovery', root, episodes)
+        })
+        .finally(() => {
+          finished = true
+        })
+      await vi.waitFor(() =>
+        expect(store.get(record.operationId, record.key)?.phase).toBe(
+          'committed'
+        )
+      )
+      expect(finished).toBe(false)
+      expect(runtime.worker).toHaveBeenCalledTimes(1)
+      await expect(recoverProductionCommits(root, config)).rejects.toThrow()
+      resume.resolve()
+      await oldScan
+      await expect(recovering).rejects.toThrow('receipt crash')
+      const row = db
+        .prepare('SELECT id, has_script FROM episodes WHERE project_id = ?')
+        .get('recovery') as { id: string; has_script: number }
+      expect(row.has_script).toBe(1)
+      expect(store.get(record.operationId, record.key)?.projected).toBe(false)
+      const databases = db.prepare('PRAGMA database_list').all() as {
+        file: string
+      }[]
+      expect(readFileSync(databases[0].file).subarray(0, 16).toString()).toBe(
+        'SQLite format 3\u0000'
+      )
+      closeDatabase()
+      initDatabase()
+      await recoverProductionCommits(root, config, lease, 'recovery')
+      await recoverProductionCommits(root, config, lease, 'recovery')
+      expect(
+        new ProductionCommitStore(root, config).get(
+          record.operationId,
+          record.key
+        )?.projected
+      ).toBe(true)
+      expect(
+        initDatabase()
+          .prepare('SELECT id, has_script FROM episodes WHERE project_id = ?')
+          .get('recovery')
+      ).toEqual(row)
+      expect(runtime.generate).not.toHaveBeenCalled()
+      expect(runtime.stream).not.toHaveBeenCalled()
+    } finally {
+      resume.resolve()
+      releaseExecutionLease(lease)
+    }
+  })
+
   it.each(['novel', 'story', 'script'] as const)(
     '%s completes under the shared lease, exports, and rejects changed visual inputs',
     async (entryStage) => {
@@ -245,7 +406,7 @@ describe('registered project → workflow service → automatic pipeline → ass
       const running = launchPipeline(
         pipeline,
         { ...params, startStage: 'director', singleStage: true },
-        { waitForCompletion: true }
+        { waitForCompletion: true, operationId: 'integration-pipeline' }
       )
       await Promise.race([
         entered.promise,
@@ -274,11 +435,26 @@ describe('registered project → workflow service → automatic pipeline → ass
         await launchPipeline(
           pipeline,
           { ...params, startStage: 'art' },
-          { waitForCompletion: true }
+          { waitForCompletion: true, operationId: 'integration-pipeline' }
         )
       ).toMatchObject({ success: true, state: 'episode_complete' })
       expect(getExecutionLease()).toBeNull()
       expect(outputs).toEqual([])
+      const pipelineCommits = new ProductionCommitStore(root, config)
+        .list()
+        .filter((record) =>
+          record.operationId.startsWith('integration-pipeline:review:')
+        )
+      expect(pipelineCommits.map((record) => record.key).sort()).toEqual([
+        'review:art:1',
+        'review:director:1',
+        'review:storyboard_review:1'
+      ])
+      expect(
+        pipelineCommits.every(
+          (record) => record.projected && record.phase === 'committed'
+        )
+      ).toBe(true)
       const state: ProjectPipelineState = JSON.parse(
         readFileSync(projectPath('pipelineState'), 'utf8')
       )

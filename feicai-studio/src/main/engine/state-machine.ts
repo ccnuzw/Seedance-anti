@@ -9,6 +9,7 @@
 //     → (PASS) episode_complete
 //
 
+import { ProductionCommitStore } from '../io/production-commit-store'
 import { ProjectStatePersistence } from './project-state'
 //   任何 reviewing 状态:
 //     → (FAIL) 回退到对应的 executing 状态（自动重试）
@@ -206,7 +207,12 @@ export class PipelineStateMachine extends EventEmitter {
     params: Parameters<PipelineStateMachine['start']>[0]
   ): Promise<void> {
     await this.checkpoint()
+    await new ProductionCommitStore(
+      params.projectPath,
+      params.projectConfig
+    ).recover()
     this.statePersistence = null
+    this.workflowEngine.setPublicationState(null)
     const prepared = await preparePipelineStart({
       params,
       llmConfigured: this.llmProvider !== null,
@@ -243,6 +249,10 @@ export class PipelineStateMachine extends EventEmitter {
       return
     }
 
+    this.workflowEngine.setPublicationState(
+      this.statePersistence,
+      this.operationId
+    )
     for (const stage of prepared.stageSequence) {
       await this.checkpoint()
       if (this.shouldStop()) break

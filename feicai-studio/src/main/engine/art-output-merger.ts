@@ -1,5 +1,4 @@
 import { readFileSync } from 'fs'
-import { readFile } from 'fs/promises'
 import type { ProjectConfig } from '@shared/types'
 import {
   resolveEpisodeArtifactPath,
@@ -10,7 +9,13 @@ import {
   serializeAssets,
   type ParsedAsset
 } from '../asset/markdown-parser'
-import { atomicWriteFile } from '../io/atomic-file'
+import { randomUUID } from 'crypto'
+import {
+  ProductionCommitStore,
+  commitHash,
+  readCommitText,
+  type CommitWrite
+} from '../io/production-commit-store'
 import {
   assertEpisodeNumber,
   assertPathWithinProject
@@ -135,9 +140,12 @@ export class ArtOutputMerger {
     projectPath: string,
     episodeNum: number,
     config?: Partial<ProjectConfig> | null,
-    beforeCommit?: () => Promise<void>
-  ): Promise<{ characters: number; scenes: number }> {
+    beforeCommit?: () => Promise<void>,
+    prepareOnly = false
+  ): Promise<{ characters: number; scenes: number; writes: CommitWrite[] }> {
     assertEpisodeNumber(episodeNum)
+    if (!prepareOnly)
+      await new ProductionCommitStore(projectPath, config).recover()
     const sections = this.validateOutput(output)
     const paths = {
       characters: assertPathWithinProject(
@@ -151,7 +159,8 @@ export class ArtOutputMerger {
     }
     const updates = await Promise.all(
       (['characters', 'scenes'] as const).map(async (kind) => {
-        const existing = await this.safeRead(paths[kind])
+        const expected = readCommitText(paths[kind])
+        const existing = expected ?? ''
         const firstAsset = existing.search(/^##\s+/m)
         const prefix =
           firstAsset >= 0
@@ -189,6 +198,7 @@ export class ArtOutputMerger {
         }
         return {
           path: paths[kind],
+          expected,
           content:
             [prefix, serializeAssets([...merged.values()])]
               .filter(Boolean)
@@ -206,20 +216,29 @@ export class ArtOutputMerger {
       }
     }
     await beforeCommit?.()
-    // Install conditional snapshots first. Until publication, the existing files
-    // still resolve to the same inputs; partial/cancelled publication is retryable.
-    await atomicWriteFile(
-      referencePath(projectPath, episodeNum, config),
-      JSON.stringify(snapshot)
-    )
-    for (const update of updates) {
-      await beforeCommit?.()
-      assertPathWithinProject(projectPath, update.path)
-      await atomicWriteFile(update.path, update.content)
+    const snapshotPath = referencePath(projectPath, episodeNum, config)
+    const writes: CommitWrite[] = [
+      {
+        path: snapshotPath,
+        content: JSON.stringify(snapshot),
+        expected: readCommitText(snapshotPath)
+      },
+      ...updates
+    ]
+    if (!prepareOnly) {
+      const store = new ProductionCommitStore(projectPath, config)
+      const intent = await store.intent(
+        randomUUID(),
+        `art:${episodeNum}`,
+        commitHash(output),
+        [episodeNum]
+      )
+      await store.install(await store.prepare(intent, writes))
     }
     return {
       characters: sections.characters.length,
-      scenes: sections.scenes.length
+      scenes: sections.scenes.length,
+      writes
     }
   }
 
@@ -245,14 +264,5 @@ export class ArtOutputMerger {
 
   private static withOwners(content: string, owners: Set<number>): string {
     return `${content.replace(OWNER_PATTERN, '').trim()}\n\n<!-- feicai-art-episodes:${[...owners].sort((a, b) => a - b).join(',')} -->`
-  }
-
-  private static async safeRead(path: string): Promise<string> {
-    try {
-      return await readFile(path, 'utf-8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
-      throw error
-    }
   }
 }

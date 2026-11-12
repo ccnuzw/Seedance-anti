@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs'
 import { atomicWriteFileSync } from '../io/atomic-file'
+import { assertNoPreparedProductionWrites } from '../io/production-commit-store'
 import {
   assertEpisodeNumber,
   assertPathWithinProject
@@ -73,6 +74,7 @@ export function ensurePlotBreakdownFile(params: {
   projectPath: string
   config: ProjectConfig
 }): string {
+  assertNoPreparedProductionWrites(params.projectPath, params.config)
   const filePath = getPlotBreakdownPath(params)
   if (!existsSync(filePath)) {
     atomicWriteFileSync(
@@ -92,8 +94,15 @@ export function readPlotBreakdown(params: {
   projectPath: string
   config: ProjectConfig
 }): { path: string; raw: string; document: PlotBreakdownDocument } {
-  const filePath = ensurePlotBreakdownFile(params)
-  const raw = readFileSync(filePath, 'utf-8')
+  const filePath = getPlotBreakdownPath(params)
+  const raw = existsSync(filePath)
+    ? readFileSync(filePath, 'utf-8')
+    : buildDefaultPlotBreakdownTemplate({
+        projectName: params.config.projectName,
+        projectType: params.config.targetMedium || '待确定',
+        totalEpisodes: params.config.totalEpisodes,
+        chaptersPerEpisode: params.config.chaptersPerEpisode || 0
+      })
   return {
     path: filePath,
     raw,
@@ -106,6 +115,7 @@ export function writePlotBreakdown(params: {
   config: ProjectConfig
   document: PlotBreakdownDocument
 }): string {
+  assertNoPreparedProductionWrites(params.projectPath, params.config)
   const filePath = getPlotBreakdownPath(params)
   atomicWriteFileSync(filePath, serializePlotBreakdownMarkdown(params.document))
   return filePath
@@ -313,14 +323,21 @@ export function appendGeneratedStoryToProjectPlotBreakdown(params: {
   generatedContent: string
   batchNumber: number
   chaptersPerBatch?: number
-}): AppendPlotBreakdownBatchResult {
+  prepareOnly?: boolean
+}): AppendPlotBreakdownBatchResult & {
+  content: string
+  expected: string | null
+} {
+  if (!params.prepareOnly)
+    assertNoPreparedProductionWrites(params.projectPath, params.config)
   assertEpisodeNumber(params.batchNumber)
   const entries = validateGeneratedPlotBreakdown(
     params.generatedContent,
     params.config.totalEpisodes
   )
-  const filePath = ensurePlotBreakdownFile(params)
-  const doc = parsePlotBreakdownMarkdown(readFileSync(filePath, 'utf-8'))
+  const { path: filePath, raw } = readPlotBreakdown(params)
+  const expected = existsSync(filePath) ? raw : null
+  const doc = parsePlotBreakdownMarkdown(raw)
   const chaptersPerBatch = params.chaptersPerBatch ?? 6
   if (!Number.isSafeInteger(chaptersPerBatch) || chaptersPerBatch <= 0)
     throw new Error('每批章节数无效')
@@ -367,14 +384,17 @@ export function appendGeneratedStoryToProjectPlotBreakdown(params: {
     )
   // Re-reviewing the same batch must not rewrite the inventory (including its
   // human planning notes); preserve stable identities and consumption status.
-  if (stableBatches(doc) !== stableBatches(result.document))
-    atomicWriteFileSync(
-      filePath,
-      serializePlotBreakdownMarkdown(result.document)
-    )
+  const content =
+    stableBatches(doc) !== stableBatches(result.document)
+      ? serializePlotBreakdownMarkdown(result.document)
+      : raw
+  if (!params.prepareOnly && content !== expected)
+    atomicWriteFileSync(filePath, content)
 
   return {
     path: filePath,
+    content,
+    expected,
     appendedEntries: result.appendedEntries
   }
 }
@@ -385,13 +405,18 @@ export function markProjectPlotBreakdownEpisodeStatus(params: {
   episodeNum: number
   fromStatus?: PlotBreakdownEntryStatus
   toStatus: PlotBreakdownEntryStatus
+  prepareOnly?: boolean
 }): {
   path: string
+  content: string
+  expected: string | null
   updatedEntries: number
 } {
+  if (!params.prepareOnly)
+    assertNoPreparedProductionWrites(params.projectPath, params.config)
   assertEpisodeNumber(params.episodeNum)
-  const filePath = ensurePlotBreakdownFile(params)
-  const raw = readFileSync(filePath, 'utf-8')
+  const { path: filePath, raw } = readPlotBreakdown(params)
+  const expected = existsSync(filePath) ? raw : null
   const doc = parsePlotBreakdownMarkdown(raw)
   let updatedEntries = 0
 
@@ -405,12 +430,15 @@ export function markProjectPlotBreakdownEpisodeStatus(params: {
     }
   }
 
-  if (updatedEntries > 0) {
-    atomicWriteFileSync(filePath, serializePlotBreakdownMarkdown(doc))
+  const content = updatedEntries > 0 ? serializePlotBreakdownMarkdown(doc) : raw
+  if (!params.prepareOnly && content !== expected) {
+    atomicWriteFileSync(filePath, content)
   }
 
   return {
     path: filePath,
+    content,
+    expected,
     updatedEntries
   }
 }
@@ -421,6 +449,7 @@ export function updateProjectPlotBreakdownEntryStatus(params: {
   entryIndex: number
   status: PlotBreakdownEntryStatus
 }): { path: string; updated: boolean } {
+  assertNoPreparedProductionWrites(params.projectPath, params.config)
   const filePath = ensurePlotBreakdownFile(params)
   const raw = readFileSync(filePath, 'utf-8')
   const result = updatePlotBreakdownEntryStatus(

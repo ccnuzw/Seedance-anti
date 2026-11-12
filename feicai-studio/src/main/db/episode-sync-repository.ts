@@ -12,7 +12,10 @@ import {
   insertEpisodeSnapshot,
   isEpisodeSnapshotChanged
 } from './episode-sync-helpers'
-import { runProjectSyncWorker } from './episode-sync-worker'
+import {
+  invalidateProjectScanCache,
+  runProjectSyncWorker
+} from './episode-sync-worker'
 import { assertEpisodeNumber } from '../security/access-control'
 
 const projectSyncs = new Map<
@@ -20,6 +23,35 @@ const projectSyncs = new Map<
   { totalEpisodes: number; promise: Promise<ProjectScanResult> }
 >()
 const episodeSyncs = new Map<string, Promise<Episode | null>>()
+const statusSyncs = new Map<string, Set<Promise<Episode[]>>>()
+
+/** Wait for every pre-commit writer, then scan again. Never delete maps to
+ * 'cancel' a worker: it would still be capable of overwriting the new rows. */
+export async function syncFreshProductionEpisodes(
+  projectId: string,
+  projectPath: string,
+  episodeNumbers: number[]
+): Promise<void> {
+  const projectKey = JSON.stringify([projectId, projectPath])
+  for (;;) {
+    const pending: Promise<unknown>[] = [
+      ...(statusSyncs.get(projectKey) ?? []),
+      ...[...episodeSyncs.entries()]
+        .filter(([key]) => {
+          const [id, path] = JSON.parse(key) as string[]
+          return id === projectId && path === projectPath
+        })
+        .map(([, promise]) => promise)
+    ]
+    const full = projectSyncs.get(projectKey)
+    if (full) pending.push(full.promise)
+    if (pending.length === 0) break
+    await Promise.allSettled(pending)
+  }
+  await invalidateProjectScanCache(projectPath)
+  for (const episode of new Set(episodeNumbers))
+    await syncSingleEpisodeStatus(projectId, projectPath, episode)
+}
 
 function getEpisodeRows(projectId: string): Record<string, unknown>[] {
   return getDatabase()
@@ -120,7 +152,25 @@ export function syncEpisodesFromFilesystem(
   return sync
 }
 
-export async function syncEpisodeStatus(
+export function syncEpisodeStatus(
+  projectId: string,
+  projectPath: string
+): Promise<Episode[]> {
+  const key = JSON.stringify([projectId, projectPath])
+  const sync = scanAndApplyEpisodeStatus(projectId, projectPath)
+  const active = statusSyncs.get(key) ?? new Set<Promise<Episode[]>>()
+  active.add(sync)
+  statusSyncs.set(key, active)
+  void sync
+    .finally(() => {
+      active.delete(sync)
+      if (!active.size) statusSyncs.delete(key)
+    })
+    .catch(() => {})
+  return sync
+}
+
+async function scanAndApplyEpisodeStatus(
   projectId: string,
   projectPath: string
 ): Promise<Episode[]> {
