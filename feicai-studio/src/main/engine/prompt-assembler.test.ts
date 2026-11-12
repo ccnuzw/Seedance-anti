@@ -170,7 +170,9 @@ describe('prompt-assembler', () => {
     expect(prompt.user).toContain('【剧情12】院子，主角救人')
     expect(prompt.user).toContain('新的剧情点编号必须连续递增')
     expect(prompt.user).toContain('不得从【剧情1】重新开始')
-    expect(prompt.user).toContain('只提取 7 分以上的核心冲突和情绪钩子')
+    expect(prompt.user).toContain(
+      '只提取原文有具体事件证据且达到 7 分的核心冲突和情绪钩子'
+    )
     expect(prompt.user).toContain(
       '不得改编超出项目信息中“小说处理上限”的章节内容'
     )
