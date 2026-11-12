@@ -310,6 +310,7 @@ export class WorkflowEngine {
     this.assertContext(ctx)
     const store = new ProductionCommitStore(ctx.projectPath, ctx.projectConfig)
     await this.checkpoint(ctx)
+    await recoverProjectSettingsAtBoundary(ctx.projectPath, ctx.projectConfig)
     await store.recover()
     await this.assertCurrentPrerequisites(stage, ctx)
     if (stage === 'story_review') {

@@ -163,6 +163,7 @@ import {
 } from '../db/episode-sync-repository'
 import {
   recoverProductionCommits,
+  recoverProjectCommits,
   recoverProjectSettingsCommits
 } from './production-commit-service'
 import { saveProjectSettings, projectSettingsRecord } from './project-service'
@@ -340,6 +341,18 @@ describe('registered project → workflow service → automatic pipeline → ass
         }
       }
 
+      const nameBeforeProductionRecovery = getProject(id)?.name
+      await recoverProjectCommits(
+        'production',
+        projectPath,
+        config,
+        undefined,
+        id
+      )
+      expect(getProject(id)?.name).toBe(nameBeforeProductionRecovery)
+      expect(
+        new ProductionCommitStore(projectPath, config).list('project-settings')
+      ).toHaveLength(1)
       await recoverProjectSettingsCommits(projectPath, config, undefined, id)
       await recoverProjectSettingsCommits(projectPath, config, undefined, id)
       expect(readFileSync(configPath, 'utf8')).toBe(nextConfigText)
