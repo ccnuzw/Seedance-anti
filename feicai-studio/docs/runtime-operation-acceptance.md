@@ -5,8 +5,10 @@
 复跑入口（仓库根）：
 
 ```bash
-python3 feicai-studio/scripts/runtime-operation-acceptance.py run_checks
+make -f feicai-studio/scripts/runtime-operation-acceptance.Makefile verify
 ```
+
+独立 Makefile 的 `verify` 与 `run_checks` 目标都通过 `/usr/bin/python3` 执行现有完整脚本，按 Makefile 自身位置定位脚本，不依赖当前工作目录或 PATH 中的 Python 别名。两个目标均执行全部 279 项服务回归、production build 和 18 组真实 IPC 检查，不筛选或省略检查。局部诊断仍可直接用 `/usr/bin/python3 feicai-studio/scripts/runtime-operation-acceptance.py run_checks 检查名`。
 
 脚本使用 `/Users/apple/Tools/node/node-v23.9.0-darwin-arm64/bin/node`（Node 23.9.0），自动发现现有 worktree 依赖，也可通过 `RUNTIME_SHARED_NODE_MODULES` 指定。运行该入口的 worktree 不应预先存在 node_modules；在独立 checkout 运行即可。脚本创建本地依赖链接，复制 better-sqlite3，串行执行所有检查后移除自建依赖目录并恢复两份 tsbuildinfo。没有安装、下载或重建 native 驱动，共享 native 文件 SHA-256 保持一致。检查入口支持在 `run_checks` 后指定检查名作局部诊断；省略时才执行完整验收。
 
@@ -38,6 +40,8 @@ python3 feicai-studio/scripts/runtime-operation-acceptance.py run_checks
 - `electron-ipc.log`、`ipc-settings.json`、`ipc-restart.json`：10 + 8 组真实 IPC 检查及运行时版本、构建哈希、网络尝试。预期的 busy/无效身份拒绝会由 Electron 打印 `Error occurred in handler`，测试逐项断言拒绝语义，不能据此将验收视为失败。
 - `ipc-fixtures.txt` 指向 `/private/tmp/feicai-runtime-ipc-b3qWFK/`，保留原生 SQLite、项目/journal、队列、两阶段 JSON 和原始日志，可供复核。
 
+Makefile 入口复验：实际执行上述 `make -f feicai-studio/scripts/runtime-operation-acceptance.Makefile verify`，完整 23 suites / 279 tests、10 + 8 组真实 IPC 及所有工程检查再次通过。新报告位于 `/tmp/feicai-runtime-acceptance-fuf1b8g0/`，`report.json` 为 `passed`、全部 10 个检查退出码为 0；`checks.json` 确认 tsbuildinfo 已恢复且共享 native 未变，自建 node_modules 已清理。真实 Electron 临时数据位于 `/private/tmp/feicai-runtime-ipc-rb8E2S/`，外层 make 日志为 `/tmp/feicai-runtime-operation-make-review.log`。两个 make 目标的展开命令相同，另从 `/tmp` 对绝对 Makefile 路径进行 dry-run，确认按入口自身位置定位；该路径检查不计作额外测试。
+
 本次真实 IPC 使用的构建 SHA-256：
 
 | 产物                    | SHA-256                                                            |
@@ -48,4 +52,4 @@ python3 feicai-studio/scripts/runtime-operation-acceptance.py run_checks
 
 故障证据也保留：`/tmp/feicai-runtime-acceptance-50efrujy/build.log` 是修复前 worker 构建循环；`/tmp/feicai-runtime-acceptance-4eg47vdv/electron-ipc.log` 和 `/private/tmp/feicai-runtime-ipc-MN5Ipn/project/story/plot-breakdown.md` 包含真实 IPC 保存后新旧规划字段并存的文本。该次检查也包含验收脚本最初使用错误字段名称的断言失败；重复规划缺陷随后由文件、解析逻辑及专门回归共同确认。最终成功结果以上述完整验收目录为准。
 
-未覆盖：真实模型/供应商/密钥/费用/生成质量、图片或视频生成、未完成付费任务的真实中途暂停/停止/恢复、设置崩溃窗口的原生 Electron 进程杀死恢复、完整 UI 点击及视觉验收、其他操作系统、安装、打包、签名及发布。设置恢复故障窗口是服务层注入；独立 workflow 忙碌是服务层受控 runner，均没有扩大为真实模型操作验收。本轮没有修改 renderer、preload、Makefile 或其他 worker 的脚本。
+未覆盖：真实模型/供应商/密钥/费用/生成质量、图片或视频生成、未完成付费任务的真实中途暂停/停止/恢复、设置崩溃窗口的原生 Electron 进程杀死恢复、完整 UI 点击及视觉验收、其他操作系统、安装、打包、签名及发布。设置恢复故障窗口是服务层注入；独立 workflow 忙碌是服务层受控 runner，均没有扩大为真实模型操作验收。本轮没有修改 renderer、preload、根 Makefile 或其他 worker 的脚本。
