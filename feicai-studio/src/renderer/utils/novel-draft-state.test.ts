@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   novelDraftState,
   novelReadyEpisode,
+  novelInventoryUnknown,
   novelNextAction
 } from './novel-draft-state'
 import type { PlotBreakdownSummary } from '@shared/ipc-contracts'
@@ -32,7 +33,8 @@ describe('novel draft identity', () => {
         [
           { projectId: 'a', episodeNumber: 4, hasScript: true },
           { projectId: 'a', episodeNumber: 5, scriptPath: 'existing' },
-          { projectId: 'b', episodeNumber: 6, hasScript: true }
+          { projectId: 'b', episodeNumber: 6, hasScript: true },
+          { projectId: 'a', episodeNumber: 6, hasScript: false }
         ] as import('@shared/types').Episode[],
         'a'
       )
@@ -40,6 +42,52 @@ describe('novel draft identity', () => {
     expect(
       novelReadyEpisode({ ...summary, readyEpisodeNumbers: [3] }, [], 'a')
     ).toBeNull()
+  })
+  it.each([
+    ['empty', []],
+    ['foreign only', [{ projectId: 'b', episodeNumber: 12 }]],
+    ['missing target', [{ projectId: 'a', episodeNumber: 4 }]]
+  ])('keeps %s episode inventory unknown', (_, fixtures) => {
+    const summary = {
+      readyEpisodeNumbers: [12],
+      usedEpisodeNumbers: [],
+      nextBatchNumber: 8,
+      unprocessedChapterCount: 0
+    } as unknown as PlotBreakdownSummary
+    const episodes = fixtures as import('@shared/types').Episode[]
+    expect(novelReadyEpisode(summary, episodes, 'a')).toBeNull()
+    expect(novelInventoryUnknown(summary, episodes, 'a')).toBe(true)
+    expect(novelNextAction(7, true, summary, null, true)).toBe('refresh')
+    expect(
+      novelNextAction(
+        7,
+        true,
+        { ...summary, unprocessedChapterCount: 6 },
+        null,
+        true
+      )
+    ).toBe('refresh')
+    expect(novelNextAction(7, false, summary, null, true)).toBe('review')
+  })
+  it('selects another known ready episode while an inventory target remains unknown', () => {
+    const summary = {
+      readyEpisodeNumbers: [12, 13],
+      usedEpisodeNumbers: []
+    } as unknown as PlotBreakdownSummary
+    const episodes = [
+      { projectId: 'a', episodeNumber: 13, hasScript: false }
+    ] as import('@shared/types').Episode[]
+    const ready = novelReadyEpisode(summary, episodes, 'a')
+    expect(ready).toBe(13)
+    expect(
+      novelNextAction(
+        7,
+        true,
+        summary,
+        ready,
+        novelInventoryUnknown(summary, episodes, 'a')
+      )
+    ).toBe('script')
   })
   it('prioritizes pending review and offers explicit next batch or completion', () => {
     const summary = {

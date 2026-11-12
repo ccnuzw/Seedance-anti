@@ -7,7 +7,7 @@ const state: any = {
   used: [],
   remaining: 12,
   source: true,
-  episodes: [],
+  episodes: [{ projectId: 'a', episodeNumber: 12, hasScript: false }],
   model: true,
   status: 'pending',
   fail: false,
@@ -46,7 +46,7 @@ const record = (method: string, args: any[]) =>
   }),
   listProjectEpisodes: async () => {
     if (state.episodeFail) throw new Error('合成集数读取失败')
-    return [ep, ...state.episodes]
+    return state.episodeOverride ?? [ep, ...state.episodes]
   },
   syncSingleEpisodeStatus: async () => ep,
   runStoryGeneration: async (args: any) => {

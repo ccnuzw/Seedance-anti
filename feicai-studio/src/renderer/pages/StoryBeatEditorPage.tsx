@@ -19,6 +19,7 @@ import { executeStoryReviewAction } from '@renderer/utils/editor-workflow-action
 import {
   novelDraftState,
   novelReadyEpisode,
+  novelInventoryUnknown,
   novelNextAction
 } from '@renderer/utils/novel-draft-state'
 import { normalizeProjectConfig } from '@shared/project-config'
@@ -170,7 +171,12 @@ export default function StoryBeatEditorPage() {
     state.batch,
     passed,
     ctx?.summary ?? null,
-    scriptEp
+    scriptEp,
+    novelInventoryUnknown(
+      ctx?.summary ?? null,
+      ctx?.episodes ?? null,
+      currentProject?.id ?? ''
+    )
   )
   const canScript = novel ? !!scriptEp : passed
   const review = !passed && latestReview?.passed ? null : latestReview
@@ -279,20 +285,26 @@ export default function StoryBeatEditorPage() {
       ? '重新读取草稿与状态'
       : !ctx
         ? '读取状态中…'
-        : novel && nextAction === 'complete'
-          ? '核对既有剧本'
-          : (!novel && passed) || (novel && nextAction === 'script')
-            ? '前往可制作剧本'
-            : !ctx.model
-              ? '配置文本模型'
-              : novel && nextAction === 'next'
-                ? '生成下一批剧情草稿'
-                : novel && nextAction === 'generate'
-                  ? '生成剧情草稿'
-                  : '保存并审核草稿'
+        : novel && nextAction === 'refresh'
+          ? '刷新核对集数'
+          : novel && nextAction === 'complete'
+            ? '核对既有剧本'
+            : (!novel && passed) || (novel && nextAction === 'script')
+              ? '前往可制作剧本'
+              : !ctx.model
+                ? '配置文本模型'
+                : novel && nextAction === 'next'
+                  ? '生成下一批剧情草稿'
+                  : novel && nextAction === 'generate'
+                    ? '生成剧情草稿'
+                    : '保存并审核草稿'
   const primary = () => {
     if (doc.error || ctx?.error) {
       void reload()
+      setRevision((v) => v + 1)
+      return
+    }
+    if (novel && nextAction === 'refresh') {
       setRevision((v) => v + 1)
       return
     }
@@ -349,6 +361,11 @@ export default function StoryBeatEditorPage() {
       onSave={saveDocument}
       reviewPanel={
         <>
+          {novel && nextAction === 'refresh' && (
+            <p>
+              库存目标集的状态尚未确认，请刷新核对集数。确认前不会重复制作或生成下一批。
+            </p>
+          )}
           {novel && nextAction === 'complete' && (
             <p>
               当前章节拆解已完成，或库存已用于剧本。请核对既有剧本；已用剧情缺少剧本时请检查文件，不重复生成。

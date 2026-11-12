@@ -83,7 +83,8 @@ async function remount() {
       button('配置文本模型') ||
       button('生成下一批剧情草稿') ||
       button('核对既有剧本') ||
-      button('重新读取草稿与状态')
+      button('重新读取草稿与状态') ||
+      button('刷新核对集数')
   )
 }
 try {
@@ -156,7 +157,8 @@ try {
   f.ready = [12, 13, 14, 15]
   f.used = [12, 13]
   f.episodes = [
-    { projectId: 'a', episodeNumber: 14, scriptPath: '/synthetic/script14.md' }
+    { projectId: 'a', episodeNumber: 14, scriptPath: '/synthetic/script14.md' },
+    { projectId: 'a', episodeNumber: 15, hasScript: false }
   ]
   await remount()
   await click('前往可制作剧本')
@@ -164,6 +166,34 @@ try {
     document.body.innerText.includes('/script?ep=15'),
     'mixed ready used and existing scripts selects only unused missing script'
   )
+  f.ready = [12]
+  f.used = []
+  f.remaining = 6
+  for (const [name, fixture] of [
+    ['empty', []],
+    ['foreign only', [{ projectId: 'b', episodeNumber: 12 }]],
+    ['missing target', [{ projectId: 'a', episodeNumber: 4 }]]
+  ] as const) {
+    f.episodeOverride = fixture
+    await remount()
+    await until(() => button('刷新核对集数'))
+    assert(
+      !button('生成下一批剧情草稿') &&
+        !button('核对既有剧本') &&
+        !button('前往可制作剧本'),
+      `${name} inventory requires refresh without advancing`
+    )
+  }
+  f.episodeOverride = [{ projectId: 'a', episodeNumber: 13, hasScript: false }]
+  f.ready = [12, 13]
+  await remount()
+  await click('前往可制作剧本')
+  assert(
+    document.querySelector('output')?.textContent?.includes('/script?ep=13'),
+    'unknown target permits another explicitly known ready episode'
+  )
+  f.episodeOverride = null
+  f.ready = [15]
   f.episodeFail = true
   await remount()
   await until(() => button('重新读取草稿与状态'))
