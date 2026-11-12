@@ -270,7 +270,7 @@ export default function SourceEditorPage() {
         description:
           config.entryStage === 'script'
             ? '当前项目从剧本起步，原文可作为补充资料维护。'
-            : '这里只维护小说原文和章节资料；生成哪一集剧情请到剧情拆解页选择。',
+            : '这里只维护小说原文和章节资料；导入后前往剧情页，先生成剧情草稿，再检查并审核。',
         steps: [
           {
             id: 'source',
@@ -298,7 +298,7 @@ export default function SourceEditorPage() {
             description:
               config.entryStage === 'script'
                 ? '当前项目通常跳过此步'
-                : '在剧情页选择目标集数并生成剧情',
+                : '前往剧情页，先生成草稿，再审核',
             state: config.entryStage === 'script' ? 'blocked' : 'ready',
             stateLabel: config.entryStage === 'script' ? '可跳过' : '去剧情页'
           }
@@ -315,7 +315,7 @@ export default function SourceEditorPage() {
             onClick: handleImportMarkdown
           },
           {
-            label: '前往剧情',
+            label: '前往生成剧情草稿',
             onClick: () =>
               currentProject && navigate(`/project/${currentProject.id}/story`)
           }

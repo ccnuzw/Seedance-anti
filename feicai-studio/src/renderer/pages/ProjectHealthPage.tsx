@@ -53,12 +53,12 @@ function buildRecommendedSteps(
       {
         label: '完善小说原文',
         path: `/project/${projectId}/source`,
-        description: '先补齐 source/novel.md，再进入剧情拆解。'
+        description: '先补齐 source/novel.md，再生成剧情草稿。'
       },
       {
-        label: '进入剧情拆解',
+        label: '生成剧情草稿',
         path: `/project/${projectId}/story?ep=1`,
-        description: '原文和设定已经齐备时，直接开始 EP01 拆解。'
+        description: '原文和设定齐备后，先生成剧情草稿，检查后再审核。'
       }
     ]
   }
@@ -162,7 +162,7 @@ export default function ProjectHealthPage() {
   const nextPath = !currentProject
     ? '/'
     : config.entryStage === 'novel'
-      ? `/project/${currentProject.id}/source`
+      ? `/project/${currentProject.id}/story`
       : config.entryStage === 'story'
         ? `/project/${currentProject.id}/story?ep=1`
         : `/project/${currentProject.id}/script?ep=1`
