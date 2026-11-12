@@ -940,3 +940,128 @@
     grid-template-columns: 1fr;
   }
 }
+
+.production-matrix {
+  min-width: 0;
+  margin-bottom: var(--spacing-lg);
+}
+.production-heading,
+.production-toolbar,
+.production-pagination,
+.production-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+.production-matrix p {
+  margin: var(--spacing-sm) 0;
+  overflow-wrap: anywhere;
+}
+.production-explanation,
+.production-title,
+.production-cell span {
+  color: var(--color-text-secondary);
+}
+.production-task,
+.production-pending {
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.production-toolbar {
+  margin: var(--spacing-md) 0;
+}
+.production-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.production-table {
+  width: 100%;
+  min-width: 800px;
+  border-collapse: collapse;
+  text-align: left;
+}
+.production-table th,
+.production-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+.production-table td {
+  min-width: 130px;
+}
+.production-table td:last-child {
+  min-width: 100px;
+}
+.production-table th[scope='row'] {
+  min-width: 100px;
+  max-width: 160px;
+  overflow-wrap: anywhere;
+}
+.production-title,
+.production-table small,
+.production-cell span {
+  display: block;
+  font-size: 12px;
+  font-weight: normal;
+  margin-top: 5px;
+}
+.production-cell {
+  display: block;
+  width: 100%;
+  min-width: 110px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.production-cell:hover {
+  background: var(--color-bg-tertiary);
+}
+.production-cell--passed strong {
+  color: var(--color-success);
+}
+.production-cell:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.production-pagination {
+  justify-content: center;
+  margin-top: var(--spacing-md);
+}
+.production-matrix .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.project-page {
+  min-width: 0;
+  width: 100%;
+}
+.project-name {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .production-heading {
+    align-items: flex-start;
+  }
+  .production-task > span {
+    flex-basis: 100%;
+  }
+  .project-page .waterline-actions {
+    flex-wrap: wrap;
+  }
+  .project-page .chapter-scan-grid,
+  .project-page .waterline-detail-grid,
+  .project-page .plot-breakdown-stats {
+    grid-template-columns: 1fr;
+  }
+}

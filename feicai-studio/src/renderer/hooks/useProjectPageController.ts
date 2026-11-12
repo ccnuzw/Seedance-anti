@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   readTextFile,
@@ -7,7 +7,8 @@ import {
 } from '@renderer/services/file-io'
 import {
   detectProjectDirectory,
-  getPlotBreakdownSummary
+  getPlotBreakdownSummary,
+  getProjectPipelineState
 } from '@renderer/services/project-service'
 import { getExceptionMessage } from '@renderer/services/service-contracts'
 import {
@@ -16,7 +17,12 @@ import {
 } from '@renderer/services/file-cache'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useToastStore } from '@renderer/stores/toastStore'
-import type { ProjectConfig } from '@shared/types'
+import type {
+  Episode,
+  ProjectConfig,
+  ProjectPipelineState
+} from '@shared/types'
+import { buildProductionRows } from '@renderer/utils/project-production-view'
 import {
   pipelineSettingsDraft,
   validatePipelineSettingsDraft,
@@ -39,15 +45,12 @@ import {
 
 export function useProjectPageController() {
   const navigate = useNavigate()
-  const { currentProject, episodes, refreshProject, syncEpisodeStatus } =
-    useProjectStore(
-      useShallow((s) => ({
-        currentProject: s.currentProject,
-        episodes: s.episodes,
-        refreshProject: s.refreshProject,
-        syncEpisodeStatus: s.syncEpisodeStatus
-      }))
-    )
+  const { currentProject, episodes } = useProjectStore(
+    useShallow((s) => ({
+      currentProject: s.currentProject,
+      episodes: s.episodes
+    }))
+  )
   const { addToast } = useToastStore()
   const [importing, setImporting] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -69,31 +72,138 @@ export function useProjectPageController() {
     config: Partial<ProjectConfig> | null
     detected: DetectedProjectInfo
   } | null>(null)
-  const [plotBreakdownSummary, setPlotBreakdownSummary] =
-    useState<PlotBreakdownSummary | null>(null)
+  const [production, setProduction] = useState<{
+    projectId: string
+    episodes: Episode[]
+    pipeline: ProjectPipelineState | null
+    hasSource: boolean | null
+    waterline: PlotBreakdownSummary | null
+    loading: boolean
+    error: string | null
+    warning: string | null
+  } | null>(null)
+  const requestEpoch = useRef(0)
+  const projectId = currentProject?.id
+  const visibleProduction =
+    production?.projectId === projectId ? production : null
+  const plotBreakdownSummary = visibleProduction?.waterline || null
+
+  const loadProduction = useCallback(
+    async (notify = false) => {
+      if (!currentProject) return
+      const project = currentProject
+      const epoch = ++requestEpoch.current
+      setProduction((previous) => ({
+        projectId: project.id,
+        episodes: previous?.projectId === project.id ? previous.episodes : [],
+        pipeline: previous?.projectId === project.id ? previous.pipeline : null,
+        hasSource:
+          previous?.projectId === project.id ? previous.hasSource : null,
+        waterline:
+          previous?.projectId === project.id ? previous.waterline : null,
+        loading: true,
+        error: null,
+        warning: null
+      }))
+      const entry = normalizeProjectConfig(project.config).entryStage || 'novel'
+      const results = await Promise.allSettled([
+        useProjectStore
+          .getState()
+          .syncEpisodeStatus()
+          .then(() => useProjectStore.getState().episodes),
+        getProjectPipelineState(project.projectPath),
+        entry === 'novel'
+          ? getPlotBreakdownSummary(project.id)
+          : Promise.resolve(null),
+        entry === 'novel'
+          ? readTextFile(
+              resolveProjectArtifactPath(
+                project.projectPath,
+                'sourceNovel',
+                project.config
+              )
+            )
+          : Promise.resolve(null)
+      ])
+      if (
+        epoch !== requestEpoch.current ||
+        useProjectStore.getState().currentProject?.id !== project.id
+      )
+        return
+      const [episodeResult, pipelineResult, waterlineResult, sourceResult] =
+        results
+      const waterline =
+        waterlineResult.status === 'fulfilled' ? waterlineResult.value : null
+      const sourceKnown = sourceResult.status === 'fulfilled'
+      const hasSource =
+        entry !== 'novel'
+          ? null
+          : (sourceKnown && !!sourceResult.value?.trim()) ||
+              (waterline?.totalSourceChapters || 0) > 0
+            ? true
+            : sourceKnown && waterline
+              ? false
+              : null
+      const errors = results.flatMap((result, index) =>
+        result.status === 'rejected'
+          ? [
+              `${['分集状态', '导演 / 服化道审核快照', '剧情库存', '小说原文'][index]}读取失败：${getExceptionMessage(result.reason, '请刷新重试')}`
+            ]
+          : []
+      )
+      setProduction({
+        projectId: project.id,
+        episodes:
+          episodeResult.status === 'fulfilled' ? episodeResult.value : [],
+        pipeline:
+          pipelineResult.status === 'fulfilled' ? pipelineResult.value : null,
+        hasSource,
+        waterline,
+        loading: false,
+        error:
+          episodeResult.status === 'rejected'
+            ? '分集状态读取失败，请刷新重试。'
+            : null,
+        warning: errors.length ? `部分状态未知：${errors.join('；')}` : null
+      })
+      if (notify)
+        addToast(
+          errors.length ? 'error' : 'success',
+          errors.length ? '部分状态读取失败，请重试' : '项目状态已刷新'
+        )
+    },
+    [currentProject, addToast]
+  )
 
   useEffect(() => {
-    if (!currentProject) return
-    if (episodes.length > 0) return
-    void refreshProject()
-  }, [currentProject?.id, episodes.length, refreshProject])
-
-  const handleRefreshStatus = async () => {
-    if (!currentProject) return
-    await syncEpisodeStatus()
-    setPlotBreakdownSummary(await getPlotBreakdownSummary(currentProject.id))
-    addToast('success', '项目状态已刷新')
-  }
-
-  useEffect(() => {
-    if (!currentProject) {
-      setPlotBreakdownSummary(null)
-      return
+    void loadProduction()
+    return () => {
+      requestEpoch.current++
     }
-    void getPlotBreakdownSummary(currentProject.id)
-      .then(setPlotBreakdownSummary)
-      .catch(() => setPlotBreakdownSummary(null))
-  }, [currentProject?.id])
+  }, [loadProduction])
+
+  const handleRefreshStatus = () => loadProduction(true)
+  const productionRows = useMemo(
+    () =>
+      currentProject && visibleProduction && !visibleProduction.error
+        ? buildProductionRows({
+            project: currentProject,
+            episodes: visibleProduction.episodes,
+            pipeline: visibleProduction.pipeline,
+            hasSource: visibleProduction.hasSource,
+            readyEpisodeNumbers:
+              visibleProduction.waterline?.readyEpisodeNumbers ?? null,
+            usedEpisodeNumbers:
+              visibleProduction.waterline?.usedEpisodeNumbers ?? null
+          })
+        : [],
+    [currentProject, visibleProduction]
+  )
+
+  useEffect(() => {
+    setPsLoaded(false)
+    setShowSettings(false)
+  }, [projectId])
 
   useEffect(() => {
     if (!showSettings || !currentProject || psLoaded) return
@@ -105,6 +215,8 @@ export function useProjectPageController() {
       )
       try {
         const raw = await readTextFile(configPath)
+        if (useProjectStore.getState().currentProject?.id !== currentProject.id)
+          return
         const config = raw !== null ? JSON.parse(raw) : currentProject.config
         if (!config || typeof config !== 'object' || Array.isArray(config))
           throw new Error('项目配置必须为对象')
@@ -122,6 +234,8 @@ export function useProjectPageController() {
           )
         })
       } catch (error) {
+        if (useProjectStore.getState().currentProject?.id !== currentProject.id)
+          return
         const message = getExceptionMessage(error, '读取项目配置失败')
         setPs({ ...pipelineSettingsDraft(), configError: message })
         addToast('error', message)
@@ -200,9 +314,13 @@ export function useProjectPageController() {
             chaptersPerEpisode: config.chaptersPerEpisode as number
           }
         )
-        setPlotBreakdownSummary(
-          await getPlotBreakdownSummary(currentProject.id)
-        )
+        const summary = await getPlotBreakdownSummary(currentProject.id)
+        if (useProjectStore.getState().currentProject?.id === currentProject.id)
+          setProduction((previous) =>
+            previous?.projectId === currentProject.id
+              ? { ...previous, waterline: summary }
+              : previous
+          )
         addToast('success', '项目设置已保存')
       } catch (error) {
         addToast(
@@ -295,6 +413,10 @@ export function useProjectPageController() {
     setPsLoaded,
     psSaving,
     pendingImport,
+    productionRows,
+    productionLoading: !visibleProduction || visibleProduction.loading,
+    productionError: visibleProduction?.error || null,
+    productionWarning: visibleProduction?.warning || null,
     plotBreakdownSummary,
     setPendingImport,
     handleRefreshStatus,
