@@ -43,14 +43,15 @@ describe('project state atomic transactions', () => {
         .attempts
     ).toBe(2)
   })
-  it('recovers a damaged primary from the last valid backup and reports unrecoverable corruption', async () => {
+  it('reads a valid backup without repairing the damaged primary and reports unrecoverable corruption', async () => {
     const { state, path } = fixture()
     await state.markStageRunning(1, 'director')
     await state.markStageRunning(1, 'art')
     writeFileSync(path, '{bad')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect((await state.load()).episodes[1]?.stageStates.director).toBeTruthy()
-    expect(console.warn).toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
+    expect(readFileSync(path, 'utf8')).toBe('{bad')
     writeFileSync(path, '{bad')
     writeFileSync(`${path}.bak`, '{bad')
     await expect(state.load()).rejects.toThrow('损坏')

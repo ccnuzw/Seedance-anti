@@ -122,7 +122,12 @@ export function getBatchQueueRuntime(): BatchQueue {
             operationId
           }),
         onChange: (state) => forwardToRenderer(BATCH_IPC.STATE_CHANGED, state),
-        recover: recoverBatchCommit
+        recover: (action, params, operationId) => {
+          const lease = getExecutionLease()
+          if (!lease || lease.owner !== 'batch')
+            throw new Error('批队列恢复租约已失效')
+          return recoverBatchCommit(action, params, operationId, lease)
+        }
       }
     )
   return batchQueue

@@ -1,3 +1,11 @@
+import { randomUUID } from 'crypto'
+import {
+  ProductionCommitStore,
+  commitHash,
+  readCommitText,
+  type CommitWrite
+} from '../io/production-commit-store'
+import type { ProjectStatePersistence } from '../engine/project-state'
 import { readFile } from 'fs/promises'
 import { listSourceChapters } from '../project/novel-importer'
 import {
@@ -128,6 +136,19 @@ export class WorkflowEngine {
   private skillLoader: SkillLoader
   private promptAssembler: PromptAssembler
   private llmProvider: ILLMProvider | null = null
+  private publicationState?: {
+    persistence: ProjectStatePersistence
+    operationId?: string
+  }
+
+  setPublicationState(
+    persistence: ProjectStatePersistence | null,
+    operationId?: string
+  ): void {
+    this.publicationState = persistence
+      ? { persistence, operationId }
+      : undefined
+  }
 
   constructor(skillsDir: string) {
     this.skillLoader = new SkillLoader(skillsDir)
@@ -159,6 +180,10 @@ export class WorkflowEngine {
     if (!provider) throw new Error('请先配置 LLM Provider')
     this.assertContext(ctx)
     await this.checkpoint(ctx)
+    await new ProductionCommitStore(
+      ctx.projectPath,
+      ctx.projectConfig
+    ).recover()
     await this.assertCurrentPrerequisites(stage, ctx)
     const entry = getEntryRequirements(ctx.projectConfig?.entryStage)
     if (stage === 'story' && !entry.requiresNovel)
@@ -280,16 +305,94 @@ export class WorkflowEngine {
         : context.projectConfig
     }
     const provider = this.llmProvider
-    if (!provider) throw new Error('请先配置 LLM Provider')
     this.assertContext(ctx)
+    const store = new ProductionCommitStore(ctx.projectPath, ctx.projectConfig)
     await this.checkpoint(ctx)
+    await store.recover()
     await this.assertCurrentPrerequisites(stage, ctx)
+    if (stage === 'story_review') {
+      const story = readCommitText(this.episodePath(ctx, 'storyBeat'))
+      const batch = story?.match(STORY_BATCH_MARKER)?.[1]
+      if (batch) {
+        if (ctx.batchNumber !== undefined && ctx.batchNumber !== Number(batch))
+          throw new Error('审核批次与草稿批次不匹配')
+        ctx.batchNumber = Number(batch)
+      }
+    }
+    const inputPaths = new Set<string>([
+      resolveProjectArtifactPath(
+        ctx.projectPath,
+        'projectConfig',
+        ctx.projectConfig
+      )
+    ])
     const provenance = captureReviewProvenance(
       ctx.projectPath,
       stage,
       ctx.episodeNum,
-      ctx.projectConfig
+      ctx.projectConfig,
+      inputPaths
     )
+    const outputArtifact =
+      stage === 'story_review'
+        ? 'storyReview'
+        : stage === 'script_review'
+          ? 'scriptReview'
+          : stage === 'storyboard_review'
+            ? 'storyboardReview'
+            : undefined
+    const receiptPath = outputArtifact
+      ? this.episodePath(ctx, outputArtifact)
+      : undefined
+    const guards = [...inputPaths, ...(receiptPath ? [receiptPath] : [])]
+    if (
+      getEntryRequirements(ctx.projectConfig?.entryStage).requiresInventory &&
+      (stage === 'story_review' || stage === 'script_review')
+    )
+      guards.push(
+        resolveProjectArtifactPath(
+          ctx.projectPath,
+          'plotBreakdown',
+          ctx.projectConfig
+        )
+      )
+    if (stage === 'art')
+      guards.push(
+        resolveProjectArtifactPath(
+          ctx.projectPath,
+          'characterPrompts',
+          ctx.projectConfig
+        ),
+        resolveProjectArtifactPath(
+          ctx.projectPath,
+          'scenePrompts',
+          ctx.projectConfig
+        ),
+        `${this.episodePath(ctx, 'artDesign')}.references.json`
+      )
+    const intent = await store.intent(
+      ctx.operationId ?? randomUUID(),
+      `review:${stage}:${ctx.episodeNum}`,
+      commitHash(
+        JSON.stringify({
+          stage,
+          episodeNum: ctx.episodeNum,
+          batchNumber: ctx.batchNumber ?? null,
+          provenance
+        })
+      ),
+      [ctx.episodeNum],
+      guards
+    )
+    if (intent.phase === 'committed') {
+      const saved = intent.result as WorkflowReviewResult | undefined
+      if (!saved || saved.stage !== stage || saved.review?.stage !== stage)
+        throw new Error('已提交审核收据损坏')
+      if (saved.review.passed) this.assertReviewUnchanged(saved.review, ctx)
+      return saved
+    }
+    store.assertGuards(intent)
+    if (!provider) throw new Error('请先配置 LLM Provider')
     const engine = new ReviewEngine(this.skillLoader, this.promptAssembler)
     engine.setProvider(provider)
     const callOptions = {
@@ -525,6 +628,7 @@ export class WorkflowEngine {
     await this.checkpoint(ctx)
     this.assertReviewUnchanged(review, ctx)
     await this.assertCurrentPrerequisites(stage, ctx)
+    const writes: CommitWrite[] = []
     if (
       review.passed &&
       stage === 'story_review' &&
@@ -537,7 +641,13 @@ export class WorkflowEngine {
         config: (ctx.projectConfig || {}) as ProjectConfig,
         generatedContent: storyBeat!,
         batchNumber: ctx.batchNumber!,
-        chaptersPerBatch: STORY_BREAKDOWN_CHAPTERS_PER_BATCH
+        chaptersPerBatch: STORY_BREAKDOWN_CHAPTERS_PER_BATCH,
+        prepareOnly: true
+      })
+      writes.push({
+        path: published.path,
+        content: published.content,
+        expected: published.expected
       })
       if (published.appendedEntries === 0)
         throw new Error('剧情库存未写入任何剧情点')
@@ -549,12 +659,18 @@ export class WorkflowEngine {
     ) {
       await this.checkpoint(ctx)
       this.assertReviewUnchanged(review, ctx)
-      markProjectPlotBreakdownEpisodeStatus({
+      const consumed = markProjectPlotBreakdownEpisodeStatus({
         projectPath: ctx.projectPath,
         config: (ctx.projectConfig || {}) as ProjectConfig,
         episodeNum: ctx.episodeNum,
         fromStatus: '未用',
-        toStatus: '已用'
+        toStatus: '已用',
+        prepareOnly: true
+      })
+      writes.push({
+        path: consumed.path,
+        content: consumed.content,
+        expected: consumed.expected
       })
     }
     if (review.passed && stage === 'art') {
@@ -562,7 +678,7 @@ export class WorkflowEngine {
         this.episodePath(ctx, 'artDesign'),
         ctx.projectPath
       )
-      await ArtOutputMerger.parseAndMerge(
+      const preparedArt = await ArtOutputMerger.parseAndMerge(
         art,
         ctx.projectPath,
         ctx.episodeNum,
@@ -572,8 +688,10 @@ export class WorkflowEngine {
           await this.assertCurrentPrerequisites(stage, ctx)
           ctx.signal?.throwIfAborted()
           this.assertReviewUnchanged(review, ctx)
-        }
+        },
+        true
       )
+      writes.push(...preparedArt.writes)
     }
     if (outputPath) {
       const title =
@@ -587,14 +705,32 @@ export class WorkflowEngine {
       ctx.signal?.throwIfAborted()
       this.assertReviewUnchanged(review, ctx)
       const markdown = formatReviewMarkdown(title, review)
-      await atomicWriteFile(
-        assertPathWithinProject(ctx.projectPath, outputPath),
-        ctx.operationId
+      writes.push({
+        path: outputPath,
+        expected: readCommitText(outputPath),
+        content: ctx.operationId
           ? `${markdown}\n<!-- feicai-operation:${ctx.operationId} -->\n`
           : markdown
+      })
+    }
+    if (
+      this.publicationState &&
+      (stage === 'director' || stage === 'art' || stage === 'storyboard_review')
+    ) {
+      writes.push(
+        this.publicationState.persistence.prepareReviewCommit(
+          ctx.episodeNum,
+          stage === 'storyboard_review' ? 'storyboard' : stage,
+          review,
+          this.publicationState.operationId
+        )
       )
     }
-    return { stage, review, outputPath }
+    await this.checkpoint(ctx)
+    this.assertReviewUnchanged(review, ctx)
+    const result = { stage, review, outputPath }
+    await store.install(await store.prepare(intent, writes, result))
+    return result
   }
 
   async gatherInputs(
