@@ -43,6 +43,15 @@ make -f scripts/ui-operation-acceptance.Makefile verify
 
 边界：运行真实 React renderer、CSS、路由同步和隔离 Electron；数据读取、文件写入、任务执行均为明确受控的 `feicaiAPI` fixture。临时 Electron main 只提供截图、按键、窗口大小和结果通道；不加载生产 main/preload，不读取生产凭据或 userData，不接触真实哑妃项目，不调用模型，不访问外网。批量启动断言验证实际页面传参，fixture 不执行生产队列。
 
-验证分工：本文的通过结论仅覆盖上述受控 DOM 和 renderer 回归。production build、真实 worker 启动与生产 IPC 由独立 runtime 任务验证；该任务报告当前基线存在 `scan → artifact-provenance → art-output-merger → production-commit-service → DB/worker launcher` 模块循环，正将只读 art reference 函数拆至 `engine/art-reference.ts`。该修复与构建、真实 worker 结果不在本分支的验收证据中。各分支合齐后，必要的 build / worker / IPC / renderer 联合验证待整合阶段执行，不以本轮 DOM 通过推定生产链路已通过。
+验证分工与最终联验：受控 DOM 的通过结论覆盖真实 renderer 页面、路由、CSS、焦点与受控 API 参数；生产 build、worker 和 IPC 使用独立 runtime 入口验证。已合入 `master afc0334`（包含中断队列新租约、worker 只读 art reference 拆分、剧情规划重复字段三处修复），合并提交为 `3d90439`。在此合并提交上严格串行执行以下两个完整入口，均通过：
 
-未验证：模型生成质量、真实供应商错误、生产 IPC/数据库/文件落盘与任务调度、多窗口并发、跨应用重启历史恢复、系统文件选择器、完整辅助技术读屏。390px 为 Electron 内容视口，不等同于移动系统或触摸设备。任务中心的重启提示仅证明明确显示未知，不证明具备跨重启恢复能力。
+```sh
+make -C feicai-studio -f scripts/ui-operation-acceptance.Makefile verify
+make -f feicai-studio/scripts/runtime-operation-acceptance.Makefile verify
+```
+
+UI 结果为上述 180 条 DOM 断言、35 张截图、37 文件 / 183 项 renderer 测试；runtime 结果为 23 suites / 279 项服务测试、production build、真实构建 worker 与 10 + 8 组生产 IPC 检查，两阶段 `networkAttempts=[]`。两入口均通过强制 typecheck、全仓 lint、对应改动格式和 diff 检查。DOM 与生产 IPC 分别验证，各自结果不扩大为真实模型执行或完整 UI→IPC 端到端验收。
+
+本次联合运行 UI 日志为 `/tmp/feicai-ui-operation-acceptance-task-3/joint-ui.log`，runtime 日志为同目录 `joint-runtime.log`；runtime 机器报告、清理结果、两阶段 IPC 及构建证据在 `/tmp/feicai-runtime-acceptance-1n7yzb7c/`。`report.json` 为 `passed`，10 个检查出口均为 0；`checks.json` 确认 `sharedNativeUnchanged=true`、`tsbuildinfoRestored=true`。运行后额外比对两份 tsbuildinfo 和共享 SQLite native 驱动 SHA-256，均与运行前一致，自建 node_modules 已清理。详细生产验证边界见 `runtime-operation-acceptance.md`。
+
+未验证：模型生成质量、真实供应商错误、真实 provider 批任务调度及其中途暂停/停止/恢复、多窗口并发、系统文件选择器的完整人工流程、完整辅助技术读屏。生产 IPC 已证明特定设置落盘、租约互斥及构造队列的重启恢复，未覆盖任意任务的跨应用重启历史恢复；390px 为 Electron 内容视口，不等同于移动系统或触摸设备。任务中心的重启提示仅证明明确显示未知，不证明具备通用跨重启恢复能力。
