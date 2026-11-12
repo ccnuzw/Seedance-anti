@@ -72,7 +72,7 @@ describe('project production view: current service gates', () => {
   it('uses shared inventory for novel, reviewed story for story, skips story for script', () => {
     expect(
       build('novel', episode(), null, { readyEpisodeNumbers: [] }).next?.path
-    ).toBe('/project/A/batch?mode=smart_next')
+    ).toBe('/project/A/story?ep=1')
     expect(
       build('novel', episode(), null, { readyEpisodeNumbers: [1] }).next?.stage
     ).toBe('script')
@@ -103,7 +103,7 @@ describe('project production view: current service gates', () => {
       usedEpisodeNumbers: [1]
     })
     expect(row.next?.stage).toBe('story')
-    expect(row.next?.status).toBe('库存已使用，需核对')
+    expect(row.next?.status).toBe('核对已用剧情')
     expect(
       build('novel', episode({ hasScript: true }), null, {
         readyEpisodeNumbers: [1],
@@ -184,7 +184,7 @@ describe('project production view: current service gates', () => {
     expect(rows[0].complete).toBe(false)
     expect(
       build('novel', episode(), null, { hasSource: null }).next?.status
-    ).toBe('原文状态未知')
+    ).toBe('刷新准备状态')
     expect(
       buildProductionRows({
         project: project('script', 'A', 0),

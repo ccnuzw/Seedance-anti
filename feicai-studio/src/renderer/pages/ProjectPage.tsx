@@ -86,20 +86,13 @@ export default function ProjectPage() {
         <div className="project-actions">
           <button
             className="btn"
-            disabled={controller.productionLoading}
-            onClick={() => void controller.handleRefreshStatus()}
-          >
-            ↻ 刷新状态
-          </button>
-          <button
-            className="btn btn-primary"
             onClick={() =>
               controller.navigate(
                 `/project/${controller.currentProject?.id}/pipeline`
               )
             }
           >
-            ▶ 流水线
+            查看制作总控
           </button>
         </div>
       </div>
@@ -160,138 +153,106 @@ export default function ProjectPage() {
       )}
       {entry === 'novel' && waterline && (
         <>
-          <div className="card plot-breakdown-waterline">
-            <div className="pipeline-settings-header">
-              <div>
-                <h3>剧情库存水位</h3>
-                <p className="waterline-subtitle">
-                  {waterline?.exists
-                    ? waterline.nextActionLabel
-                    : '尚未创建库存，先执行剧情拆解生成 plot-breakdown.md'}
-                </p>
+          <details>
+            <summary>剧情库存详情</summary>
+            <div className="card plot-breakdown-waterline">
+              <div className="pipeline-settings-header">
+                <div>
+                  <h3>剧情库存</h3>
+                  <p className="waterline-subtitle">
+                    {waterline?.exists
+                      ? waterline.nextActionLabel
+                      : '尚无可用剧情，请通过上方主动作准备草稿。'}
+                  </p>
+                </div>
+                <span
+                  className={`waterline-status waterline-status--${waterline?.waterlineStatus || 'empty'}`}
+                >
+                  {waterlineStatusLabel}
+                </span>
               </div>
-              <span
-                className={`waterline-status waterline-status--${waterline?.waterlineStatus || 'empty'}`}
-              >
-                {waterlineStatusLabel}
-              </span>
-            </div>
-            <div className="waterline-actions">
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={() =>
-                  controller.navigate(
-                    `/project/${controller.currentProject?.id}/batch?mode=smart_next`
-                  )
-                }
-                disabled={!waterline || waterline.nextActionMode === 'done'}
-              >
-                🧭 智能下一步
-              </button>
-              <button
-                className="btn btn-sm"
-                onClick={() =>
-                  controller.navigate(
-                    `/project/${controller.currentProject?.id}/batch?mode=story_until_ready`
-                  )
-                }
-                disabled={!waterline || waterline.unprocessedChapterCount === 0}
-              >
-                📚 拆到库存充足
-              </button>
-              <button
-                className="btn btn-sm"
-                onClick={() =>
-                  controller.navigate(
-                    `/project/${controller.currentProject?.id}/batch?mode=script_until_empty`
-                  )
-                }
-                disabled={!waterline || waterline.unusedEntries === 0}
-              >
-                📖 生成到库存用完
-              </button>
-            </div>
-            <div className="plot-breakdown-stats">
-              <div className="project-health-stat">
-                <span className="text-secondary">剧情点总数</span>
-                <strong>{waterline?.totalEntries ?? 0}</strong>
-              </div>
-              <div className="project-health-stat">
-                <span className="text-secondary">未用剧情点</span>
-                <strong>{waterline?.unusedEntries ?? 0}</strong>
-              </div>
-              <div className="project-health-stat">
-                <span className="text-secondary">已用剧情点</span>
-                <strong>{waterline?.usedEntries ?? 0}</strong>
-              </div>
-              <div className="project-health-stat">
-                <span className="text-secondary">可生成剧本</span>
-                <strong>{waterline?.readyEpisodeCount ?? 0} 集</strong>
-              </div>
-            </div>
-            <div className="status-dashboard-grid">
-              <div className="status-dashboard-item">
-                <div className="status-dashboard-label">拆解进度</div>
-                <strong>{waterline?.breakdownProgressPct ?? 0}%</strong>
-                <div className="status-progress-bar">
-                  <span
-                    style={{
-                      width: `${waterline?.breakdownProgressPct ?? 0}%`
-                    }}
-                  />
+              <div className="plot-breakdown-stats">
+                <div className="project-health-stat">
+                  <span className="text-secondary">剧情点总数</span>
+                  <strong>{waterline?.totalEntries ?? 0}</strong>
+                </div>
+                <div className="project-health-stat">
+                  <span className="text-secondary">未用剧情点</span>
+                  <strong>{waterline?.unusedEntries ?? 0}</strong>
+                </div>
+                <div className="project-health-stat">
+                  <span className="text-secondary">已用剧情点</span>
+                  <strong>{waterline?.usedEntries ?? 0}</strong>
+                </div>
+                <div className="project-health-stat">
+                  <span className="text-secondary">可生成剧本</span>
+                  <strong>{waterline?.readyEpisodeCount ?? 0} 集</strong>
                 </div>
               </div>
-              <div className="status-dashboard-item">
-                <div className="status-dashboard-label">剧本消耗进度</div>
-                <strong>{waterline?.scriptProgressPct ?? 0}%</strong>
-                <div className="status-progress-bar">
-                  <span
-                    style={{ width: `${waterline?.scriptProgressPct ?? 0}%` }}
-                  />
+              <div className="status-dashboard-grid">
+                <div className="status-dashboard-item">
+                  <div className="status-dashboard-label">拆解进度</div>
+                  <strong>{waterline?.breakdownProgressPct ?? 0}%</strong>
+                  <div className="status-progress-bar">
+                    <span
+                      style={{
+                        width: `${waterline?.breakdownProgressPct ?? 0}%`
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="status-dashboard-item">
+                  <div className="status-dashboard-label">剧本消耗进度</div>
+                  <strong>{waterline?.scriptProgressPct ?? 0}%</strong>
+                  <div className="status-progress-bar">
+                    <span
+                      style={{ width: `${waterline?.scriptProgressPct ?? 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="status-dashboard-item">
+                  <div className="status-dashboard-label">剩余批次</div>
+                  <strong>{remainingBatchLabel}</strong>
+                  <p>{nextChapterRangeLabel}</p>
+                </div>
+                <div className="status-dashboard-item">
+                  <div className="status-dashboard-label">建议动作</div>
+                  <strong>{waterlineStatusLabel}</strong>
+                  <p>{waterline?.nextActionLabel || '暂无建议'}</p>
                 </div>
               </div>
-              <div className="status-dashboard-item">
-                <div className="status-dashboard-label">剩余批次</div>
-                <strong>{remainingBatchLabel}</strong>
-                <p>{nextChapterRangeLabel}</p>
-              </div>
-              <div className="status-dashboard-item">
-                <div className="status-dashboard-label">建议动作</div>
-                <strong>{waterlineStatusLabel}</strong>
-                <p>{waterline?.nextActionLabel || '暂无建议'}</p>
-              </div>
-            </div>
-            <div className="waterline-detail-grid">
-              <div className="waterline-detail">
-                <span>已拆章节</span>
-                <strong>{chapterRangeLabel}</strong>
-              </div>
-              <div className="waterline-detail">
-                <span>目标范围</span>
-                <strong>{targetRangeLabel}</strong>
-              </div>
-              <div className="waterline-detail">
-                <span>未拆章节</span>
-                <strong>
-                  {waterline?.unprocessedChapterCount == null
-                    ? '未统计'
-                    : `${waterline.unprocessedChapterCount} 章`}
-                </strong>
-              </div>
-              <div className="waterline-detail">
-                <span>下一批次</span>
-                <strong>第 {waterline?.nextBatchNumber ?? 1} 批</strong>
-              </div>
-              <div className="waterline-detail">
-                <span>源章节总数</span>
-                <strong>{waterline?.totalSourceChapters ?? 0} 章</strong>
-              </div>
-              <div className="waterline-detail">
-                <span>超出目标</span>
-                <strong>{waterline?.overflowChapterCount ?? 0} 章</strong>
+              <div className="waterline-detail-grid">
+                <div className="waterline-detail">
+                  <span>已拆章节</span>
+                  <strong>{chapterRangeLabel}</strong>
+                </div>
+                <div className="waterline-detail">
+                  <span>目标范围</span>
+                  <strong>{targetRangeLabel}</strong>
+                </div>
+                <div className="waterline-detail">
+                  <span>未拆章节</span>
+                  <strong>
+                    {waterline?.unprocessedChapterCount == null
+                      ? '未统计'
+                      : `${waterline.unprocessedChapterCount} 章`}
+                  </strong>
+                </div>
+                <div className="waterline-detail">
+                  <span>下一批次</span>
+                  <strong>第 {waterline?.nextBatchNumber ?? 1} 批</strong>
+                </div>
+                <div className="waterline-detail">
+                  <span>源章节总数</span>
+                  <strong>{waterline?.totalSourceChapters ?? 0} 章</strong>
+                </div>
+                <div className="waterline-detail">
+                  <span>超出目标</span>
+                  <strong>{waterline?.overflowChapterCount ?? 0} 章</strong>
+                </div>
               </div>
             </div>
-          </div>
+          </details>
 
           <div className="card chapter-scan-panel">
             <div className="pipeline-settings-header">

@@ -76,14 +76,17 @@ export function buildStoryPipelineSteps(params: {
     const reviewId = id === 'story' ? 'story_review' : 'script_review'
     const review =
       id === 'novel' ? undefined : cards.find((item) => item.id === reviewId)
-    const hasFile =
-      id === 'novel'
+    const sharedInventory = entryStage === 'novel' && id === 'story'
+    const hasFile = sharedInventory
+      ? card.state === 'done'
+      : id === 'novel'
         ? card.state === 'done'
         : id === 'story'
           ? !!episode?.hasStoryBeat
           : !!episode?.hasScript
-    const approved =
-      id === 'story'
+    const approved = sharedInventory
+      ? card.state === 'done'
+      : id === 'story'
         ? !!episode?.hasStoryReview
         : id === 'script'
           ? !!episode?.hasScriptReview
@@ -98,7 +101,8 @@ export function buildStoryPipelineSteps(params: {
             : hasFile
               ? review?.state || 'blocked'
               : card.state
-    const meta = actionMetaMap[hasFile && review ? reviewId : id]
+    const meta =
+      actionMetaMap[hasFile && review && !sharedInventory ? reviewId : id]
     const sourcePath = id === 'novel' ? meta?.openPath : undefined
     return {
       id,
@@ -107,7 +111,7 @@ export function buildStoryPipelineSteps(params: {
           ? '小说原文'
           : id === 'story'
             ? entryStage === 'novel'
-              ? '剧情库存批次'
+              ? '剧情准备'
               : '单集剧情'
             : '单集剧本',
       state,
@@ -115,9 +119,11 @@ export function buildStoryPipelineSteps(params: {
         state === 'active'
           ? '执行中'
           : hasFile && approved
-            ? id === 'novel'
-              ? '原文已就绪'
-              : '审核有效'
+            ? sharedInventory
+              ? '剧情已就绪'
+              : id === 'novel'
+                ? '原文已就绪'
+                : '审核有效'
             : hasFile
               ? state === 'blocked'
                 ? '文件已存在 · 审核被阻塞'
@@ -128,7 +134,7 @@ export function buildStoryPipelineSteps(params: {
       description:
         state === 'active'
           ? '正在处理当前阶段，请等待任务结束。'
-          : hasFile && review
+          : hasFile && review && !sharedInventory
             ? review.note
             : card.note,
       primaryLabel:

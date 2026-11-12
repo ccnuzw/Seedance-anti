@@ -1,3 +1,5 @@
+import { useNovelProductionReadiness } from './useNovelProductionReadiness'
+import { getNovelProductionReadiness } from '@renderer/utils/novel-production-readiness'
 import { useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type {
@@ -93,12 +95,23 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
   const navigate = useNavigate()
   const projectConfig = normalizeProjectConfig(currentProject?.config)
   const entryStage = projectConfig.entryStage || 'novel'
-  const { hasSourceNovel, workflowSummaries } = useWorkflowSummaries(
-    currentProject,
-    currentEpisode,
-    episodeNum
+  const novelState = useNovelProductionReadiness(
+    entryStage === 'novel' ? currentProject : null
   )
+  const novelReadiness = useMemo(
+    () =>
+      getNovelProductionReadiness({
+        ...novelState,
+        episodeNumber: episodeNum,
+        episode: currentEpisode
+      }),
+    [novelState.hasSource, novelState.waterline, episodeNum, currentEpisode]
+  )
+  const { hasSourceNovel: summaryHasSource, workflowSummaries } =
+    useWorkflowSummaries(currentProject, currentEpisode, episodeNum)
 
+  const hasSourceNovel =
+    entryStage === 'novel' ? novelState.hasSource === true : summaryHasSource
   const stageAvailability: AutomatedStageAvailabilityMap = useMemo(
     () => ({
       director: getStageAvailability(currentEpisode, 'director'),
@@ -120,7 +133,8 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
         currentEpisode,
         'script',
         entryStage,
-        hasSourceNovel
+        hasSourceNovel,
+        novelReadiness
       ),
       story_review: getWorkflowActionAvailability(
         currentEpisode,
@@ -147,7 +161,7 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
         hasSourceNovel
       )
     }),
-    [currentEpisode, entryStage, hasSourceNovel]
+    [currentEpisode, entryStage, hasSourceNovel, novelReadiness]
   )
 
   const workflowCards: WorkflowCard[] = useMemo(
@@ -159,6 +173,29 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
         displayIsRunning,
         summaryMap: workflowSummaries,
         hasSourceNovel
+      }).map((card) => {
+        if (entryStage !== 'novel') return card
+        if (card.id === 'novel' && novelState.hasSource === null)
+          return { ...card, state: 'blocked', note: novelReadiness.reason }
+        if (card.id === 'story' || card.id === 'story_review')
+          return {
+            ...card,
+            state: (currentEpisode?.hasScript || novelReadiness.canStart
+              ? 'done'
+              : card.id === 'story_review'
+                ? 'skipped'
+                : 'blocked') as WorkflowCard['state'],
+            note: novelReadiness.reason
+          }
+        if (card.id === 'script' && !currentEpisode?.hasScript)
+          return {
+            ...card,
+            state: (novelReadiness.canStart
+              ? 'ready'
+              : 'blocked') as WorkflowCard['state'],
+            note: novelReadiness.reason
+          }
+        return card
       }),
     [
       currentEpisode,
@@ -166,7 +203,9 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
       displayState,
       displayIsRunning,
       workflowSummaries,
-      hasSourceNovel
+      hasSourceNovel,
+      novelReadiness,
+      novelState.hasSource
     ]
   )
 
@@ -214,28 +253,76 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
     const busyWorkflow = displayIsRunning || workflowAction !== null
     const busyPipeline = isRunning
     return Object.fromEntries(
-      workflowCards.map((card) => [
-        card.id,
-        resolveWorkflowCardActionMeta({
-          card,
-          specParams: {
-            currentEpisode,
-            hasSourceNovel,
-            workflowAvailability,
-            stageAvailability,
-            busyWorkflow,
-            busyPipeline,
-            paths: routePaths
-          },
-          navigate,
-          onWorkflowAction: handleWorkflowAction,
-          onAutomationAction: (stage, singleStage) => {
-            void handleStart(stage, singleStage)
-          }
-        })
-      ])
+      workflowCards.map((card) => {
+        if (
+          entryStage === 'novel' &&
+          card.id === 'novel' &&
+          novelState.hasSource === null
+        )
+          return [
+            card.id,
+            {
+              primaryLabel: '刷新准备状态',
+              primaryDisabled: busyWorkflow || busyPipeline,
+              primaryAction: () => {
+                void novelState.refresh()
+              }
+            }
+          ]
+        if (
+          entryStage === 'novel' &&
+          (card.id === 'story' ||
+            card.id === 'story_review' ||
+            (card.id === 'script' &&
+              !currentEpisode?.hasScript &&
+              !novelReadiness.canStart))
+        ) {
+          const path =
+            novelReadiness.action === 'source'
+              ? routePaths.sourcePath
+              : routePaths.storyPath
+          return [
+            card.id,
+            {
+              openLabel: '查看剧情',
+              openPath: path,
+              primaryLabel: novelReadiness.label,
+              primaryDisabled: busyWorkflow || busyPipeline,
+              primaryAction: () => {
+                if (novelReadiness.action === 'refresh')
+                  void novelState.refresh()
+                else if (path) navigate(path)
+              }
+            }
+          ]
+        }
+        return [
+          card.id,
+          resolveWorkflowCardActionMeta({
+            card,
+            specParams: {
+              currentEpisode,
+              hasSourceNovel,
+              workflowAvailability,
+              stageAvailability,
+              busyWorkflow,
+              busyPipeline,
+              paths: routePaths
+            },
+            navigate,
+            onWorkflowAction: handleWorkflowAction,
+            onAutomationAction: (stage, singleStage) => {
+              void handleStart(stage, singleStage)
+            }
+          })
+        ]
+      })
     ) as Record<WorkflowCard['id'], WorkflowCardActionMeta>
   }, [
+    entryStage,
+    novelReadiness,
+    novelState.hasSource,
+    novelState.refresh,
     workflowCards,
     currentEpisode,
     displayIsRunning,

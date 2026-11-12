@@ -80,7 +80,7 @@ describe('ProjectProductionMatrix', () => {
     expect(html).toContain('aria-label="第1集 剧本：待审核')
     expect(html).toContain('第 1 / 50 页')
     expect(html.match(/scope="row"/g)).toHaveLength(20)
-    expect(html).toContain('处理第 1 集剧本')
+    expect(html).toContain('查看第 1 集剧本')
   })
   it('hides actionable next steps on read failure or refresh', () => {
     const failed = render({ error: '读取失败，请刷新重试', rows: [] })
@@ -88,7 +88,7 @@ describe('ProjectProductionMatrix', () => {
     expect(failed).not.toContain('暂无集数')
     const refreshing = render({ rows: [row], loading: true })
     expect(refreshing).toContain('下方为刷新前快照')
-    expect(refreshing).not.toContain('处理第 1 集剧本')
+    expect(refreshing).not.toContain('查看第 1 集剧本')
     expect(refreshing).toContain('disabled=""')
   })
 })

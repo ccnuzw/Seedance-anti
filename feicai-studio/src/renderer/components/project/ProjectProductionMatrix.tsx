@@ -133,9 +133,14 @@ export default function ProjectProductionMatrix(
               </p>
               <button
                 className="btn btn-primary"
-                onClick={() => onNavigate(next.next!.path)}
+                onClick={() =>
+                  next.next!.refresh
+                    ? props.onRefresh()
+                    : onNavigate(next.next!.path)
+                }
               >
-                处理第 {next.episodeNumber} 集{next.next.label}
+                {next.next.actionLabel ||
+                  `查看第 ${next.episodeNumber} 集${next.next.label}`}
               </button>
             </>
           ) : (
@@ -201,7 +206,11 @@ export default function ProjectProductionMatrix(
                             disabled={loading}
                             title={cell.detail}
                             aria-label={`第${row.episodeNumber}集 ${cell.label}：${cell.status}。${cell.detail}`}
-                            onClick={() => onNavigate(cell.path)}
+                            onClick={() =>
+                              cell.refresh
+                                ? props.onRefresh()
+                                : onNavigate(cell.path)
+                            }
                           >
                             <strong>{cell.status}</strong>
                             <span>{cell.detail}</span>
@@ -219,9 +228,13 @@ export default function ProjectProductionMatrix(
                         <button
                           className="btn btn-sm"
                           disabled={loading}
-                          onClick={() => onNavigate(row.next!.path)}
+                          onClick={() =>
+                            row.next!.refresh
+                              ? props.onRefresh()
+                              : onNavigate(row.next!.path)
+                          }
                         >
-                          处理{row.next.label}
+                          {row.next.actionLabel || `查看${row.next.label}`}
                         </button>
                       ) : (
                         <span>

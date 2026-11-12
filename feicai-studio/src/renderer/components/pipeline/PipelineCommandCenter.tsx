@@ -58,14 +58,13 @@ function PipelineCommandCenter(props: PipelineCommandCenterProps) {
     nextStep,
     storyPipelineSteps,
     onStop,
-    onRetry,
-    onOpen
+    onRetry
   } = props
   const id = useId()
   const presentation = getEntryPresentation(entryStage)
   const progress = getCommandProgress(storyPipelineSteps)
   const reviewCount = [
-    entryStage !== 'script' && currentEpisode?.hasStoryReview,
+    entryStage === 'story' && currentEpisode?.hasStoryReview,
     currentEpisode?.hasScriptReview
   ].filter(Boolean).length
   const readableState =
@@ -119,7 +118,7 @@ function PipelineCommandCenter(props: PipelineCommandCenterProps) {
             <div>
               <span className="command-stat-label">主线有效审核</span>
               <strong>
-                {reviewCount}/{entryStage === 'script' ? 1 : 2}
+                {reviewCount}/{entryStage === 'story' ? 2 : 1}
               </strong>
             </div>
           </div>
@@ -147,23 +146,6 @@ function PipelineCommandCenter(props: PipelineCommandCenterProps) {
             >
               {nextStep.primaryAction.label}
             </button>
-            {nextStep.secondaryLabel && nextStep.secondaryAction && (
-              <button
-                className="btn"
-                onClick={nextStep.secondaryAction}
-                disabled={nextStep.secondaryDisabled}
-              >
-                {nextStep.secondaryLabel}
-              </button>
-            )}
-            {nextStep.openPath && (
-              <button
-                className="btn"
-                onClick={() => onOpen(nextStep.openPath!)}
-              >
-                {nextStep.openLabel || '打开产物'}
-              </button>
-            )}
           </div>
         </section>
 

@@ -100,7 +100,7 @@ export default function BatchPage() {
   )
   const { addToast } = useToastStore()
 
-  const [mode, setMode] = useState<BatchMode>('full')
+  const [mode, setMode] = useState<BatchMode>('smart_next')
   const [selectedEps, setSelectedEps] = useState<Set<number>>(new Set())
   const {
     snapshot,
@@ -118,7 +118,8 @@ export default function BatchPage() {
   const [episodePage, setEpisodePage] = useState(0)
   const [taskPage, setTaskPage] = useState(0)
   const pageSize = 100
-  const [logExpanded, setLogExpanded] = useState(true)
+  const [logExpanded, setLogExpanded] = useState(false)
+  const [waterlineRevision, setWaterlineRevision] = useState(0)
   const [plotBreakdownSummary, setPlotBreakdownSummary] =
     useState<PlotBreakdownSummary | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
@@ -142,14 +143,20 @@ export default function BatchPage() {
   }, [snapshot?.id, snapshot?.status])
 
   useEffect(() => {
-    if (!currentProject) {
-      setPlotBreakdownSummary(null)
-      return
-    }
+    let cancelled = false
+    setPlotBreakdownSummary(null)
+    if (!currentProject) return
     void getPlotBreakdownSummary(currentProject.id)
-      .then(setPlotBreakdownSummary)
-      .catch(() => setPlotBreakdownSummary(null))
-  }, [currentProject?.id])
+      .then((summary) => {
+        if (!cancelled) setPlotBreakdownSummary(summary)
+      })
+      .catch(() => {
+        if (!cancelled) setPlotBreakdownSummary(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [currentProject?.id, snapshot?.id, snapshot?.status, waterlineRevision])
 
   useEffect(() => {
     const modeParam = searchParams.get('mode')
@@ -233,15 +240,29 @@ export default function BatchPage() {
     [tasks]
   )
   const runningTask = tasks.find((task) => task.status === 'running')
-  const canRun = autoMode || selectedEps.size > 0
+  const canRun =
+    (autoMode
+      ? !!plotBreakdownSummary && plotBreakdownSummary.nextActionMode !== 'done'
+      : selectedEps.size > 0) &&
+    !bgRunning &&
+    !pipelineRunning
   const executionLabel = autoMode
     ? '按水位执行'
     : `批量执行 ${selectedEps.size} 集`
-  const executionHint = autoMode
-    ? plotBreakdownSummary?.nextActionLabel || '读取水位后自动决定执行目标'
-    : selectedEps.size > 0
-      ? formatEpisodeList(selectedEpisodeNumbers)
-      : '请选择要执行的集数'
+  const executionHint =
+    mode === 'smart_next'
+      ? !plotBreakdownSummary
+        ? '准备状态尚未取得，请刷新重试。'
+        : plotBreakdownSummary.nextActionMode === 'done'
+          ? '当前没有可推进的任务。'
+          : plotBreakdownSummary.nextActionMode === 'script'
+            ? '本次将生成并审核可用剧情对应的剧本。'
+            : '本次将生成剧情草稿并审核入库；完成后可继续生成剧本。'
+      : autoMode
+        ? plotBreakdownSummary?.nextActionLabel || '读取水位后自动决定执行目标'
+        : selectedEps.size > 0
+          ? formatEpisodeList(selectedEpisodeNumbers)
+          : '请选择要执行的集数'
 
   const toggleEpisode = (num: number) => {
     setSelectedEps((prev) => {
@@ -324,10 +345,6 @@ export default function BatchPage() {
   useEffect(() => {
     if (snapshot?.status !== 'completed') return
     void useProjectStore.getState().syncEpisodeStatus()
-    if (currentProject)
-      void getPlotBreakdownSummary(currentProject.id)
-        .then(setPlotBreakdownSummary)
-        .catch(() => {})
   }, [snapshot?.id, snapshot?.status, currentProject?.id])
 
   const episodePageCount = Math.max(1, Math.ceil(episodes.length / pageSize))
@@ -357,9 +374,28 @@ export default function BatchPage() {
       {queueError && <p role="alert">{queueError}</p>}
       {snapshot && (
         <p role="status" aria-live="polite">
-          主进程队列：{snapshot.status} · 已提交 {snapshot.cursor}/
-          {snapshot.tasks.length} 项。离开页面不会停止任务。
+          {snapshot.status === 'completed'
+            ? taskStats.error > 0
+              ? '队列已结束，存在失败任务'
+              : '队列已完成'
+            : '队列进行中'}{' '}
+          · 已处理 {snapshot.cursor}/{snapshot.tasks.length}{' '}
+          项。离开页面不会停止任务。
         </p>
+      )}
+      {taskStats.error > 0 && (
+        <div role="alert">
+          <strong>{taskStats.error} 项任务失败，请检查原因后重试。</strong>
+          <ul>
+            {tasks
+              .filter((task) => task.status === 'error')
+              .map((task, index) => (
+                <li key={index}>
+                  第 {task.episodeNum} 集：{task.progress || '执行失败'}
+                </li>
+              ))}
+          </ul>
+        </div>
       )}
       {snapshot &&
         ['interrupted', 'stopped'].includes(snapshot.status) &&
@@ -459,6 +495,14 @@ export default function BatchPage() {
               : executionHint}
           </p>
           <div className="batch-command-buttons">
+            {autoMode && !plotBreakdownSummary && (
+              <button
+                className="btn"
+                onClick={() => setWaterlineRevision((value) => value + 1)}
+              >
+                刷新准备状态
+              </button>
+            )}
             {!isRunning ? (
               <button
                 className="btn btn-primary btn-lg"
@@ -531,126 +575,134 @@ export default function BatchPage() {
         </div>
       </section>
 
-      <section className="batch-workspace">
-        <div className="batch-mode-panel">
-          <div className="batch-panel-header">
-            <div>
-              <span className="batch-section-label">执行模式</span>
-              <h3>选择本次批量策略</h3>
-            </div>
-          </div>
-          <div className="batch-mode-groups">
-            {MODE_GROUPS.map((group) => (
-              <div className="batch-mode-group" key={group.title}>
-                <div className="batch-mode-group-head">
-                  <strong>{group.title}</strong>
-                  <span>{group.description}</span>
-                </div>
-                <div className="batch-mode-options">
-                  {group.modes.map((key) => {
-                    const config = MODE_MAP[key]
-                    return (
-                      <button
-                        key={key}
-                        className={`batch-mode-option ${mode === key ? 'active' : ''}`}
-                        onClick={() => setMode(key)}
-                        aria-pressed={mode === key}
-                        disabled={isRunning || commandPending}
-                      >
-                        <span className="batch-mode-emoji">{config.emoji}</span>
-                        <span>
-                          <strong>{config.label}</strong>
-                          <small>{MODE_DESCRIPTIONS[key]}</small>
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
+      <details>
+        <summary>高级选项：模式、选集与持续运行</summary>
+        <section className="batch-workspace">
+          <div className="batch-mode-panel">
+            <div className="batch-panel-header">
+              <div>
+                <span className="batch-section-label">执行模式</span>
+                <h3>选择本次批量策略</h3>
               </div>
-            ))}
+            </div>
+            <div className="batch-mode-groups">
+              {MODE_GROUPS.map((group) => (
+                <div className="batch-mode-group" key={group.title}>
+                  <div className="batch-mode-group-head">
+                    <strong>{group.title}</strong>
+                    <span>{group.description}</span>
+                  </div>
+                  <div className="batch-mode-options">
+                    {group.modes.map((key) => {
+                      const config = MODE_MAP[key]
+                      return (
+                        <button
+                          key={key}
+                          className={`batch-mode-option ${mode === key ? 'active' : ''}`}
+                          onClick={() => setMode(key)}
+                          aria-pressed={mode === key}
+                          disabled={isRunning || commandPending}
+                        >
+                          <span className="batch-mode-emoji">
+                            {config.emoji}
+                          </span>
+                          <span>
+                            <strong>{config.label}</strong>
+                            <small>{MODE_DESCRIPTIONS[key]}</small>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <div className="batch-selection">
-          <div className="batch-selection-header">
-            <div>
-              <span className="batch-section-label">集数范围</span>
-              <h3>{autoMode ? '自动水位范围' : '选择执行集数'}</h3>
-              <p className="text-secondary">
-                已选 {selectedEps.size} / {episodes.length} 集
-                {autoMode && plotBreakdownSummary
-                  ? ` · ${plotBreakdownSummary.nextActionLabel}`
-                  : ''}
-              </p>
+          <div className="batch-selection">
+            <div className="batch-selection-header">
+              <div>
+                <span className="batch-section-label">集数范围</span>
+                <h3>{autoMode ? '自动水位范围' : '选择执行集数'}</h3>
+                <p className="text-secondary">
+                  已选 {selectedEps.size} / {episodes.length} 集
+                  {autoMode && plotBreakdownSummary
+                    ? ` · ${plotBreakdownSummary.nextActionLabel}`
+                    : ''}
+                </p>
+              </div>
+              <div className="batch-quick-actions">
+                <button className="btn btn-sm" onClick={selectAll}>
+                  {selectedEps.size === episodes.length ? '取消全选' : '全选'}
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setSelectedEps(new Set())}
+                >
+                  清空
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => selectRange(1, 10)}
+                >
+                  1-10
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => selectRange(11, 20)}
+                >
+                  11-20
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => selectRange(21, 30)}
+                >
+                  21-30
+                </button>
+              </div>
             </div>
-            <div className="batch-quick-actions">
-              <button className="btn btn-sm" onClick={selectAll}>
-                {selectedEps.size === episodes.length ? '取消全选' : '全选'}
-              </button>
-              <button
-                className="btn btn-sm"
-                onClick={() => setSelectedEps(new Set())}
-              >
-                清空
-              </button>
-              <button className="btn btn-sm" onClick={() => selectRange(1, 10)}>
-                1-10
-              </button>
-              <button
-                className="btn btn-sm"
-                onClick={() => selectRange(11, 20)}
-              >
-                11-20
-              </button>
-              <button
-                className="btn btn-sm"
-                onClick={() => selectRange(21, 30)}
-              >
-                21-30
-              </button>
+            <div className="episode-select-grid">
+              {visibleEpisodes.map((ep) => (
+                <button
+                  key={ep.id}
+                  className={`episode-select-btn ${selectedEps.has(ep.episodeNumber) ? 'selected' : ''} ${isEpisodeComplete(ep.status) ? 'completed' : ''}`}
+                  onClick={() => toggleEpisode(ep.episodeNumber)}
+                  title={`EP${String(ep.episodeNumber).padStart(2, '0')}`}
+                  aria-label={`选择第 ${ep.episodeNumber} 集${isEpisodeComplete(ep.status) ? '，已完成' : ''}`}
+                  aria-pressed={selectedEps.has(ep.episodeNumber)}
+                >
+                  <span className="ep-num">
+                    EP{String(ep.episodeNumber).padStart(2, '0')}
+                  </span>
+                  {isEpisodeComplete(ep.status) && (
+                    <span className="ep-done">✓</span>
+                  )}
+                </button>
+              ))}
             </div>
-          </div>
-          <div className="episode-select-grid">
-            {visibleEpisodes.map((ep) => (
+            <nav aria-label="集数分页" className="batch-quick-actions">
               <button
-                key={ep.id}
-                className={`episode-select-btn ${selectedEps.has(ep.episodeNumber) ? 'selected' : ''} ${isEpisodeComplete(ep.status) ? 'completed' : ''}`}
-                onClick={() => toggleEpisode(ep.episodeNumber)}
-                title={`EP${String(ep.episodeNumber).padStart(2, '0')}`}
-                aria-label={`选择第 ${ep.episodeNumber} 集${isEpisodeComplete(ep.status) ? '，已完成' : ''}`}
-                aria-pressed={selectedEps.has(ep.episodeNumber)}
+                className="btn btn-sm"
+                disabled={episodePage <= 0}
+                onClick={() => setEpisodePage((p) => p - 1)}
               >
-                <span className="ep-num">
-                  EP{String(ep.episodeNumber).padStart(2, '0')}
-                </span>
-                {isEpisodeComplete(ep.status) && (
-                  <span className="ep-done">✓</span>
-                )}
+                上一页
               </button>
-            ))}
+              <span>
+                第 {Math.min(episodePage + 1, episodePageCount)} /{' '}
+                {episodePageCount} 页
+              </span>
+              <button
+                className="btn btn-sm"
+                disabled={episodePage >= episodePageCount - 1}
+                onClick={() => setEpisodePage((p) => p + 1)}
+              >
+                下一页
+              </button>
+            </nav>
           </div>
-          <nav aria-label="集数分页" className="batch-quick-actions">
-            <button
-              className="btn btn-sm"
-              disabled={episodePage <= 0}
-              onClick={() => setEpisodePage((p) => p - 1)}
-            >
-              上一页
-            </button>
-            <span>
-              第 {Math.min(episodePage + 1, episodePageCount)} /{' '}
-              {episodePageCount} 页
-            </span>
-            <button
-              className="btn btn-sm"
-              disabled={episodePage >= episodePageCount - 1}
-              onClick={() => setEpisodePage((p) => p + 1)}
-            >
-              下一页
-            </button>
-          </nav>
-        </div>
-      </section>
+        </section>
+      </details>
 
       {tasks.length > 0 && (
         <div className="batch-progress">
