@@ -5,6 +5,7 @@ import {
   readCommitText,
   type CommitWrite
 } from '../io/production-commit-store'
+import { recoverProjectSettingsAtBoundary } from '../services/production-commit-service'
 import type { ProjectStatePersistence } from '../engine/project-state'
 import { readFile } from 'fs/promises'
 import { listSourceChapters } from '../project/novel-importer'
@@ -180,6 +181,7 @@ export class WorkflowEngine {
     if (!provider) throw new Error('请先配置 LLM Provider')
     this.assertContext(ctx)
     await this.checkpoint(ctx)
+    await recoverProjectSettingsAtBoundary(ctx.projectPath, ctx.projectConfig)
     await new ProductionCommitStore(
       ctx.projectPath,
       ctx.projectConfig
@@ -308,6 +310,7 @@ export class WorkflowEngine {
     this.assertContext(ctx)
     const store = new ProductionCommitStore(ctx.projectPath, ctx.projectConfig)
     await this.checkpoint(ctx)
+    await recoverProjectSettingsAtBoundary(ctx.projectPath, ctx.projectConfig)
     await store.recover()
     await this.assertCurrentPrerequisites(stage, ctx)
     if (stage === 'story_review') {

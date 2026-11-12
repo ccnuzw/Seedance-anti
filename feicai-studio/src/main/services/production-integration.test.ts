@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ProjectConfig, ProjectPipelineState } from '@shared/types'
 import { buildDefaultPlotBreakdownTemplate } from '@shared/project-bootstrap'
+import { normalizeProjectConfig } from '@shared/project-config'
 import {
   summarizeProjectPlotBreakdown,
   readPlotBreakdown
@@ -160,7 +161,14 @@ import {
   syncFreshProductionEpisodes,
   syncSingleEpisodeStatus
 } from '../db/episode-sync-repository'
-import { recoverProductionCommits } from './production-commit-service'
+import {
+  recoverProductionCommits,
+  recoverProjectCommits,
+  recoverProjectSettingsCommits
+} from './production-commit-service'
+import { saveProjectSettings, projectSettingsRecord } from './project-service'
+import { getProject } from '../db/project-repository'
+import { updatePlotBreakdownPlanning } from '@shared/plot-breakdown'
 
 let root: string
 function put(path: string, text: string): void {
@@ -202,6 +210,254 @@ afterEach(async () => {
 })
 
 describe('registered project → workflow service → automatic pipeline → asset/export IPC', () => {
+  it.each([
+    'prepared',
+    'installed:0',
+    'installed:1',
+    'committed',
+    'projection',
+    'receipt'
+  ])(
+    'recovers settings files and SQLite projection after %s',
+    async (boundary) => {
+      const projectPath = join(root, `settings-${boundary.replace(':', '-')}`)
+      mkdirSync(projectPath)
+      const config: ProjectConfig = {
+        projectName: '设置前',
+        entryStage: 'script',
+        totalEpisodes: 2,
+        chaptersPerEpisode: 3,
+        visualStyle: '写实',
+        targetMedium: '短剧',
+        createdAt: '2026-01-01'
+      }
+      const id = `settings-${boundary}`
+      insertProjectRecord(initDatabase(), {
+        id,
+        name: config.projectName,
+        projectPath,
+        visualStyle: config.visualStyle,
+        targetMedium: config.targetMedium,
+        totalEpisodes: config.totalEpisodes,
+        configJson: JSON.stringify(config),
+        createdAt: config.createdAt,
+        updatedAt: config.createdAt
+      })
+      const current = getProject(id)!
+      const configPath = resolveProjectArtifactPath(
+        projectPath,
+        'projectConfig',
+        config
+      )
+      const plotPath = resolveProjectArtifactPath(
+        projectPath,
+        'plotBreakdown',
+        config
+      )
+      const oldConfigText = JSON.stringify(config, null, 2)
+      const oldPlotText = 'old planning'
+      const nextConfig = normalizeProjectConfig({
+        ...config,
+        projectName: '设置后',
+        totalEpisodes: 4,
+        directories: {
+          ...config.directories,
+          assetsDir: 'recovered-assets',
+          scriptDir: 'recovered-script'
+        }
+      })
+      const nextConfigText = JSON.stringify(nextConfig, null, 2)
+      put(configPath, oldConfigText)
+      put(plotPath, oldPlotText)
+      const projection = {
+        projectId: id,
+        projectPath,
+        previous: {
+          name: current.name,
+          visualStyle: current.visualStyle,
+          targetMedium: current.targetMedium,
+          totalEpisodes: current.totalEpisodes,
+          configJson: JSON.stringify(current.config),
+          updatedAt: current.updatedAt
+        },
+        next: {
+          name: nextConfig.projectName,
+          visualStyle: nextConfig.visualStyle,
+          targetMedium: nextConfig.targetMedium,
+          totalEpisodes: nextConfig.totalEpisodes,
+          configJson: JSON.stringify(nextConfig),
+          updatedAt: '2026-02-01T00:00:00.000Z'
+        }
+      }
+      const store = new ProductionCommitStore(projectPath, config, (point) => {
+        if (point === boundary) throw new Error('simulated crash')
+      })
+      const intent = await store.intent(
+        `op-${boundary}`,
+        'settings',
+        commitHash(nextConfigText),
+        [],
+        [configPath, plotPath],
+        'project-settings'
+      )
+      if (boundary !== 'intent') {
+        if (boundary === 'prepared') {
+          await expect(
+            store.prepare(
+              intent,
+              [
+                {
+                  path: configPath,
+                  expected: oldConfigText,
+                  content: nextConfigText
+                },
+                {
+                  path: plotPath,
+                  expected: oldPlotText,
+                  content: 'new planning'
+                }
+              ],
+              projection
+            )
+          ).rejects.toThrow('simulated crash')
+        } else {
+          const prepared = await store.prepare(
+            intent,
+            [
+              {
+                path: configPath,
+                expected: oldConfigText,
+                content: nextConfigText
+              },
+              { path: plotPath, expected: oldPlotText, content: 'new planning' }
+            ],
+            projection
+          )
+          if (boundary === 'projection' || boundary === 'receipt') {
+            await store.install(prepared)
+            await expect(
+              store.recover(projectSettingsRecord, 'project-settings')
+            ).rejects.toThrow('simulated crash')
+          } else {
+            await expect(store.install(prepared)).rejects.toThrow(
+              'simulated crash'
+            )
+          }
+        }
+      }
+
+      const nameBeforeProductionRecovery = getProject(id)?.name
+      await recoverProjectCommits(
+        'production',
+        projectPath,
+        config,
+        undefined,
+        id
+      )
+      expect(getProject(id)?.name).toBe(nameBeforeProductionRecovery)
+      expect(
+        new ProductionCommitStore(projectPath, config).list('project-settings')
+      ).toHaveLength(1)
+      await recoverProjectSettingsCommits(projectPath, config, undefined, id)
+      await recoverProjectSettingsCommits(projectPath, config, undefined, id)
+      expect(readFileSync(configPath, 'utf8')).toBe(nextConfigText)
+      expect(readFileSync(plotPath, 'utf8')).toBe('new planning')
+      expect(existsSync(join(projectPath, 'recovered-assets'))).toBe(true)
+      expect(existsSync(join(projectPath, 'recovered-script'))).toBe(true)
+      expect(getProject(id)).toMatchObject({
+        name: nextConfig.projectName,
+        totalEpisodes: nextConfig.totalEpisodes,
+        updatedAt: projection.next.updatedAt,
+        config: { projectName: nextConfig.projectName }
+      })
+      expect(
+        new ProductionCommitStore(projectPath, config).list('project-settings')
+      ).toMatchObject([{ phase: 'committed', projected: true }])
+    }
+  )
+
+  it('commits settings, existing plot planning, and the SQLite projection together under one lease', async () => {
+    const config: ProjectConfig = {
+      projectName: '设置前',
+      entryStage: 'script',
+      totalEpisodes: 2,
+      chaptersPerEpisode: 3,
+      visualStyle: '写实',
+      targetMedium: '短剧',
+      createdAt: '2026-01-01',
+      directories: { outputsDir: 'custom-output' }
+    }
+    const db = initDatabase()
+    insertProjectRecord(db, {
+      id: 'settings',
+      name: config.projectName,
+      projectPath: root,
+      visualStyle: config.visualStyle,
+      targetMedium: config.targetMedium,
+      totalEpisodes: config.totalEpisodes,
+      configJson: JSON.stringify(config),
+      createdAt: config.createdAt,
+      updatedAt: config.createdAt
+    })
+    const configPath = resolveProjectArtifactPath(root, 'projectConfig', config)
+    const plotPath = resolveProjectArtifactPath(root, 'plotBreakdown', config)
+    put(configPath, JSON.stringify(config, null, 2))
+    const originalPlot =
+      '# 剧情规划\n\n项目名称：设置前\n项目类型：短剧\n总集数：2\n每集章节数：3\n'
+    put(plotPath, originalPlot)
+
+    const lease = acquireExecutionLease('test-settings')
+    try {
+      const updated = await saveProjectSettings('settings', {
+        name: '设置后',
+        visualStyle: '写实',
+        targetMedium: '短剧',
+        totalEpisodes: 4,
+        config: {
+          chaptersPerEpisode: 5,
+          directories: {
+            assetsDir: 'updated-assets',
+            scriptDir: 'updated-script'
+          }
+        }
+      })
+      expect(getExecutionLease()).toBe(lease)
+      expect(updated.name).toBe('设置后')
+      expect(getProject('settings')).toMatchObject({
+        name: '设置后',
+        totalEpisodes: 4,
+        config: {
+          projectName: '设置后',
+          chaptersPerEpisode: 5,
+          directories: {
+            assetsDir: 'updated-assets',
+            scriptDir: 'updated-script'
+          }
+        }
+      })
+      expect(JSON.parse(readFileSync(configPath, 'utf8'))).toMatchObject({
+        projectName: '设置后',
+        totalEpisodes: 4,
+        chaptersPerEpisode: 5
+      })
+      expect(readFileSync(plotPath, 'utf8')).toBe(
+        updatePlotBreakdownPlanning(originalPlot, {
+          projectName: '设置后',
+          projectType: '短剧',
+          totalEpisodes: 4,
+          chaptersPerEpisode: 5
+        })
+      )
+      expect(
+        new ProductionCommitStore(root, config).list('project-settings')
+      ).toMatchObject([{ phase: 'committed', projected: true }])
+      expect(existsSync(join(root, 'updated-assets'))).toBe(true)
+      expect(existsSync(join(root, 'updated-script'))).toBe(true)
+    } finally {
+      releaseExecutionLease(lease)
+    }
+  })
+
   it('drains an older scan, projects to disk SQLite, and recovers after projection before its receipt under the same lease', async () => {
     const config: ProjectConfig = {
       projectName: '恢复',

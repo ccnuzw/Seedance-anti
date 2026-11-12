@@ -19,7 +19,8 @@ import { resolveProjectLayout } from '@shared/path-resolver'
 import {
   ProductionCommitStore,
   commitHash,
-  hasUncommittedProductionWrites
+  hasUncommittedProductionWrites,
+  readCommitText
 } from './production-commit-store'
 
 let root: string
@@ -273,6 +274,37 @@ describe('recoverable production file installation', () => {
     ).rejects.toThrow('FILE_CONFLICT')
     expect(readFileSync(journal, 'utf8')).toBe(external)
     expect(existsSync(join(root, 'output.md'))).toBe(false)
+  })
+
+  it('isolates project-settings journals from ordinary production recovery', async () => {
+    const store = new ProductionCommitStore(root, config)
+    const intent = await store.intent(
+      'settings-operation',
+      'project-settings',
+      commitHash('settings'),
+      [],
+      [],
+      'project-settings'
+    )
+    await store.prepare(intent, [
+      {
+        path: join(root, 'project-config.json'),
+        expected: null,
+        content: '{"projectName":"updated"}'
+      }
+    ])
+
+    await new ProductionCommitStore(root, config).recover()
+    expect(readCommitText(join(root, 'project-config.json'))).toBeNull()
+    expect(store.list('production')).toEqual([])
+    expect(store.list('project-settings')).toHaveLength(1)
+    await new ProductionCommitStore(root, config).recover(
+      undefined,
+      'project-settings'
+    )
+    expect(readCommitText(join(root, 'project-config.json'))).toBe(
+      '{"projectName":"updated"}'
+    )
   })
 
   it('does not create files during queries on legacy projects or prepared journals', async () => {
