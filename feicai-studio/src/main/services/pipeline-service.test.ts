@@ -39,6 +39,7 @@ import {
 import {
   acquireExecutionLease,
   getExecutionLease,
+  getExecutionStatus,
   releaseExecutionLease
 } from './batch-execution-lease'
 
@@ -494,7 +495,17 @@ describe('pipeline runtime admission and settling', () => {
       .spyOn(idle, 'getContext')
       .mockReturnValue(idleContext)
     const workflow = listPipelineTasks()[0]!
+    const lease = getExecutionLease()
     try {
+      for (let query = 0; query < 3; query++) {
+        expect(getExecutionStatus()).toEqual({
+          busy: true,
+          phase: 'running',
+          owner: 'workflow'
+        })
+      }
+      expect(getExecutionLease()).toBe(lease)
+      expect(listPipelineTasks()[0]).toEqual(workflow)
       expect(workflow).toMatchObject({
         kind: 'workflow',
         status: 'running',
@@ -506,6 +517,7 @@ describe('pipeline runtime admission and settling', () => {
     } finally {
       gate.resolve({ success: true })
       await execution
+      expect(getExecutionStatus()).toEqual({ busy: false, phase: 'idle' })
     }
   })
 

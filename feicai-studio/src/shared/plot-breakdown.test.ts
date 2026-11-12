@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { buildDefaultPlotBreakdownTemplate } from './project-bootstrap'
 import {
   appendPlotBreakdownBatch,
   extractPlotBreakdownEntries,
@@ -14,6 +15,70 @@ import {
 } from './plot-breakdown'
 
 describe('plot-breakdown', () => {
+  it.each([false, true])(
+    'updates bootstrap planning without retaining old metadata (legacy duplicates=%s)',
+    (duplicates) => {
+      let original = buildDefaultPlotBreakdownTemplate({
+        projectName: '设置前',
+        totalEpisodes: 2,
+        chaptersPerEpisode: 3
+      }).replace(
+        '## 剧情列表',
+        '- 自定义说明：目标集数待人工确认，范围与章节原则见正文\n\n## 剧情列表'
+      )
+      if (duplicates) {
+        original = original.replace(
+          '## 改编规划',
+          '## 改编规划\n- **范围**：第1-8章\n- **目标集数**：8 集\n- **章节-集数分配原则**：1章/集'
+        )
+      }
+      original +=
+        '\n### 第1批（第1-6章）\n\n【剧情1】院子，主角救人，反转，第1集，状态：已用\n'
+      const before = parsePlotBreakdownMarkdown(original)
+      let next = updatePlotBreakdownPlanning(original, {
+        projectName: '设置后',
+        totalEpisodes: 4,
+        chaptersPerEpisode: 5
+      })
+      for (const params of [
+        { totalEpisodes: 4, chaptersPerEpisode: 5 },
+        { totalEpisodes: 6, chaptersPerEpisode: 7 },
+        { totalEpisodes: 4, chaptersPerEpisode: 5 }
+      ]) {
+        next = updatePlotBreakdownPlanning(next, params)
+        const parsed = parsePlotBreakdownMarkdown(next)
+        expect(parsed.range).toBe(
+          `第1-${params.totalEpisodes * params.chaptersPerEpisode}章`
+        )
+        expect(parsed.targetEpisodes).toBe(`${params.totalEpisodes} 集`)
+        expect(parsed.chaptersPerEpisode).toBe(
+          `${params.chaptersPerEpisode}章/集`
+        )
+        expect(parsed.batches).toEqual(before.batches)
+        for (const field of ['范围', '目标集数', '章节-集数分配原则']) {
+          expect(next.split(`- **${field}**：`)).toHaveLength(2)
+        }
+        expect(parsed.planningLines).toContain(
+          '- 自定义说明：目标集数待人工确认，范围与章节原则见正文'
+        )
+        expect(next).toContain('- **单集规格**：1500-2000字')
+        expect(next).toContain('- **分段规划**：第1-10集对应第1-40章')
+      }
+      expect(parsePlotBreakdownMarkdown(next)).toMatchObject({
+        projectName: '设置后',
+        range: '第1-20章',
+        targetEpisodes: '4 集',
+        chaptersPerEpisode: '5章/集'
+      })
+      expect(
+        updatePlotBreakdownPlanning(next, {
+          totalEpisodes: 4,
+          chaptersPerEpisode: 5
+        })
+      ).toBe(next)
+    }
+  )
+
   it('可以解析旧版剧情点库存格式', () => {
     const doc = parsePlotBreakdownMarkdown(`# 剧情拆解
 

@@ -159,7 +159,10 @@ export function parsePlotBreakdownMarkdown(raw: string): PlotBreakdownDocument {
     }
 
     if (section === 'planning') {
-      if (trimmed) planningLines.push(line)
+      // These fields serialize from their structured values. Keeping their old
+      // lines here would override updated settings when the document is reread.
+      if (trimmed && !rangeMatch && !targetMatch && !chaptersMatch)
+        planningLines.push(line)
       continue
     }
 

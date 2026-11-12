@@ -201,6 +201,58 @@ describe('durable main-owned batch queue', () => {
     expect(state.cursor).toBe(2)
   })
 
+  it.each([true, false])(
+    'resumes a directed interrupted queue without replaying receipts (initialized=%s)',
+    async (initialized) => {
+      storage.files.set(
+        '/queue.json',
+        JSON.stringify({
+          id: 'restart-target',
+          projectId: 'p',
+          projectPath: '/project',
+          mode: 'preproduction',
+          status: 'running',
+          cursor: 0,
+          updatedAt: 'before-restart',
+          tasks: [
+            {
+              episodeNum: 1,
+              status: 'running',
+              steps: {
+                '0:runScriptGeneration': { success: true, stage: 'script' }
+              }
+            }
+          ]
+        })
+      )
+      const { queue, deps, completed } = fixture()
+      if (initialized) await queue.initialize()
+      const before = storage.files.get('/queue.json')
+      const owner = acquireExecutionLease('workflow')
+      try {
+        await expect(queue.resume('restart-target')).rejects.toThrow('请等待')
+        expect(storage.files.get('/queue.json')).toBe(before)
+        expect(deps.workflow).not.toHaveBeenCalled()
+        expect(getExecutionLease()).toBe(owner)
+      } finally {
+        releaseExecutionLease(owner)
+      }
+      await expect(queue.resume('stale-target')).rejects.toThrow('目标已失效')
+      expect(queue.snapshot()?.status).toBe('interrupted')
+      expect(deps.workflow).not.toHaveBeenCalled()
+      expect(getExecutionLease()).toBeNull()
+      const generation = queue.snapshot()?.tasks[0].steps
+      await queue.resume('restart-target')
+      expect((await completed.promise).status).toBe('completed')
+      expect(
+        vi.mocked(deps.workflow).mock.calls.map(([action]) => action)
+      ).toEqual(['runScriptReview'])
+      expect(queue.snapshot()?.tasks[0].steps).toMatchObject(generation!)
+      await vi.waitFor(() => expect(getExecutionLease()).toBeNull())
+      await expect(queue.resume('restart-target')).rejects.toThrow('目标已失效')
+    }
+  )
+
   it('releases admission after initialization failure', async () => {
     const { queue, completed } = fixture()
     storage.fail = true
