@@ -213,6 +213,156 @@ describe.each(['openai-compatible', 'anthropic', 'google'] as const)(
   }
 )
 
+describe.each(['openai', 'openai-compatible', 'anthropic', 'google'] as const)(
+  '%s effective parameter validation',
+  (provider) => {
+    describe.each([false, true])('streaming=%s', (streaming) => {
+      async function invoke(f: ReturnType<typeof fixture>) {
+        const adapter = f.create()
+        if (!streaming) return adapter.generate(f.request)
+        const events = []
+        for await (const event of adapter.generateStream(f.request))
+          events.push(event)
+        return events
+      }
+      function sentParameters() {
+        const body = JSON.parse(fetchMock.mock.calls.at(-1)![1].body)
+        return provider === 'google'
+          ? {
+              maxTokens: body.generationConfig.maxOutputTokens,
+              temperature: body.generationConfig.temperature
+            }
+          : { maxTokens: body.max_tokens, temperature: body.temperature }
+      }
+      it.each([
+        'exceeded output limit',
+        'unknown output limit',
+        'undeclared maxTokens',
+        'maxTokens schema range'
+      ])(
+        'rejects implicit config maxTokens for %s before network access',
+        async (boundary) => {
+          const f = fixture(provider)
+          const capability = f.model.capabilities[0]
+          if (boundary === 'exceeded output limit') f.config.maxTokens = 50000
+          if (boundary === 'unknown output limit')
+            delete capability.limits.maxOutputTokens
+          if (boundary === 'undeclared maxTokens')
+            delete capability.parameters.maxTokens
+          if (boundary === 'maxTokens schema range')
+            capability.parameters.maxTokens.maximum = 100
+          await expect(invoke(f)).rejects.toThrow(/maxOutputTokens|maxTokens/)
+          expect(fetchMock).not.toHaveBeenCalled()
+        }
+      )
+      it('rejects the implicit library maxTokens default when it exceeds the output limit', async () => {
+        const f = fixture(provider, {
+          maxTokens: undefined,
+          temperature: undefined
+        })
+        await expect(invoke(f)).rejects.toThrow('maxOutputTokens')
+        expect(fetchMock).not.toHaveBeenCalled()
+      })
+      it('also validates the implicit library maxTokens default against its parameter schema', async () => {
+        const f = fixture(provider, {
+          maxTokens: undefined,
+          temperature: undefined
+        })
+        f.model.capabilities[0].limits.maxOutputTokens = 10000
+        f.model.capabilities[0].parameters.maxTokens.maximum = 5000
+        await expect(invoke(f)).rejects.toThrow('parameters.maxTokens')
+        expect(fetchMock).not.toHaveBeenCalled()
+      })
+      if (provider !== 'openai-compatible') {
+        it.each(['out of range', 'undeclared'])(
+          'rejects implicit config temperature when %s before network access',
+          async (boundary) => {
+            const f = fixture(provider, { temperature: 5 })
+            if (boundary === 'undeclared')
+              delete f.model.capabilities[0].parameters.temperature
+            await expect(invoke(f)).rejects.toThrow('parameters.temperature')
+            expect(fetchMock).not.toHaveBeenCalled()
+          }
+        )
+        it('validates the implicit library temperature default before network access', async () => {
+          const f = fixture(provider, { temperature: undefined })
+          f.model.capabilities[0].parameters.temperature.maximum = 0.5
+          await expect(invoke(f)).rejects.toThrow('parameters.temperature')
+          expect(fetchMock).not.toHaveBeenCalled()
+        })
+      } else {
+        it('preserves omitted temperature even if the unused config value is out of range and undeclared', async () => {
+          const f = fixture(provider, { temperature: 5 })
+          delete f.model.capabilities[0].parameters.temperature
+          fetchMock.mockResolvedValue(json(payload(provider)))
+          await invoke(f)
+          expect(sentParameters()).toEqual({
+            maxTokens: 123,
+            temperature: undefined
+          })
+          expect(
+            JSON.parse(fetchMock.mock.calls[0][1].body)
+          ).not.toHaveProperty('temperature')
+        })
+      }
+      it.each(['binding', 'request'])(
+        'uses valid %s overrides over invalid config, preserving temperature zero',
+        async (source) => {
+          const f = fixture(provider, { maxTokens: 50000, temperature: 5 })
+          f.binding.parameters =
+            source === 'binding'
+              ? { maxTokens: 50, temperature: 0 }
+              : { maxTokens: 75, temperature: 0.4 }
+          if (source === 'request')
+            f.request.envelope.parameters = { maxTokens: 50, temperature: 0 }
+          fetchMock.mockResolvedValue(json(payload(provider)))
+          await invoke(f)
+          expect(sentParameters()).toEqual({ maxTokens: 50, temperature: 0 })
+          expect(fetchMock).toHaveBeenCalledOnce()
+        }
+      )
+      it.each(['config', 'library'])(
+        'preserves the legacy wire body with valid implicit %s defaults',
+        async (source) => {
+          const f =
+            source === 'config'
+              ? fixture(provider)
+              : fixture(provider, {
+                  maxTokens: undefined,
+                  temperature: undefined
+                })
+          if (source === 'library') {
+            f.model.capabilities[0].limits.maxOutputTokens = 10000
+            f.model.capabilities[0].parameters.maxTokens.maximum = 10000
+          }
+          fetchMock.mockImplementation(() =>
+            Promise.resolve(json(payload(provider)))
+          )
+          const legacy = createProvider(f.config)
+          if (streaming) {
+            const chunks = []
+            for await (const chunk of legacy.generateStream(f.request.prompt))
+              chunks.push(chunk)
+            expect(chunks).toEqual(['OK'])
+          } else expect(await legacy.generate(f.request.prompt)).toBe('OK')
+          const legacyBody = fetchMock.mock.calls[0][1].body
+          await invoke(f)
+          expect(fetchMock.mock.calls[1][1].body).toBe(legacyBody)
+          expect(sentParameters()).toEqual({
+            maxTokens: source === 'config' ? 123 : 8192,
+            temperature:
+              provider === 'openai-compatible'
+                ? undefined
+                : source === 'config'
+                  ? 0.2
+                  : 0.7
+          })
+        }
+      )
+    })
+  }
+)
+
 describe('bridge capability and result boundaries', () => {
   it('validates exact model, evidence, endpoint revision and capability before network access', () => {
     const f = fixture()
@@ -253,6 +403,8 @@ describe('bridge capability and result boundaries', () => {
     const f = fixture()
     const provider = f.create()
     f.config.model = 'changed'
+    f.config.maxTokens = 50000
+    f.config.temperature = 5
     f.binding.parameters = { temperature: 0.9 }
     await expect(provider.generate(f.request)).rejects.toThrow(
       'request.binding'

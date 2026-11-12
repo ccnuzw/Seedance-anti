@@ -40,7 +40,7 @@ export function createTextCapabilityProvider(
   model: ModelDescriptor,
   binding: StageModelBinding
 ): TextGenerationProvider {
-  const snapshot = { ...config }
+  const snapshot = Object.freeze({ ...config })
   return new LegacyTextCapabilityAdapter(
     createProvider(snapshot),
     snapshot,

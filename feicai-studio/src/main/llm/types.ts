@@ -39,6 +39,29 @@ export interface ILLMProvider {
   }>
 }
 
+/** Shared legacy precedence. Keep defaults here so the bridge validates the same values. */
+export function resolveGenerationParameters(
+  config: Pick<LLMConfig, 'maxTokens' | 'temperature'>,
+  options?: Pick<GenerateOptions, 'maxTokens' | 'temperature'>
+): { maxTokens: number; temperature: number } {
+  return {
+    maxTokens: options?.maxTokens ?? config.maxTokens ?? 8192,
+    temperature: options?.temperature ?? config.temperature ?? 0.7
+  }
+}
+
+/** Compatible OpenAI endpoints historically omit temperature unless explicitly requested. */
+export function resolveTextWireParameters(
+  config: Pick<LLMConfig, 'provider' | 'maxTokens' | 'temperature'>,
+  options?: Pick<GenerateOptions, 'maxTokens' | 'temperature'>
+): { maxTokens: number; temperature?: number } {
+  const effective = resolveGenerationParameters(config, options)
+  return config.provider === 'openai-compatible' &&
+    options?.temperature === undefined
+    ? { maxTokens: effective.maxTokens }
+    : effective
+}
+
 /**
  * Provider 通用基类
  */
@@ -94,10 +117,10 @@ export abstract class BaseLLMProvider implements ILLMProvider {
   }
 
   protected getMaxTokens(options?: GenerateOptions): number {
-    return options?.maxTokens ?? this.config.maxTokens ?? 8192
+    return resolveGenerationParameters(this.config, options).maxTokens
   }
 
   protected getTemperature(options?: GenerateOptions): number {
-    return options?.temperature ?? this.config.temperature ?? 0.7
+    return resolveGenerationParameters(this.config, options).temperature
   }
 }

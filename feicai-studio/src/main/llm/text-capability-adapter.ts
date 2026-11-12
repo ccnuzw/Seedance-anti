@@ -13,7 +13,7 @@ import {
   type TextGenerationRequest,
   type TextGenerationResult
 } from '@shared/provider-capabilities'
-import type { ILLMProvider } from './types'
+import { resolveTextWireParameters, type ILLMProvider } from './types'
 import { endpointIdentity, LLMRequestError } from './endpoint-security'
 import {
   TEXT_METADATA,
@@ -57,12 +57,14 @@ export interface TextGenerationProvider {
 export class LegacyTextCapabilityAdapter implements TextGenerationProvider {
   private readonly model: ModelDescriptor
   private readonly binding: StageModelBinding
+  private readonly config: Readonly<LLMConfig>
   constructor(
     private readonly legacy: ILLMProvider,
     config: LLMConfig,
     model: ModelDescriptor,
     binding: StageModelBinding
   ) {
+    this.config = Object.freeze({ ...config })
     this.model = parseModelDescriptor(model)
     this.binding = parseStageModelBinding(binding)
     const connection = capabilityConnectionReference(config)
@@ -106,23 +108,23 @@ export class LegacyTextCapabilityAdapter implements TextGenerationProvider {
       typeof request.prompt.user !== 'string'
     )
       throw new ProviderContractError('request.prompt')
-    const parameters = { ...binding.parameters, ...envelope.parameters }
-    for (const key of Object.keys(parameters)) {
+    const overrides = { ...binding.parameters, ...envelope.parameters }
+    for (const key of Object.keys(overrides)) {
       if (!['maxTokens', 'temperature'].includes(key))
         throw new ProviderContractError(`text.parameters.${key}.unimplemented`)
     }
+    const parameters = resolveTextWireParameters(
+      this.config,
+      overrides as Pick<TextMetadataOptions, 'maxTokens' | 'temperature'>
+    )
     const entry = requireModelCapability(this.model, binding, {
       streaming,
       cancellation: request.signal !== undefined,
-      limits:
-        parameters.maxTokens === undefined
-          ? {}
-          : { maxOutputTokens: parameters.maxTokens as number }
+      limits: { maxOutputTokens: parameters.maxTokens }
     })
     validateCapabilityParameters(entry, parameters)
     return {
-      maxTokens: parameters.maxTokens as number | undefined,
-      temperature: parameters.temperature as number | undefined,
+      ...parameters,
       timeoutMs: envelope.timeoutMs,
       signal: request.signal
     }
