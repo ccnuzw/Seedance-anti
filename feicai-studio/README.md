@@ -102,11 +102,13 @@ docs           架构说明与测试矩阵
 - 新增协议或工作流阶段时，优先修改 `src/shared`
 - 涉及 IPC、状态机、路径权限时，必须补对应测试
 
-## 本轮验收（2026-11-12）
+## M1/T11 集成验收（2026-11-12）
 
-79 个测试文件、614 项测试通过，五项工程检查通过（类型检查使用 `--force`）。三入口在临时项目、真实 SQLite 与受控 provider 下执行到下游及导出，验证发布后审核有效、素材/角色变更阻断导出及租约释放。Node 集成测试替换 Electron IPC 外壳和 SQLite 驱动接口，不代表桌面全流程验收。
+在已合并的 F01 Provider、F02 Skill、T02 production-contracts、T01 分集矩阵上重新执行验收。98 个测试文件、1071 项测试通过；`lint`、`format:check`、`typecheck -- --force`、`npm test`、`test:coverage`、`build` 均通过。新增 `src/main/services/m1-foundation-integration.test.ts` 共 18 项测试，将真实内置 Skill、旧 PromptAssembler、受控 Provider wire 请求、旧素材文件及独立版本合同组合验证。
 
-现有 Electron 42.11.18 / 原生 SQLite 环境另通过 7 项迁移回归，以及临时 userData 的旧库升级、生产构建页面加载、真实 preload/IPC、第二实例退出和正常关闭冒烟。可在已安装且原生模块匹配的环境执行 `npm run build && node scripts/electron-migration-smoke.mjs`；脚本只用临时数据，不安装/重建依赖。覆盖率分母、详细证据和未验证项见[测试矩阵](docs/testing-matrix.md#本轮集成验收2026-11-12)。未调用真实模型，未做完整桌面制作操作、签名或发布验收。
+新合同 API、Provider 能力桥接与 Skill 包加载器尚未接入生产配置、PromptAssembler 或媒体生成消费者。生产文本链仍兼容；分集矩阵只读展示文件及审核状态，不生成图片或视频，也不启用并行执行。测试中的显式组合不代表这些 API 已上线到生产链。
+
+`scripts/m1-dom-smoke.mjs` 在真实 Electron renderer 中验证矩阵、项目隔离及既有页面路由，35 项显式断言通过；其 `feicaiAPI` 是合成实现。`scripts/electron-migration-smoke.mjs` 另使用生产构建和临时 userData 验证真实 preload/IPC、旧库迁移、单实例及退出。两者边界、覆盖率分母与复跑方法见[测试矩阵](docs/testing-matrix.md#m1t11-集成验收2026-11-12)。未调用真实模型，未做完整桌面制作、签名或发布验收。
 
 ## 文档入口
 
