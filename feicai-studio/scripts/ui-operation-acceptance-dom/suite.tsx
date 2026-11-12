@@ -10,6 +10,7 @@ import Source from '@renderer/pages/SourceEditorPage'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useTaskCenterStore } from '@renderer/stores/taskCenterStore'
 import { useBatchStore } from '@renderer/stores/batchStore'
+import { useToastStore } from '@renderer/stores/toastStore'
 import '@renderer/styles/theme.css'
 import '@renderer/styles/global.css'
 const w = window as any
@@ -288,16 +289,54 @@ async function main() {
     }),
     '390px 保存成功与摘要警告通知完整显示且关闭按钮不被裁切'
   )
+  const savedNotifications = useToastStore
+    .getState()
+    .toasts.map((toast) => toast.id)
+  const bothNotificationsRemain = () =>
+    savedNotifications.length === 2 &&
+    savedNotifications.every((id) =>
+      useToastStore
+        .getState()
+        .toasts.some(
+          (toast) =>
+            toast.id === id && !toast.exiting && toast.duration === 4000
+        )
+    )
+  assert(
+    bothNotificationsRemain(),
+    '保存成功与摘要失败保留两条原始通知及默认4000ms时长'
+  )
+  const contentRect = document
+    .querySelector('.app-content')!
+    .getBoundingClientRect()
+  const notificationsRect = document
+    .querySelector('.toast-container')!
+    .getBoundingClientRect()
+  assert(
+    contentRect.bottom <= notificationsRect.top + 1,
+    '390px 双通知占用独立布局空间，不覆盖页面滚动内容'
+  )
   await w.testCapture('project-settings-refresh-warning-390')
   await w.testResize(1360)
   await reachable(button('💾 保存')!, '桌面项目设置保存操作可聚焦且可点击')
+  assert(
+    getComputedStyle(document.querySelector('.toast-container')!).position ===
+      'fixed' && bothNotificationsRemain(),
+    '桌面双通知保留原固定布局和警告正文'
+  )
   await w.testCapture('project-settings-refresh-warning-desktop')
-  for (const close of document.querySelectorAll<HTMLButtonElement>(
-    '.toast-close'
-  ))
-    close.click()
-  await until(() => !document.querySelector('.toast-container'))
-  assert(true, '保存通知可关闭，解除窄屏底部操作的临时遮挡')
+  await click('任务中心')
+  await reachable(
+    button('关闭')!,
+    '桌面双通知存在时任务抽屉关闭按钮可聚焦并命中'
+  )
+  await w.testCapture('task-dialog-with-notifications-desktop')
+  await w.testKeys('Escape')
+  await until(() => !document.querySelector('dialog')!.open)
+  assert(
+    document.activeElement?.textContent?.includes('任务中心'),
+    '桌面双通知存在时 Escape 关闭抽屉并归还焦点'
+  )
   f.failSummary = false
   f.files['/synthetic/b/story/episode-beats/ep01.md'] =
     '<!-- feicai-story-batch:7 -->\n待审草稿'
@@ -319,9 +358,38 @@ async function main() {
     button('前往准备剧情草稿')!,
     '390px小说原文前往草稿操作可聚焦且可点击'
   )
+  assert(
+    bothNotificationsRemain(),
+    '导航原文页时两条原始通知仍存在，未提前关闭或等待自动消失'
+  )
+  const sourceAction = button('前往准备剧情草稿')!
+  const sourceRect = sourceAction.getBoundingClientRect()
+  assert(
+    sourceRect.bottom <=
+      document.querySelector('.app-content')!.getBoundingClientRect().bottom +
+        1,
+    '原文主要动作正常滚动后位于双通知上方的内容视口'
+  )
+  await w.testCapture('source-dual-notifications-390')
   await w.testCapture('source-390')
-  await click('前往准备剧情草稿')
+  await w.testClick(
+    sourceRect.left + sourceRect.width / 2,
+    sourceRect.top + sourceRect.height / 2
+  )
   await until(() => router.state.location.pathname.endsWith('/story'))
+  assert(
+    bothNotificationsRemain(),
+    '双通知仍在时原文主动作通过真实指针命中并实际导航剧情页'
+  )
+  const warningClose = document.querySelector<HTMLButtonElement>(
+    '.toast-warning .toast-close'
+  )!
+  await reachable(warningClose, '390px 警告通知关闭按钮可键盘聚焦并命中')
+  await w.testKeys('Enter')
+  await until(() =>
+    document.querySelector('.toast-warning')?.classList.contains('toast-exit')
+  )
+  assert(true, '警告通知保留关闭操作并可通过键盘 Enter 关闭')
   assert(true, '真实原文页主要动作接到剧情页路由')
   f.reviewStatus = 'passed'
   f.ready = [1]

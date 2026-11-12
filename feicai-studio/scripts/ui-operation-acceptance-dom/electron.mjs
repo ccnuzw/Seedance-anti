@@ -85,6 +85,28 @@ app
         })
       window.webContents.sendInputEvent({ type: 'keyUp', keyCode: key })
     })
+    ipcMain.handle('click', (_event, x, y) => {
+      const [width, height] = window.getContentSize()
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 0 ||
+        y < 0 ||
+        x >= width ||
+        y >= height
+      )
+        throw new Error('Pointer outside test viewport')
+      window.focus()
+      window.webContents.focus()
+      const point = {
+        x: Math.round(x),
+        y: Math.round(y),
+        button: 'left',
+        clickCount: 1
+      }
+      window.webContents.sendInputEvent({ ...point, type: 'mouseDown' })
+      window.webContents.sendInputEvent({ ...point, type: 'mouseUp' })
+    })
     ipcMain.handle('resize', async (_event, width) => {
       if (![390, 1360].includes(width)) throw new Error('Unsupported viewport')
       window.setContentSize(width, 940)

@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('testCapture', (name) =>
 contextBridge.exposeInMainWorld('testKeys', (key) =>
   ipcRenderer.invoke('keys', key)
 )
+contextBridge.exposeInMainWorld('testClick', (x, y) =>
+  ipcRenderer.invoke('click', x, y)
+)
 contextBridge.exposeInMainWorld('testResize', (width) =>
   ipcRenderer.invoke('resize', width)
 )

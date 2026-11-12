@@ -19,9 +19,9 @@ export default function AppShell() {
             <div className="app-content">
               <Outlet />
             </div>
+            <ToastContainer />
           </div>
         </div>
-        <ToastContainer />
       </>
     </DevProfiler>
   )

@@ -42,6 +42,9 @@ const formatFiles = [
   'src/renderer/components/project/ProjectPipelineSettingsPanel.tsx',
   'src/renderer/pages/StoryBeatEditorPage.tsx',
   'src/renderer/pages/BatchPage.tsx',
+  'src/renderer/components/layout/AppShell.tsx',
+  'src/renderer/components/layout/ToastContainer.tsx',
+  'src/renderer/components/layout/ToastContainer.css',
   'src/renderer/stores/batchStore.ts',
   'src/renderer/stores/batchStore.test.ts',
   'docs/ui-operation-acceptance.md'

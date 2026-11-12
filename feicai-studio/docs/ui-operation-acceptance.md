@@ -25,9 +25,11 @@ make -f scripts/ui-operation-acceptance.Makefile verify
 
 补充中断队列定向恢复验收：真实批量页将原 queue ID 传给 `resumeBatch`，跨项目任务中心的来源链接返回原项目核对；后台查询失败或队列读取失败时禁用恢复，提交未结算时禁用重复请求。已停止的未完成队列不再显示无效的恢复入口；任务中心同样不显示继续。renderer store 的暂停、继续、停止均携带已观察队列 ID，缺少身份时拒绝控制。新增 12 条 DOM 断言、3 张截图与 2 项 store 回归；不修改 main，fixture 恢复成功不代表已验证真实后端新租约。
 
-390px 体验限制：多条底部通知可暂时遮挡页面底部操作，关闭通知后主操作可达；动画完成后通知文本与关闭按钮未横向裁切。实际关闭通知并验证后续原文主操作的命中。诊断截图 `diagnostics/transient-toast-overlay-390.png` 另存，未把此临时遮挡宣称为已消除。
+390px 通知遮挡已修复：通知进入 AppShell 主内容下方的独立布局区域，占用真实高度；内容区可正常滚动，通知较多时通知区域自身滚动。正文、关闭按钮及默认 4000ms 时长均保留，桌面仍采用原固定布局。真实设置保存产生成功与摘要失败两条原始通知后，不清空、不提前关闭、不等待自动消失，直接导航 Source；正常滚动后通过 Electron 指针点击主动作，确认实际进入剧情页，点击前后两条通知仍在。随后验证警告关闭按钮可聚焦并通过键盘 Enter 关闭，桌面任务抽屉命中与 Escape 归还焦点均通过。
 
-本轮结果：五个 suite 全部通过，共 **171 条 DOM 断言、33 张 PNG**；renderer **37 个文件、183 项测试通过**；`tsc --build --noEmit --force`、全仓 ESLint、改动文件 Prettier、`git diff --check` 全部通过。
+修前证据保留于 `diagnostics/transient-toast-overlay-390.png` 与 `diagnostics/transient-toast-overlay.json`；修后见 `operations/source-dual-notifications-390.png`、`operations/project-settings-refresh-warning-390.png` 和 `operations/task-dialog-with-notifications-desktop.png`。
+
+本轮结果：五个 suite 全部通过，共 **180 条 DOM 断言、35 张 PNG**；renderer **37 个文件、183 项测试通过**；`tsc --build --noEmit --force`、全仓 ESLint、改动文件 Prettier、`git diff --check` 全部通过。
 
 | Suite                          | DOM 断言 | 截图 |
 | ------------------------------ | -------: | ---: |
@@ -35,7 +37,7 @@ make -f scripts/ui-operation-acceptance.Makefile verify
 | task-center                    |       21 |    3 |
 | novel-draft                    |       32 |    2 |
 | novel-production               |       31 |    2 |
-| operations（本轮真实路由场景） |       52 |   15 |
+| operations（本轮真实路由场景） |       61 |   17 |
 
 截图经实际读取复核，包括390px抽屉、批量主按钮、设置通知与下一批操作；原始断言和全部截图索引见 `/tmp/feicai-ui-operation-acceptance-task-3/report.json` 与 `gallery.html`。
 
