@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   acquireExecutionLease,
   getExecutionLease,
+  getExecutionStatus,
   releaseExecutionLease,
   shutdownExecution,
   withExecutionLease
@@ -17,6 +18,20 @@ describe('global execution ownership', () => {
     expect(second.runId).not.toBe(first.runId)
     expect(() => acquireExecutionLease('stale-child', first)).toThrow('失效')
     releaseExecutionLease(second)
+  })
+  it('reports only safe lease state while retaining global mutual exclusion', () => {
+    expect(getExecutionStatus()).toEqual({ busy: false, phase: 'idle' })
+    const lease = acquireExecutionLease('workflow')
+    expect(getExecutionStatus()).toMatchObject({
+      busy: true,
+      phase: 'running',
+      owner: 'workflow'
+    })
+    lease.pause()
+    expect(getExecutionStatus().phase).toBe('paused')
+    lease.abort()
+    expect(getExecutionStatus().phase).toBe('stopping')
+    releaseExecutionLease(lease)
   })
   it('pause suspends the coroutine until resume without releasing ownership', async () => {
     const lease = acquireExecutionLease('batch')

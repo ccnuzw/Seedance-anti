@@ -1,6 +1,11 @@
 import type { AutomatedPipelineStage } from '@shared/types'
-import type { PipelineControlTarget } from '@shared/pipeline-task'
+import type {
+  PipelineControlTarget,
+  PipelineTaskControl,
+  PipelineTaskSnapshot
+} from '@shared/pipeline-task'
 import type { PipelineStartParams } from './workflow-actions'
+import type { ExecutionStatus } from '@shared/ipc-contracts'
 import type {
   ServicePipelineContext,
   ServicePipelineStartResult
@@ -61,6 +66,20 @@ export async function skipPipeline(
       ? window.feicaiAPI.skipPipeline({ target })
       : window.feicaiAPI.skipPipeline())
   )
+}
+
+export async function getExecutionStatus(): Promise<ExecutionStatus> {
+  return await window.feicaiAPI.getExecutionStatus()
+}
+
+export async function listPipelineTasks(): Promise<PipelineTaskSnapshot[]> {
+  return await window.feicaiAPI.listPipelineTasks()
+}
+
+export async function controlPipelineTask(
+  request: PipelineTaskControl
+): Promise<void> {
+  assertControlResult(await window.feicaiAPI.controlPipelineTask(request))
 }
 
 export async function getPipelineState(): Promise<ServicePipelineContext> {

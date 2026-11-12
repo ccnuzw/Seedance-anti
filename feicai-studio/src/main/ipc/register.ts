@@ -52,7 +52,10 @@ import {
 } from '../security/access-control'
 import { registerSafeIpcHandler as handle } from '../security/safe-ipc'
 import { registerMutationHandler as mutate } from './mutation-handler'
-import { withExecutionLease } from '../services/batch-execution-lease'
+import {
+  withExecutionLease,
+  getExecutionStatus
+} from '../services/batch-execution-lease'
 import {
   assertAllowedKeys,
   assertLLMConfig,
@@ -136,6 +139,7 @@ async function inspectProject(root: string) {
 
 export function registerAllHandlers(): void {
   registerPipelineHandlers()
+  handle(IPC.EXECUTION_GET_STATUS, async () => getExecutionStatus())
   registerAssetHandlers()
   registerExportHandlers()
 

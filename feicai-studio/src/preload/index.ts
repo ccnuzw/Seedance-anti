@@ -68,6 +68,7 @@ const api: FeicaiAPI = {
   selectDirectory: () => invoke(IPC.FILE_SELECT_DIR),
   selectFile: (filters) => invoke(IPC.FILE_SELECT_FILE, filters),
 
+  getExecutionStatus: () => invoke(IPC.EXECUTION_GET_STATUS),
   startPipeline: (params) => invoke(IPC.PIPELINE_START, params),
   runPipelineAndWait: (params) => invoke(IPC.PIPELINE_RUN_AND_WAIT, params),
   pausePipeline: (target) =>
