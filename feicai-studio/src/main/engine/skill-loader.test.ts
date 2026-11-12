@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
@@ -103,6 +103,30 @@ describe('SkillLoader', () => {
       }
     } finally {
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('拒绝技能名称越界和符号链接逃逸，同时保留旧缓存与显式reload行为', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'feicai-skill-boundary-'))
+    const outside = await mkdtemp(join(tmpdir(), 'feicai-skill-outside-'))
+    try {
+      await mkdir(join(root, 'review'))
+      await writeFile(join(root, 'review/SKILL.md'), '# Original')
+      const loader = new SkillLoader(root)
+      const original = await loader.load('review')
+      await writeFile(join(root, 'review/SKILL.md'), '# Updated')
+      expect(await loader.load('review')).toBe(original)
+      expect((await loader.reload('review')).systemPrompt).toBe('# Updated')
+      for (const name of ['../review', '/review', '.', '..', 'a\\\\review'])
+        await expect(loader.load(name)).rejects.toThrow('Invalid Skill name')
+      await writeFile(join(outside, 'rules.md'), '# Outside')
+      await symlink(join(outside, 'rules.md'), join(root, 'review/rules.md'))
+      await expect(loader.reload('review')).rejects.toThrow('symlink escapes')
+      await symlink(outside, join(root, 'escaped'))
+      await expect(loader.load('escaped')).rejects.toThrow('symlink escapes')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
     }
   })
 

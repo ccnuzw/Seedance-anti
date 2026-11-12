@@ -1,11 +1,14 @@
-// ============================================================
-// Skill Loader — 加载和解析 FEICAI Skill 文件
-// ============================================================
-
-import { readFile, readdir, stat } from 'fs/promises'
-import { join, basename, resolve, relative, isAbsolute } from 'path'
+// Legacy builtin adapter. Versioned consumers use SkillPackageLoader; old callers
+// retain their cache and Skill shape without changing prompt assembly.
+import { readdir } from 'fs/promises'
+import { join, basename, dirname, relative, resolve, isAbsolute } from 'path'
 import { parse as parseYaml } from 'yaml'
 import type { Skill } from '@shared/types'
+import {
+  listSkillFiles,
+  readSkillText,
+  resolveSkillPath
+} from './skill-package-files'
 
 function parseSkillDocument(raw: string): {
   data: Record<string, unknown>
@@ -16,224 +19,172 @@ function parseSkillDocument(raw: string): {
   const match = normalized.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)
   if (!match) throw new Error('Skill YAML 前置元数据缺少结束标记')
   const data: unknown = parseYaml(match[1])
-  if (data !== null && (typeof data !== 'object' || Array.isArray(data))) {
+  if (data !== null && (typeof data !== 'object' || Array.isArray(data)))
     throw new Error('Skill YAML 前置元数据必须是对象')
-  }
   return {
     data: (data ?? {}) as Record<string, unknown>,
     content: normalized.slice(match[0].length)
   }
 }
 
+export interface LegacySkillCapture {
+  skill: Skill
+  /** Root-relative paths, including actual cross-package dependency contents. */
+  resources: Array<{ path: string; content: string }>
+}
+
 export class SkillLoader {
-  private skillsDir: string
-  private cache: Map<string, Skill> = new Map()
+  private cache = new Map<string, Skill>()
+  constructor(private skillsDir: string) {}
 
-  constructor(skillsDir: string) {
-    this.skillsDir = skillsDir
-  }
-
-  /**
-   * 加载一个 Skill（带缓存）
-   */
   async load(skillName: string): Promise<Skill> {
     const cached = this.cache.get(skillName)
     if (cached) return cached
-
-    const skillDir = join(this.skillsDir, skillName)
-    const skillMdPath = join(skillDir, 'SKILL.md')
-
-    // 读取并解析 SKILL.md
-    const raw = await readFile(skillMdPath, 'utf-8')
-    const { data: frontmatter, content: body } = parseSkillDocument(raw)
-
-    // 加载子目录和附加文件
-    const templates = await this.loadSubDir(join(skillDir, 'templates'))
-    const examples = await this.loadSubDir(join(skillDir, 'examples'))
-
-    // 加载根目录下的可选方法论和指南文件。旧版 webtoon-skill
-    // 使用 adapt-method.md / output-style.md，这里保持通用加载。
-    const rootSupportingFiles = await this.loadRootSupportingFiles(skillDir)
-
-    // 扫描所有文件
-    const fileManifest = await this.listAllFiles(skillDir)
-    const dependencies = frontmatter.dependencies ?? []
-    if (
-      !Array.isArray(dependencies) ||
-      dependencies.some(
-        (file) => typeof file !== 'string' || !file.endsWith('.md')
-      )
-    ) {
-      throw new Error(
-        `Skill ${skillName} 的 dependencies 必须是 Markdown 路径数组`
-      )
-    }
-    const dependencyParts: string[] = []
-    for (const dependency of dependencies as string[]) {
-      const dependencyPath = resolve(skillDir, dependency)
-      const fromRoot = relative(resolve(this.skillsDir), dependencyPath)
-      if (
-        fromRoot === '..' ||
-        fromRoot.startsWith('../') ||
-        isAbsolute(fromRoot)
-      ) {
-        throw new Error(`Skill ${skillName} 引用了技能目录之外的依赖`)
-      }
-      // 显式依赖缺失或不可读是配置错误，不能静默省略审核依据。
-      dependencyParts.push(
-        `# 依赖依据：${dependency}\n\n${await readFile(dependencyPath, 'utf8')}`
-      )
-      fileManifest.push(`dependency:${dependency}`)
-    }
-
-    const skill: Skill = {
-      name: (frontmatter.name as string) || skillName,
-      description: (frontmatter.description as string) || '',
-      systemPrompt: body.trim(),
-      methodology:
-        [rootSupportingFiles.methodology, ...dependencyParts]
-          .filter(Boolean)
-          .join('\n\n---\n\n') || undefined,
-      templates,
-      examples,
-      guides:
-        Object.keys(rootSupportingFiles.guides).length > 0
-          ? rootSupportingFiles.guides
-          : undefined,
-      skillPath: skillDir,
-      fileManifest
-    }
-
+    const { skill } = await this.capture(skillName)
     this.cache.set(skillName, skill)
     return skill
   }
 
-  /**
-   * 加载目录下所有 .md 文件为 key-value 对
-   */
-  private async loadSubDir(dirPath: string): Promise<Record<string, string>> {
-    const result: Record<string, string> = {}
-    try {
-      const dirStat = await stat(dirPath)
-      if (!dirStat.isDirectory()) return result
-
-      const files = await readdir(dirPath)
-      for (const file of files) {
-        if (file.endsWith('.md')) {
-          const content = await readFile(join(dirPath, file), 'utf-8')
-          const key = basename(file, '.md')
-          result[key] = content
-        }
-      }
-    } catch {
-      // 目录不存在，返回空
+  /** Always read fresh. Capture and legacy prompt are constructed from the same
+   * in-memory bytes; callers never re-read mutable resources to build a snapshot. */
+  async capture(skillName: string): Promise<LegacySkillCapture> {
+    if (
+      !skillName ||
+      skillName === '.' ||
+      skillName === '..' ||
+      /[\\/:\0]/.test(skillName)
+    )
+      throw new Error(`Invalid Skill name: ${skillName}`)
+    const skillDir = resolve(this.skillsDir, skillName)
+    await resolveSkillPath(this.skillsDir, skillDir)
+    const captured = new Map<string, string>()
+    const read = async (path: string): Promise<string> => {
+      const key = relative(resolve(this.skillsDir), path).split('\\').join('/')
+      const existing = captured.get(key)
+      if (existing !== undefined) return existing
+      const content = await readSkillText(this.skillsDir, path)
+      captured.set(key, content)
+      return content
     }
-    return result
-  }
-
-  private async loadRootSupportingFiles(dirPath: string): Promise<{
-    methodology: string
-    guides: Record<string, string>
-  }> {
-    const methodologyParts: string[] = []
+    const raw = await read(join(skillDir, 'SKILL.md'))
+    const { data: frontmatter, content: body } = parseSkillDocument(raw)
+    const files = await listSkillFiles(this.skillsDir, skillDir)
+    // Preserve all actual files for provenance, not only those rendered in prompts.
+    for (const file of files) await read(file)
+    const templates: Record<string, string> = {}
+    const examples: Record<string, string> = {}
     const guides: Record<string, string> = {}
+    const methodology: string[] = []
     const preferredOrder = [
       'adapt-method.md',
       'output-style.md',
       'seedance-prompt-methodology.md'
     ]
-
-    try {
-      const files = (await readdir(dirPath))
-        .filter((file) => file.endsWith('.md') && file !== 'SKILL.md')
-        .sort((a, b) => {
-          const aIndex = preferredOrder.indexOf(a)
-          const bIndex = preferredOrder.indexOf(b)
-          if (aIndex >= 0 || bIndex >= 0) {
-            return (
-              (aIndex >= 0 ? aIndex : preferredOrder.length) -
-              (bIndex >= 0 ? bIndex : preferredOrder.length)
-            )
-          }
-          return a.localeCompare(b)
-        })
-
-      for (const file of files) {
-        const content = await readFile(join(dirPath, file), 'utf-8')
-        const key = basename(file, '.md')
-        if (/guide/i.test(file)) {
-          guides[key] = content
-          continue
-        }
-        methodologyParts.push(`# ${key}\n\n${content}`)
+    const rootFiles = files.filter(
+      (path) =>
+        dirname(path) === skillDir &&
+        path.endsWith('.md') &&
+        basename(path) !== 'SKILL.md'
+    )
+    rootFiles.sort((a, b) => {
+      const rank = (path: string): number => {
+        const index = preferredOrder.indexOf(basename(path))
+        return index < 0 ? preferredOrder.length : index
       }
-    } catch {
-      // 根目录不存在或不可读，返回空资源。
+      return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0)
+    })
+    for (const file of rootFiles) {
+      const key = basename(file, '.md')
+      const content = await read(file)
+      if (/guide/i.test(basename(file))) guides[key] = content
+      else methodology.push(`# ${key}\n\n${content}`)
     }
-
+    for (const file of files) {
+      const rel = relative(skillDir, file).split('\\').join('/')
+      const match = rel.match(/^(templates|examples)\/([^/]+)\.md$/)
+      if (match)
+        (match[1] === 'templates' ? templates : examples)[match[2]] =
+          await read(file)
+    }
+    const fileManifest = files.map((path) =>
+      relative(skillDir, path).split('\\').join('/')
+    )
+    const dependencies = frontmatter.dependencies ?? []
+    if (
+      !Array.isArray(dependencies) ||
+      dependencies.some(
+        (file) =>
+          typeof file !== 'string' ||
+          !file.endsWith('.md') ||
+          isAbsolute(file) ||
+          file.includes('\\') ||
+          file.includes('\0') ||
+          file.includes(':')
+      )
+    )
+      throw new Error(
+        `Skill ${skillName} 的 dependencies 必须是 Markdown 路径数组`
+      )
+    const dependencyParts: string[] = []
+    for (const dependency of dependencies as string[]) {
+      const content = await read(resolve(skillDir, dependency))
+      dependencyParts.push(`# 依赖依据：${dependency}\n\n${content}`)
+      fileManifest.push(`dependency:${dependency}`)
+    }
     return {
-      methodology: methodologyParts.join('\n\n---\n\n'),
-      guides
+      skill: {
+        name:
+          (typeof frontmatter.name === 'string' && frontmatter.name) ||
+          skillName,
+        description:
+          (typeof frontmatter.description === 'string' &&
+            frontmatter.description) ||
+          '',
+        systemPrompt: body.trim(),
+        methodology:
+          [methodology.join('\n\n---\n\n'), ...dependencyParts]
+            .filter(Boolean)
+            .join('\n\n---\n\n') || undefined,
+        templates,
+        examples,
+        guides: Object.keys(guides).length ? guides : undefined,
+        skillPath: skillDir,
+        fileManifest
+      },
+      resources: [...captured]
+        .map(([path, content]) => ({ path, content }))
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     }
   }
 
-  /**
-   * 递归列出所有文件
-   */
-  private async listAllFiles(dir: string, prefix = ''): Promise<string[]> {
-    const result: string[] = []
-    try {
-      const entries = await readdir(dir, { withFileTypes: true })
-      for (const entry of entries) {
-        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
-        if (entry.isDirectory()) {
-          const subFiles = await this.listAllFiles(
-            join(dir, entry.name),
-            relativePath
-          )
-          result.push(...subFiles)
-        } else {
-          result.push(relativePath)
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return result
-  }
-
-  /**
-   * 列出所有可用的 Skill
-   */
   async listAll(): Promise<Array<{ name: string; description: string }>> {
     const entries = await readdir(this.skillsDir, { withFileTypes: true })
     const skills: Array<{ name: string; description: string }> = []
-
     for (const entry of entries) {
-      if (entry.isDirectory()) {
-        try {
-          const skillMdPath = join(this.skillsDir, entry.name, 'SKILL.md')
-          const raw = await readFile(skillMdPath, 'utf-8')
-          const { data } = parseSkillDocument(raw)
-          skills.push({
-            name: (data.name as string) || entry.name,
-            description: (data.description as string) || ''
-          })
-        } catch {
-          // 非 Skill 目录，跳过
-        }
+      if (!entry.isDirectory()) continue
+      try {
+        await resolveSkillPath(this.skillsDir, join(this.skillsDir, entry.name))
+        const { data } = parseSkillDocument(
+          await readSkillText(
+            this.skillsDir,
+            join(this.skillsDir, entry.name, 'SKILL.md')
+          )
+        )
+        skills.push({
+          name: (typeof data.name === 'string' && data.name) || entry.name,
+          description:
+            (typeof data.description === 'string' && data.description) || ''
+        })
+      } catch {
+        // Discovery skips non-Skill directories; explicit loading reports errors.
       }
     }
-
     return skills
   }
 
-  /** 清理缓存 */
   clearCache(): void {
     this.cache.clear()
   }
-
-  /** 强制重新加载 */
   async reload(skillName: string): Promise<Skill> {
     this.cache.delete(skillName)
     return this.load(skillName)
