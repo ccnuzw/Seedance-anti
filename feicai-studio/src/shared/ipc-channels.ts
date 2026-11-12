@@ -22,6 +22,7 @@ export const IPC = {
   PROJECT_GET_PLOT_BREAKDOWN_SUMMARY: 'project:getPlotBreakdownSummary',
 
   // 流水线控制
+  EXECUTION_GET_STATUS: 'execution:getStatus',
   PIPELINE_START: 'pipeline:start',
   PIPELINE_PAUSE: 'pipeline:pause',
   PIPELINE_RESUME: 'pipeline:resume',

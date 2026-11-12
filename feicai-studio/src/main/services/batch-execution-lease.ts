@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import type { ExecutionStatus } from '@shared/ipc-contracts'
 
 export class ExecutionLease {
   readonly runId = randomUUID()
@@ -94,6 +95,30 @@ export async function withExecutionLease<T>(
 
 export function getExecutionLease(): ExecutionLease | null {
   return active
+}
+
+export function getExecutionStatus(): ExecutionStatus {
+  if (!active) return { busy: false, phase: 'idle' }
+  const owner =
+    active.owner === 'batch' ||
+    active.owner === 'pipeline' ||
+    active.owner === 'workflow'
+      ? active.owner
+      : active.owner.includes('project') ||
+          active.owner.includes('data') ||
+          active.owner.includes('backup') ||
+          active.owner.includes('restore')
+        ? 'data'
+        : 'other'
+  return {
+    busy: true,
+    phase: active.signal.aborted
+      ? 'stopping'
+      : active.isPaused
+        ? 'paused'
+        : 'running',
+    owner
+  }
 }
 export async function stopExecution(): Promise<void> {
   const lease = active

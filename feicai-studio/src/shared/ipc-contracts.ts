@@ -123,6 +123,12 @@ export interface BasicSuccessResult {
   success: boolean
 }
 
+export interface ExecutionStatus {
+  busy: boolean
+  phase: 'idle' | 'running' | 'paused' | 'stopping'
+  owner?: 'batch' | 'pipeline' | 'workflow' | 'data' | 'other'
+}
+
 export interface ProjectRepairResult {
   success: boolean
   appliedActions: string[]
@@ -270,6 +276,8 @@ export interface FeicaiAPI extends BatchAPI, DataManagementAPI {
   ): Promise<(BasicSuccessResult & { error?: string }) | void>
   selectDirectory(): Promise<string | null>
   selectFile(filters?: FileDialogFilter[]): Promise<string | null>
+
+  getExecutionStatus(): Promise<ExecutionStatus>
 
   startPipeline(params: PipelineStartParams): Promise<PipelineStartResult>
   runPipelineAndWait(params: PipelineStartParams): Promise<PipelineStartResult>
