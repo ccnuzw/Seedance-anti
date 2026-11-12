@@ -41,4 +41,6 @@ make -f scripts/ui-operation-acceptance.Makefile verify
 
 边界：运行真实 React renderer、CSS、路由同步和隔离 Electron；数据读取、文件写入、任务执行均为明确受控的 `feicaiAPI` fixture。临时 Electron main 只提供截图、按键、窗口大小和结果通道；不加载生产 main/preload，不读取生产凭据或 userData，不接触真实哑妃项目，不调用模型，不访问外网。批量启动断言验证实际页面传参，fixture 不执行生产队列。
 
+验证分工：本文的通过结论仅覆盖上述受控 DOM 和 renderer 回归。production build、真实 worker 启动与生产 IPC 由独立 runtime 任务验证；该任务报告当前基线存在 `scan → artifact-provenance → art-output-merger → production-commit-service → DB/worker launcher` 模块循环，正将只读 art reference 函数拆至 `engine/art-reference.ts`。该修复与构建、真实 worker 结果不在本分支的验收证据中。各分支合齐后，必要的 build / worker / IPC / renderer 联合验证待整合阶段执行，不以本轮 DOM 通过推定生产链路已通过。
+
 未验证：模型生成质量、真实供应商错误、生产 IPC/数据库/文件落盘与任务调度、多窗口并发、跨应用重启历史恢复、系统文件选择器、完整辅助技术读屏。390px 为 Electron 内容视口，不等同于移动系统或触摸设备。任务中心的重启提示仅证明明确显示未知，不证明具备跨重启恢复能力。
