@@ -108,7 +108,64 @@
 - 改 IPC / service 契约：覆盖可观察权限、状态、边界与错误；不增加只断言转发参数或复制文案的测试。
 - 改状态机、审核、落盘路径：补 main engine / workflow 测试。
 
-## 本轮集成验收（2026-11-12）
+## M1/T11 集成验收（2026-11-12）
+
+本轮基于已合并的 F01 Provider、F02 Skill、T02 production-contracts、T01 分集矩阵独立复跑。下方基础集成及较早记录属于历史证据，不能作为本轮额外 native/performance 检查的结果。环境为 macOS arm64、Node 26.12.1、Electron 42.11.18 / 内嵌 Node 24.19.0；复用已有依赖，无安装或 native 重建。
+
+### 工程与组合测试
+
+以下命令在 `feicai-studio` 实际通过：
+
+```bash
+npm run lint
+npm run format:check
+npm run typecheck -- --force
+npm test
+npm run test:coverage
+npm run build
+node scripts/m1-dom-smoke.mjs
+node scripts/electron-migration-smoke.mjs
+```
+
+Vitest 两次均为 **98 文件、1071 测试**通过。新增 `src/main/services/m1-foundation-integration.test.ts` 为 **18 项**，未修改生产源码、共享合同实现或 M2 消费者。
+
+| 验收点                | 组合证据与边界                                                                                                                                                                                                                                                                    |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 旧文本链与最终 wire   | 12 项组合（四类 Provider × 三入口）读取真实内置 script Skill，用旧 PromptAssembler 装配，经旧 Provider 与新能力桥接比较实际受控 fetch body；验证 maxTokens=64、temperature=0、兼容端省略 temperature，以及正文存在时 complete/truncated/unknown 的区别；未返回的用量/费用保持缺失 |
+| 内置 Skill 与冻结身份 | 三入口测试真实 story 生成/审核及 script 生成/审核适用范围；复制内置包到临时目录后修改依赖，旧快照及审核 prompt 不变，新 hash 改变且旧预期 hash 被拒绝；未执行任意 Skill 脚本                                                                                                      |
+| 旧素材与自定义 layout | 真实 AssetManager 写入临时 Markdown，验证旧素材 UUID 每次加载可变，预览保留原文和相对路径、stable ID 留空并需确认；不创建 production manifest                                                                                                                                     |
+| 版本合同边界          | 显式将 Skill 的 `sha256:hex` 转为合同的裸 hex 测试引用；自定义 layout 校验成功、默认 layout 拒绝；重命名不改绑定，旧 revision/Skill hash 不可原位重定向，未知 schema 拒绝                                                                                                         |
+| 三入口及审核依赖      | 全量复跑既有 `services/production-integration.test.ts`、`workflow/workflow-entry-flows.test.ts`、provenance/审核/导出/租约回归：真实内置提示词与受控制作、审核有效性、素材/角色变更失效、可选角色步骤、自定义目录和默认设置兼容                                                   |
+| 合同与 UI 隔离        | 全量复跑 production-contracts 的路径/引用/更新边界，以及 T01 矩阵和 project/pipeline store 的迟到响应及切换隔离；下述 DOM 入口进一步挂载实际组件与路由消费者                                                                                                                      |
+
+覆盖率仅统计 **Vitest 本次加载的模块**，没有全源码 `coverage.include`，也不包括 Electron DOM 或真实 IPC：statements **83.09%（7908/9517）**、branches **75.55%（6028/7979）**、functions **79.26%（1315/1659）**、lines **84.69%（7461/8809）**。构建完成 main 89、preload 4、renderer 210 个模块的编译；这不是打包、安装或发布验收。
+
+### Electron DOM 与真实 IPC
+
+`scripts/m1-dom-smoke.mjs` 将旧 T01 临时矩阵适配为相对仓库路径，使用现有 Vite/Electron；在临时目录建立 renderer harness 和 userData/sessionData/logs/crashDumps，仅允许当前 loopback Vite 服务的 renderer 网络请求，结束清理。`feicaiAPI` **全部是合成实现**，不等于生产 IPC。
+
+本轮 **35 项显式断言**通过，并等待实际路由及页面挂载：空项目/零集；novel 缺源、库存已用、章节源；story 待审核；script 不读小说库存；导演审核过期、服化道/分镜标签和 episode query；已完成过滤、部分/完整读取失败；项目 A 迟到响应不覆盖 B、运行身份与当前项目分离；刷新禁用；1000 集按 20 行分页及键盘焦点；390px 横向滚动限制于标记区域、可见焦点；禁止合成 API 中的写入、运行及未实现调用，且大项目只查一次批量状态。11 次临时截图在退出时清理；可用 `M1_DOM_REPORT=/tmp/m1-dom-result.json` 保留断言、调用与无障碍快照报告。
+
+实际消费的目标包括 `/project/novel/source`、`/project/story/story?ep=3`、`/project/script/script?ep=2`、`/project/script/prompts?ep=1&tab=director|art|prompts`、`/project/lateA/pipeline?ep=2`；测试检查当前项目文件读取、EP 标签或活动 tab，而非只检查 URL。
+
+另实际运行 `scripts/electron-migration-smoke.mjs`，得到 `ELECTRON_MIGRATION_SMOKE_OK`：**生产 main/preload/renderer 与真实 IPC** 在隔离临时旧库中完成缺少 category 的迁移、空项目查询、版本/索引/完整性检查、第二实例退出与第一实例接收事件及正常关闭。该脚本阻断 renderer 网络，数据库和项目为空，无真实密钥。这不覆盖完整桌面三入口制作或真实模型。
+
+### 隔离复跑与剩余边界
+
+已有依赖的独立工作树可以使用：
+
+```bash
+M1_SHARED_NODE_MODULES=/path/to/existing/feicai-studio/node_modules \
+  python3 scripts/m1-verify.py
+```
+
+`scripts/m1-verify.py` 固定本工作树 cwd 和含 `/opt/homebrew/bin` 的 PATH；临时创建本地依赖链接，排除共享缓存路径，串行运行上述八条命令，finally 删除自建链接/缓存并按原字节恢复两个 tsbuildinfo。不会安装依赖。若本地 `node_modules` 已是符号链接会拒绝执行，以免写共享缓存。构建与覆盖率产物留在现有忽略目录。
+
+**新合同 API、SkillPackageLoader 和 Provider 能力桥接尚未接入生产配置、PromptAssembler 或媒体生成消费者。** 本轮测试显式组合独立 API，不实施持久化、身份迁移或 M2 接入；Skill hash 前缀差异仍需未来消费者显式适配。分集矩阵保持只读，旧文本链和全局执行容量 1 不变。
+
+未验证真实服务商/密钥/付费请求、模型质量、真实图片/视频生成、任意 Skill 执行、完整桌面制作操作、其他平台、打包签名及发布；未重跑历史性能、audit 或额外 native 数据库测试。未修改主工作区、其中两份未跟踪设计文档及其原有 tsbuildinfo。
+
+## 前轮基础集成验收（2026-11-12）
 
 本节是四项基础修复合并后的验收；下方较早记录仅保留历史证据，不代表本轮重新执行。环境为 macOS arm64，Node 26.12.1（`/opt/homebrew/bin/node`），现有 Electron 42.11.18 / Electron 内嵌 Node 24.19.0。复用已安装依赖，没有安装、重建 native 模块或执行 dev/postinstall，没有读取真实 userData/Key 或调用真实模型。
 
