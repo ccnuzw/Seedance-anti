@@ -12,7 +12,7 @@ import {
 } from '@shared/path-resolver'
 import { parsePlotBreakdownMarkdown } from '@shared/plot-breakdown'
 import { getEntryRequirements } from '@shared/workflow'
-import { readArtReference } from './art-output-merger'
+import { readArtReference } from './art-reference'
 import {
   assertEpisodeNumber,
   assertPathWithinProject

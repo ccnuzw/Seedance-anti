@@ -4,6 +4,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync
 } from 'fs'
@@ -320,7 +321,7 @@ describe('scanProjectFilesystem', () => {
     tempDirs.push(root, outside)
     symlinkSync(outside, join(root, 'script'), 'dir')
     expect(() => scanProjectFilesystem(root, undefined, 1)).toThrow()
-    rmSync(join(root, 'script'))
+    unlinkSync(join(root, 'script'))
     mkdirSync(join(root, 'script'))
     symlinkSync(join(outside, 'missing.md'), join(root, 'script', 'ep01.md'))
     expect(() => scanProjectFilesystem(root, undefined, 1)).toThrow()

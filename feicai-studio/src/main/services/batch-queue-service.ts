@@ -407,8 +407,8 @@ export class BatchQueue {
   }
 
   async resume(queueId?: string): Promise<BatchQueueState | null> {
-    this.assertTarget(queueId, ['paused'])
     if (this.lease && this.state?.status === 'paused') {
+      this.assertTarget(queueId, ['paused'])
       this.state.status = 'running'
       await this.persist()
       this.lease.resume()
@@ -417,6 +417,9 @@ export class BatchQueue {
     const lease = acquireExecutionLease('batch')
     try {
       await this.initialize()
+      // Initialization may load a different durable queue. Validate its identity
+      // while holding admission, before changing state or replaying any work.
+      this.assertTarget(queueId, ['interrupted'])
       if (
         !this.state ||
         !['interrupted', 'stopped'].includes(this.state.status)
