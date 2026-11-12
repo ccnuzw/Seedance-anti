@@ -144,7 +144,7 @@ Vitest 两次均为 **98 文件、1071 测试**通过。新增 `src/main/service
 
 `scripts/m1-dom-smoke.mjs` 将旧 T01 临时矩阵适配为相对仓库路径，使用现有 Vite/Electron；在临时目录建立 renderer harness 和 userData/sessionData/logs/crashDumps，仅允许当前 loopback Vite 服务的 renderer 网络请求，结束清理。`feicaiAPI` **全部是合成实现**，不等于生产 IPC。
 
-本轮 **35 项显式断言**通过，并等待实际路由及页面挂载：空项目/零集；novel 缺源、库存已用、章节源；story 待审核；script 不读小说库存；导演审核过期、服化道/分镜标签和 episode query；已完成过滤、部分/完整读取失败；项目 A 迟到响应不覆盖 B、运行身份与当前项目分离；刷新禁用；1000 集按 20 行分页及键盘焦点；390px 横向滚动限制于标记区域、可见焦点；禁止合成 API 中的写入、运行及未实现调用，且大项目只查一次批量状态。11 次临时截图在退出时清理；可用 `M1_DOM_REPORT=/tmp/m1-dom-result.json` 保留断言、调用与无障碍快照报告。
+本轮 **35 项显式断言**通过，并等待实际路由及页面挂载：空项目/零集；novel 缺源、库存已用、章节源；story 待审核；script 不读小说库存；导演审核过期、服化道/分镜标签和 episode query；已完成过滤、部分/完整读取失败；项目 A 迟到响应不覆盖 B、运行身份与当前项目分离；刷新禁用；123 集按 20 行分页及键盘焦点；390px 横向滚动限制于标记区域、可见焦点；禁止合成 API 中的写入、运行及未实现调用，且大项目只查一次批量状态。11 次临时截图在退出时清理；可用 `M1_DOM_REPORT=/tmp/m1-dom-result.json` 保留断言、调用与验证边界报告。
 
 实际消费的目标包括 `/project/novel/source`、`/project/story/story?ep=3`、`/project/script/script?ep=2`、`/project/script/prompts?ep=1&tab=director|art|prompts`、`/project/lateA/pipeline?ep=2`；测试检查当前项目文件读取、EP 标签或活动 tab，而非只检查 URL。
 
