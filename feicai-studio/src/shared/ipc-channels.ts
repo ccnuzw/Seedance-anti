@@ -10,6 +10,7 @@ export const IPC = {
   PROJECT_LIST: 'project:list',
   PROJECT_GET: 'project:get',
   PROJECT_UPDATE: 'project:update',
+  PROJECT_SAVE_SETTINGS: 'project:saveSettings',
   PROJECT_DELETE: 'project:delete',
   PROJECT_GET_STATUS: 'project:getStatus',
   PROJECT_SYNC_STATUS: 'project:syncStatus',

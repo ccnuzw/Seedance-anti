@@ -7,8 +7,12 @@ export interface ProductionCommitFile {
 }
 
 /** Independent of manifest, workflow and SQLite schema versions. */
+export type ProductionCommitKind = 'production' | 'project-settings'
+
 export interface ProductionCommitRecord {
   schemaVersion: 1
+  /** Missing on schema-1 journals created before typed recovery was added. */
+  kind?: ProductionCommitKind
   operationId: string
   key: string
   inputHash: string

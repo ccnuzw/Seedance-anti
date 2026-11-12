@@ -16,6 +16,7 @@ import {
   readCommitText,
   type CommitWrite
 } from '../io/production-commit-store'
+import { recoverProjectSettingsAtBoundary } from '../services/production-commit-service'
 import {
   assertEpisodeNumber,
   assertPathWithinProject
@@ -144,8 +145,10 @@ export class ArtOutputMerger {
     prepareOnly = false
   ): Promise<{ characters: number; scenes: number; writes: CommitWrite[] }> {
     assertEpisodeNumber(episodeNum)
-    if (!prepareOnly)
+    if (!prepareOnly) {
+      await recoverProjectSettingsAtBoundary(projectPath, config)
       await new ProductionCommitStore(projectPath, config).recover()
+    }
     const sections = this.validateOutput(output)
     const paths = {
       characters: assertPathWithinProject(

@@ -1,7 +1,10 @@
 import { createHash } from 'crypto'
 import { lstatSync, readFileSync, readdirSync } from 'fs'
 import { join, relative, sep } from 'path'
-import type { ProductionCommitRecord } from '@shared/production-commit'
+import type {
+  ProductionCommitKind,
+  ProductionCommitRecord
+} from '@shared/production-commit'
 import type { ProjectConfig } from '@shared/types'
 import { resolveProjectLayout } from '@shared/path-resolver'
 import {
@@ -82,6 +85,9 @@ export class ProductionCommitStore {
     if (
       !r ||
       r.schemaVersion !== 1 ||
+      (r.kind !== undefined &&
+        r.kind !== 'production' &&
+        r.kind !== 'project-settings') ||
       typeof r.operationId !== 'string' ||
       !r.operationId ||
       typeof r.key !== 'string' ||
@@ -135,7 +141,7 @@ export class ProductionCommitStore {
     }
     return r
   }
-  list(): ProductionCommitRecord[] {
+  list(kind?: ProductionCommitKind): ProductionCommitRecord[] {
     assertNoLinkedPath(this.directory)
     let entries: string[]
     try {
@@ -154,6 +160,7 @@ export class ProductionCommitStore {
           throw new Error('提交日志身份与路径不匹配')
         return r
       })
+      .filter((record) => !kind || (record.kind || 'production') === kind)
   }
   get(operationId: string, key: string): ProductionCommitRecord | null {
     const text = readCommitText(this.journalPath(operationId, key))
@@ -180,10 +187,13 @@ export class ProductionCommitStore {
     key: string,
     inputHash: string,
     episodeNumbers: number[],
-    guardPaths: string[] = []
+    guardPaths: string[] = [],
+    kind: ProductionCommitKind = 'production'
   ): Promise<ProductionCommitRecord> {
     const existing = this.get(operationId, key)
     if (existing) {
+      if ((existing.kind || 'production') !== kind)
+        throw new Error('operationId 已用于不同提交类型，禁止复用提交收据')
       if (
         existing.inputHash !== inputHash ||
         JSON.stringify(existing.episodeNumbers) !==
@@ -203,6 +213,7 @@ export class ProductionCommitStore {
     }))
     const r: ProductionCommitRecord = {
       schemaVersion: 1,
+      kind,
       operationId,
       key,
       inputHash,
@@ -320,12 +331,16 @@ export class ProductionCommitStore {
     return committed
   }
   async recover(
-    project?: (episodes: number[]) => Promise<void>
+    project?: (
+      episodes: number[],
+      record: ProductionCommitRecord
+    ) => Promise<void>,
+    kind: ProductionCommitKind = 'production'
   ): Promise<void> {
-    for (let record of this.list()) {
+    for (let record of this.list(kind)) {
       if (record.phase === 'prepared') record = await this.install(record)
       if (record.phase === 'committed' && !record.projected && project) {
-        await project(record.episodeNumbers)
+        await project(record.episodeNumbers, record)
         this.fault?.('projection', record)
         await this.save({ ...record, projected: true }, record)
         this.fault?.('receipt', record)
