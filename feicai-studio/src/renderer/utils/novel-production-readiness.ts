@@ -2,6 +2,7 @@ import type { Episode } from '@shared/types'
 import type { PlotBreakdownSummary } from '@shared/ipc-contracts'
 
 export interface NovelReadinessInput {
+  projectId?: string
   hasSource: boolean | null
   waterline: Pick<
     PlotBreakdownSummary,
@@ -26,6 +27,24 @@ export function getNovelProductionReadiness(input: NovelReadinessInput) {
       action: 'refresh',
       label: '刷新准备状态',
       reason: '准备状态尚未取得，请刷新重试。'
+    } as const
+  if (
+    !episode ||
+    episode.episodeNumber !== episodeNumber ||
+    (input.projectId !== undefined && episode.projectId !== input.projectId)
+  )
+    return {
+      canStart: false,
+      action: 'refresh',
+      label: '刷新集状态',
+      reason: '尚未取得当前集状态，请刷新后继续。'
+    } as const
+  if (episode.hasScript || episode.scriptPath)
+    return {
+      canStart: false,
+      action: 'script',
+      label: episode.hasScriptReview ? '查看现有剧本' : '查看并审核剧本',
+      reason: '本集已有剧本，请先查看或审核现有内容。'
     } as const
   if (
     waterline.usedEpisodeNumbers.includes(episodeNumber) &&

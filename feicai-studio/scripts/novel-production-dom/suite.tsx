@@ -8,6 +8,7 @@ import {
   useLocation,
   useNavigate
 } from 'react-router-dom'
+import { MODE_MAP } from '@shared/batch'
 import BatchPage from '@renderer/pages/BatchPage'
 import PipelinePage from '@renderer/pages/PipelinePage'
 import { useProjectStore } from '@renderer/stores/projectStore'
@@ -113,6 +114,30 @@ async function suite() {
   )
   assert(true, 'busy engine blocks another script start')
   usePipelineStore.setState({ isRunning: false })
+  useProjectStore.setState({
+    episodes: [{ ...episode, scriptPath: '/synthetic/novel/script/ep01.md' }]
+  })
+  await until(() =>
+    document
+      .querySelector('.command-next button')
+      ?.textContent?.includes('查看并审核剧本')
+  )
+  ;(document.querySelector('.command-next button') as HTMLButtonElement).click()
+  await until(
+    () =>
+      document.querySelector('#location')?.textContent ===
+      '/project/novel/script?ep=1'
+  )
+  assert(true, 'existing script path primary opens script without regenerating')
+  navigate('/pipeline')
+  useProjectStore.setState({ episodes: [{ ...episode, projectId: 'foreign' }] })
+  await until(() =>
+    document
+      .querySelector('.command-next button')
+      ?.textContent?.includes('刷新集状态')
+  )
+  assert(true, 'unknown current project episode primary requests refresh')
+  useProjectStore.setState({ episodes: [episode] })
   waterline.usedEpisodeNumbers = [1] as never[]
   useProjectStore.setState({
     currentProject: { ...project, updatedAt: 'used' }
@@ -166,8 +191,46 @@ async function suite() {
   delete w.fixtureState.fixtures.novel.defer
   waterline.readyEpisodeNumbers = []
   useProjectStore.setState({ currentProject: project, episodes: [episode] })
+  let rejectBackend: any
+  w.feicaiAPI.getPipelineState = () =>
+    new Promise((_resolve, reject) => {
+      rejectBackend = reject
+    })
   navigate('/batch')
   await until(() => !!document.querySelector('.batch-command-center'))
+  const startButton = () =>
+    document.querySelector(
+      '.batch-command-buttons .btn-primary'
+    ) as HTMLButtonElement
+  await until(() => !!rejectBackend)
+  assert(
+    startButton().disabled,
+    'pending backend read blocks batch start even after summary arrives'
+  )
+  rejectBackend(new Error('synthetic background failure'))
+  await until(() => document.body.innerText.includes('后台任务状态读取失败'))
+  assert(startButton().disabled, 'failed backend read blocks batch start')
+  w.feicaiAPI.getPipelineState = async () => ({
+    state: 'director',
+    projectId: 'another'
+  })
+  const recheck = () =>
+    [...document.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('重新检查后台任务')
+    )!
+  recheck().click()
+  await until(() => document.body.innerText.includes('后台有流水线任务'))
+  assert(
+    startButton().disabled,
+    'other project backend work blocks batch start'
+  )
+  w.feicaiAPI.getPipelineState = async () => ({ state: 'idle' })
+  // Remount performs the same query after the external task has ended.
+  navigate('/other')
+  await delay()
+  navigate('/batch')
+  await until(() => startButton() && !startButton().disabled)
+
   const details = document.querySelector('details')!
   assert(!details.open, 'advanced modes initially collapsed')
   const summary = details.querySelector('summary')!
@@ -189,7 +252,12 @@ async function suite() {
       mode: 'smart_next',
       cursor: 1,
       tasks: [
-        { episodeNum: 1, status: 'error', progress: '剧情点为零，审核失败' }
+        {
+          episodeNum: 1,
+          batchNumber: 7,
+          status: 'error',
+          progress: '剧情点为零，审核失败'
+        }
       ],
       updatedAt: 1
     } as any
@@ -203,10 +271,87 @@ async function suite() {
     document.body.innerText.includes('队列已结束，存在失败任务'),
     'completed with error is visibly failed'
   )
+  usePipelineStore.setState({
+    logs: [
+      {
+        level: 'error',
+        message: '合成失败日志',
+        timestamp: Date.now(),
+        type: 'review_fail'
+      }
+    ] as any
+  })
+  await until(() => !!document.querySelector('.batch-log-title'))
   assert(
-    !document.querySelector('.batch-log-list'),
+    !document.querySelector('.batch-log-body'),
     'failure remains discoverable with logs collapsed'
   )
+  assert(
+    document
+      .querySelector('[role="alert"]')
+      ?.textContent?.includes('第 7 批剧情'),
+    'failed draft identifies its real batch number'
+  )
+  ;(document.querySelector('.batch-log-title') as HTMLButtonElement).click()
+  await until(() => !!document.querySelector('.batch-log-body'))
+  ;(document.querySelector('.batch-log-title') as HTMLButtonElement).click()
+  await until(() => !document.querySelector('.batch-log-body'))
+  for (const [status, label] of [
+    ['paused', '队列已暂停'],
+    ['stopped', '队列已停止'],
+    ['interrupted', '队列已中断'],
+    ['idle', '队列尚未启动'],
+    ['error', '队列执行失败']
+  ]) {
+    useBatchStore.setState({
+      snapshot: { ...useBatchStore.getState().snapshot!, status } as any
+    })
+    await until(() => document.body.innerText.includes(label))
+    assert(true, `queue state ${status} is accurately labeled`)
+  }
+  useBatchStore.setState({ snapshot: null })
+  for (const [entry, expected] of [
+    ['novel', 'smart_next'],
+    ['story', 'script'],
+    ['script', 'full']
+  ] as const) {
+    navigate('/other')
+    await delay()
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        config: { ...project.config, entryStage: entry }
+      }
+    })
+    navigate('/batch')
+    await until(() =>
+      document
+        .querySelector('.batch-mode-option.active')
+        ?.textContent?.includes(MODE_MAP[expected].label)
+    )
+    assert(true, `${entry} without URL mode uses ${expected}`)
+    if (entry !== 'novel') {
+      assert(
+        (
+          document
+            .querySelector('.batch-selection')!
+            .closest('details') as HTMLDetailsElement
+        ).open,
+        `${entry} episode selection visible without advanced modes`
+      )
+      ;(
+        document.querySelector('.episode-select-btn') as HTMLButtonElement
+      ).click()
+      await until(() => !startButton().disabled)
+    }
+  }
+  navigate('/batch?mode=script_review')
+  await until(() =>
+    document
+      .querySelector('.batch-mode-option.active')
+      ?.textContent?.includes(MODE_MAP.script_review.label)
+  )
+  assert(true, 'explicit URL mode remains compatible')
   await w.testResize(390)
   await delay()
   assert(

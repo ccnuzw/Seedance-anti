@@ -1,6 +1,15 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { abortPipeline } from '@renderer/services/pipeline-service'
+import { normalizeProjectConfig } from '@shared/project-config'
+import {
+  batchStatusLabel,
+  batchTaskLabel,
+  defaultBatchMode
+} from '@renderer/utils/batch-presentation'
+import {
+  abortPipeline,
+  getPipelineState
+} from '@renderer/services/pipeline-service'
 import { useBatchStore } from '@renderer/stores/batchStore'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { usePipelineStore } from '@renderer/stores/pipelineStore'
@@ -86,21 +95,21 @@ export default function BatchPage() {
     streamBuffer,
     setupEventListeners,
     clearLogs,
-    pipelineRunning,
-    syncFromBackend
+    pipelineRunning
   } = usePipelineStore(
     useShallow((s) => ({
       logs: s.logs,
       streamBuffer: s.streamBuffer,
       setupEventListeners: s.setupEventListeners,
       clearLogs: s.clearLogs,
-      pipelineRunning: s.isRunning,
-      syncFromBackend: s.syncFromBackend
+      pipelineRunning: s.isRunning
     }))
   )
   const { addToast } = useToastStore()
 
-  const [mode, setMode] = useState<BatchMode>('smart_next')
+  const entry =
+    normalizeProjectConfig(currentProject?.config).entryStage || 'novel'
+  const [mode, setMode] = useState<BatchMode>(() => defaultBatchMode(entry))
   const [selectedEps, setSelectedEps] = useState<Set<number>>(new Set())
   const {
     snapshot,
@@ -163,6 +172,8 @@ export default function BatchPage() {
     const episodesParam = searchParams.get('episodes')
     if (modeParam && modeParam in MODE_MAP) {
       setMode(modeParam as BatchMode)
+    } else {
+      setMode(defaultBatchMode(entry))
     }
     if (episodesParam) {
       const next = new Set(
@@ -175,20 +186,39 @@ export default function BatchPage() {
         setSelectedEps(next)
       }
     }
-  }, [searchParams])
+  }, [searchParams, currentProject?.id, entry])
 
-  // mount 时同步后端状态，检测是否有后台任务在运行
-  const [bgRunning, setBgRunning] = useState(false)
+  const [backgroundRevision, setBackgroundRevision] = useState(0)
+  const [backgroundState, setBackgroundState] = useState<
+    'pending' | 'failed' | 'ready' | 'running'
+  >('pending')
+  const bgRunning = backgroundState === 'running'
   useEffect(() => {
-    void syncFromBackend().then(() =>
-      setBgRunning(usePipelineStore.getState().isRunning)
-    )
-  }, [syncFromBackend])
-
-  // 当全局引擎状态变为非运行时，清除 bgRunning 提示
-  useEffect(() => {
-    if (!pipelineRunning) setBgRunning(false)
-  }, [pipelineRunning])
+    let cancelled = false
+    setBackgroundState('pending')
+    void getPipelineState()
+      .then((context) => {
+        if (cancelled) return
+        if (!context?.state) {
+          setBackgroundState('failed')
+          return
+        }
+        const terminal = [
+          'idle',
+          'error',
+          'episode_complete',
+          'director_done',
+          'art_done'
+        ].includes(context.state)
+        setBackgroundState(terminal ? 'ready' : 'running')
+      })
+      .catch(() => {
+        if (!cancelled) setBackgroundState('failed')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [backgroundRevision, currentProject?.id, pipelineRunning])
 
   // 自动滚动到最新日志
   useEffect(() => {
@@ -244,6 +274,7 @@ export default function BatchPage() {
     (autoMode
       ? !!plotBreakdownSummary && plotBreakdownSummary.nextActionMode !== 'done'
       : selectedEps.size > 0) &&
+    backgroundState === 'ready' &&
     !bgRunning &&
     !pipelineRunning
   const executionLabel = autoMode
@@ -307,7 +338,7 @@ export default function BatchPage() {
   }
 
   const handleBatchRun = useCallback(async () => {
-    if (!currentProject) return
+    if (!currentProject || !canRun) return
     setLogExpanded(true)
     clearLogs()
     try {
@@ -323,7 +354,7 @@ export default function BatchPage() {
         error instanceof Error ? error.message : '启动批队列失败'
       )
     }
-  }, [currentProject, selectedEps, mode, start, clearLogs, addToast])
+  }, [currentProject, canRun, selectedEps, mode, start, clearLogs, addToast])
 
   const handleStop = useCallback(async () => {
     try {
@@ -374,13 +405,8 @@ export default function BatchPage() {
       {queueError && <p role="alert">{queueError}</p>}
       {snapshot && (
         <p role="status" aria-live="polite">
-          {snapshot.status === 'completed'
-            ? taskStats.error > 0
-              ? '队列已结束，存在失败任务'
-              : '队列已完成'
-            : '队列进行中'}{' '}
-          · 已处理 {snapshot.cursor}/{snapshot.tasks.length}{' '}
-          项。离开页面不会停止任务。
+          {batchStatusLabel(snapshot.status, taskStats.error)} · 已处理{' '}
+          {snapshot.cursor}/{snapshot.tasks.length} 项。离开页面不会停止任务。
         </p>
       )}
       {taskStats.error > 0 && (
@@ -391,7 +417,7 @@ export default function BatchPage() {
               .filter((task) => task.status === 'error')
               .map((task, index) => (
                 <li key={index}>
-                  第 {task.episodeNum} 集：{task.progress || '执行失败'}
+                  {batchTaskLabel(task)}：{task.progress || '执行失败'}
                 </li>
               ))}
           </ul>
@@ -423,6 +449,19 @@ export default function BatchPage() {
           </div>
         )}
 
+      {['pending', 'failed'].includes(backgroundState) && (
+        <p role="status">
+          {backgroundState === 'pending'
+            ? '正在确认后台任务，暂不能启动。'
+            : '后台任务状态读取失败，暂不能启动。'}
+          <button
+            className="btn btn-sm"
+            onClick={() => setBackgroundRevision((value) => value + 1)}
+          >
+            重新检查后台任务
+          </button>
+        </p>
+      )}
       {bgRunning && !isRunning && (
         <div className="batch-bg-banner">
           <span>后台有流水线任务正在运行中，启动新的批量任务前请先停止。</span>
@@ -431,7 +470,7 @@ export default function BatchPage() {
             onClick={async () => {
               try {
                 await abortPipeline()
-                setBgRunning(false)
+                setBackgroundRevision((value) => value + 1)
                 addToast('warning', '后台任务已停止')
               } catch (error) {
                 addToast(
@@ -576,7 +615,7 @@ export default function BatchPage() {
       </section>
 
       <details>
-        <summary>高级选项：模式、选集与持续运行</summary>
+        <summary>高级选项：模式与持续运行</summary>
         <section className="batch-workspace">
           <div className="batch-mode-panel">
             <div className="batch-panel-header">
@@ -618,7 +657,11 @@ export default function BatchPage() {
               ))}
             </div>
           </div>
-
+        </section>
+      </details>
+      <details open={!autoMode}>
+        <summary>{autoMode ? '高级选集' : '选择执行集数'}</summary>
+        <section>
           <div className="batch-selection">
             <div className="batch-selection-header">
               <div>
@@ -722,9 +765,7 @@ export default function BatchPage() {
                 key={task.episodeNum}
                 className={`batch-task task-${task.status}`}
               >
-                <span className="task-ep">
-                  EP{String(task.episodeNum).padStart(2, '0')}
-                </span>
+                <span className="task-ep">{batchTaskLabel(task)}</span>
                 <span className="task-status-icon">
                   {task.status === 'pending' && '等待'}
                   {task.status === 'running' && '执行中'}

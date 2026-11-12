@@ -102,10 +102,17 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
     () =>
       getNovelProductionReadiness({
         ...novelState,
+        projectId: currentProject?.id,
         episodeNumber: episodeNum,
         episode: currentEpisode
       }),
-    [novelState.hasSource, novelState.waterline, episodeNum, currentEpisode]
+    [
+      novelState.hasSource,
+      novelState.waterline,
+      currentProject?.id,
+      episodeNum,
+      currentEpisode
+    ]
   )
   const { hasSourceNovel: summaryHasSource, workflowSummaries } =
     useWorkflowSummaries(currentProject, currentEpisode, episodeNum)
@@ -180,7 +187,8 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
         if (card.id === 'story' || card.id === 'story_review')
           return {
             ...card,
-            state: (currentEpisode?.hasScript || novelReadiness.canStart
+            state: (currentEpisode?.hasScript ||
+            novelReadiness.action === 'script'
               ? 'done'
               : card.id === 'story_review'
                 ? 'skipped'
@@ -265,7 +273,10 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
               primaryLabel: '刷新准备状态',
               primaryDisabled: busyWorkflow || busyPipeline,
               primaryAction: () => {
-                void novelState.refresh()
+                void Promise.all([
+                  novelState.refresh(),
+                  syncEpisodeStatus()
+                ]).catch(() => addToast('error', '状态读取失败，请重试'))
               }
             }
           ]
@@ -273,14 +284,14 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
           entryStage === 'novel' &&
           (card.id === 'story' ||
             card.id === 'story_review' ||
-            (card.id === 'script' &&
-              !currentEpisode?.hasScript &&
-              !novelReadiness.canStart))
+            (card.id === 'script' && !novelReadiness.canStart))
         ) {
           const path =
             novelReadiness.action === 'source'
               ? routePaths.sourcePath
-              : routePaths.storyPath
+              : novelReadiness.action === 'script'
+                ? routePaths.scriptPath
+                : routePaths.storyPath
           return [
             card.id,
             {
@@ -290,7 +301,10 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
               primaryDisabled: busyWorkflow || busyPipeline,
               primaryAction: () => {
                 if (novelReadiness.action === 'refresh')
-                  void novelState.refresh()
+                  void Promise.all([
+                    novelState.refresh(),
+                    syncEpisodeStatus()
+                  ]).catch(() => addToast('error', '状态读取失败，请重试'))
                 else if (path) navigate(path)
               }
             }
@@ -319,6 +333,8 @@ export function usePipelineWorkflow(params: UsePipelineWorkflowParams) {
       })
     ) as Record<WorkflowCard['id'], WorkflowCardActionMeta>
   }, [
+    syncEpisodeStatus,
+    addToast,
     entryStage,
     novelReadiness,
     novelState.hasSource,

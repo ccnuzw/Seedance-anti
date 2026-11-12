@@ -6,7 +6,8 @@ import type { Episode } from '@shared/types'
 const input = {
   hasSource: true,
   waterline: { readyEpisodeNumbers: [], usedEpisodeNumbers: [] },
-  episodeNumber: 2
+  episodeNumber: 2,
+  episode: { episodeNumber: 2, hasScript: false } as Episode
 }
 describe('novel production readiness', () => {
   it('fails closed on unknown and failed reads and offers refresh', () => {
@@ -31,7 +32,10 @@ describe('novel production readiness', () => {
       label: '准备剧情草稿'
     })
     expect(
-      readiness({ ...input, episode: { hasStoryBeat: true } as Episode }).label
+      readiness({
+        ...input,
+        episode: { episodeNumber: 2, hasStoryBeat: true } as Episode
+      }).label
     ).toBe('检查并审核剧情草稿')
   })
   it('accepts only target inventory without requiring an episode story review', () => {
@@ -50,6 +54,24 @@ describe('novel production readiness', () => {
         waterline: { readyEpisodeNumbers: [1], usedEpisodeNumbers: [] }
       }).canStart
     ).toBe(false)
+  })
+  it('prioritizes existing script paths and flags and refreshes unknown episodes', () => {
+    const ready = {
+      ...input,
+      waterline: { readyEpisodeNumbers: [2], usedEpisodeNumbers: [] }
+    }
+    expect(readiness({ ...ready, episode: undefined })).toMatchObject({
+      canStart: false,
+      action: 'refresh'
+    })
+    for (const artifact of [
+      { hasScript: true },
+      { scriptPath: '/synthetic/script.md' }
+    ]) {
+      expect(
+        readiness({ ...ready, episode: { ...input.episode, ...artifact } })
+      ).toMatchObject({ canStart: false, action: 'script' })
+    }
   })
   it('blocks repeated consumption of used inventory without a script', () => {
     expect(

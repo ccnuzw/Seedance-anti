@@ -93,6 +93,7 @@ export function buildProductionRows(params: {
               usedEpisodeNumbers: [...(params.usedEpisodeNumbers || [])]
             }
           : null,
+        projectId: project.id,
         episodeNumber,
         episode: ep
       })
@@ -136,7 +137,7 @@ export function buildProductionRows(params: {
           // Novel entry uses shared plot inventory, not the per-episode story review gate.
           const inventory = stage === 'story' && entry === 'novel'
           const satisfied = inventory
-            ? !!ep?.hasScript || readiness.canStart
+            ? !!(ep?.hasScript || ep?.scriptPath) || readiness.canStart
             : stage === 'story'
               ? ep?.hasStoryBeat === true && ep.hasStoryReview === true
               : stage === 'script'
@@ -186,7 +187,8 @@ export function buildProductionRows(params: {
           let detail = `${exists ? '产物存在' : '无产物'}；${satisfied ? '当前审核有效' : '尚未满足当前审核门禁'}。`
           let targetPath = path
           if (inventory) {
-            status = ep?.hasScript ? '已供给剧本' : readiness.label
+            status =
+              ep?.hasScript || ep?.scriptPath ? '已供给剧本' : readiness.label
             detail = readiness.reason
             targetPath =
               readiness.action === 'source'
