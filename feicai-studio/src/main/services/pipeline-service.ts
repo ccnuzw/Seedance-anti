@@ -1,3 +1,4 @@
+import { recoverProductionCommits } from './production-commit-service'
 import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { readFileSync } from 'fs'
@@ -407,6 +408,12 @@ export async function launchPipeline(
           projectPath: params.projectPath
         })
     )
+    await recoverProductionCommits(
+      params.projectPath,
+      projectConfig,
+      lease,
+      params.projectId
+    )
     const launch: LaunchSnapshot = {
       params: Object.freeze({ ...params }),
       operationId: options.operationId,
@@ -464,7 +471,14 @@ export async function launchPipeline(
       waitUntilResumed: () => lease.checkpoint()
     }
 
-    const execution = engine.start(startArgs)
+    const execution = engine.start(startArgs).then(async () => {
+      await recoverProductionCommits(
+        params.projectPath,
+        projectConfig,
+        lease,
+        params.projectId
+      )
+    })
     const runningTask = task
     const settled = execution
       .catch((error) => {
@@ -636,6 +650,12 @@ export async function runWorkflowAction(
     currentTask = task
     publishTask(task)
     await lease.checkpoint()
+    await recoverProductionCommits(
+      params.projectPath,
+      step.projectConfig,
+      lease,
+      projectId
+    )
     runner.setProvider(createProvider(capturedProvider))
     const result = await runner[action]({
       ...step,
@@ -644,6 +664,12 @@ export async function runWorkflowAction(
       operationId: params.operationId,
       waitUntilResumed: () => lease.checkpoint()
     })
+    await recoverProductionCommits(
+      params.projectPath,
+      step.projectConfig,
+      lease,
+      projectId
+    )
     task.snapshot.status = result.success ? 'completed' : 'failed'
     return result
   } catch (error) {

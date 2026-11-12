@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { readFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
+import {
+  resolveEpisodeArtifactPath,
+  resolveProjectArtifactPath
+} from '@shared/path-resolver'
 import { formatReviewMarkdown } from '@shared/review-artifacts'
 import type { ReviewResult } from '@shared/types'
 const mocks = vi.hoisted(() => ({ project: vi.fn(), current: vi.fn() }))
@@ -15,7 +19,7 @@ const roots: string[] = []
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'feicai-receipt-')))
   roots.push(root)
-  mocks.project.mockReturnValue({ config: {} })
+  mocks.project.mockReturnValue({ id: 'legacy-project', config: {} })
   const params = {
     projectPath: root,
     projectName: '项目',
@@ -43,6 +47,54 @@ describe('atomic artifact receipts', () => {
       await recoverBatchCommit('runScriptGeneration', params, 'committed')
     ).toMatchObject({ success: true, stage: 'script', outputPath: path })
   })
+  it('keeps controlled status repair for a legacy queue receipt without a journal', async () => {
+    const { root, params } = fixture()
+    mocks.current.mockReturnValue(true)
+    const review: ReviewResult = {
+      stage: 'director',
+      reviewType: 'business',
+      result: 'PASS',
+      passed: true,
+      score: 9,
+      feedback: '通过',
+      issues: [],
+      createdAt: new Date().toISOString()
+    }
+    const path = resolveProjectArtifactPath(root, 'pipelineState')
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(
+      path,
+      JSON.stringify({
+        projectId: 'legacy-project',
+        episodes: {
+          1: {
+            episodeNum: 1,
+            status: 'script',
+            completedStages: ['director'],
+            reviews: [review],
+            stageStates: {
+              director: {
+                stage: 'director',
+                operationId: 'legacy-op',
+                lastReview: review,
+                status: 'passed',
+                updatedAt: review.createdAt
+              }
+            },
+            updatedAt: review.createdAt
+          }
+        },
+        updatedAt: review.createdAt
+      })
+    )
+    await expect(
+      recoverBatchCommit('director', params, 'legacy-op')
+    ).resolves.toMatchObject({ success: true, state: 'director_done' })
+    expect(JSON.parse(readFileSync(path, 'utf8')).episodes[1].status).toBe(
+      'director'
+    )
+  })
+
   it('preserves FAIL reviews as failed receipts instead of treating a marker as approval', async () => {
     const { root, params } = fixture()
     const path = resolveEpisodeArtifactPath(root, 'scriptReview', 1)

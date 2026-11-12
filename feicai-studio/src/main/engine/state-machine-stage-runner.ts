@@ -18,13 +18,55 @@ import {
   isMissingFileError
 } from '../security/access-control'
 import { resolveEpisodeArtifactPath } from '@shared/path-resolver'
-import { parseReviewMarkdown } from '@shared/review-artifacts'
+import { ProductionCommitStore } from '../io/production-commit-store'
+import type { ProductionCommitRecord } from '@shared/production-commit'
+import type { WorkflowReviewResult } from '../workflow/workflow-engine'
+
+/** The operation owns the batch item; only a durable negative review advances
+ * its generation/review attempt. Stage starts and provider errors do not. */
+export function restoreStageReviewAttempt(
+  projectPath: string,
+  projectConfig: Partial<ProjectConfig> | null,
+  operationId: string,
+  stage: AutomatedPipelineStage,
+  episodeNum: number
+): {
+  retryCount: number
+  reviewFeedback?: string
+  reviewPhase?: ProductionCommitRecord['phase']
+} {
+  const store = new ProductionCommitStore(projectPath, projectConfig)
+  let reviewFeedback: string | undefined
+  const reviewStage = stage === 'storyboard' ? 'storyboard_review' : stage
+  for (let retryCount = 0; ; retryCount++) {
+    const record = store.get(
+      `${operationId}:review:${stage}:${retryCount}`,
+      `review:${reviewStage}:${episodeNum}`
+    )
+    if (!record || record.phase !== 'committed')
+      return { retryCount, reviewFeedback, reviewPhase: record?.phase }
+    const saved = record.result as WorkflowReviewResult | undefined
+    if (
+      !saved ||
+      saved.stage !== reviewStage ||
+      saved.review?.stage !== reviewStage ||
+      typeof saved.review.passed !== 'boolean' ||
+      !['PASS', 'FAIL', 'INVALID'].includes(saved.review.result) ||
+      saved.review.passed !== (saved.review.result === 'PASS')
+    )
+      throw new Error('已提交审核收据损坏')
+    if (saved.review.passed)
+      return { retryCount, reviewFeedback, reviewPhase: record.phase }
+    reviewFeedback = saved.review.feedback
+  }
+}
 
 export interface StageGenerationContext {
   stage: AutomatedPipelineStage
   signal?: AbortSignal
   waitUntilResumed?: () => Promise<void>
   operationId?: string
+  reviewPhase?: ProductionCommitRecord['phase']
   workflowEngine: WorkflowEngine
   projectPath: string
   episodeNum: number
@@ -91,7 +133,7 @@ export async function runStageGeneration(
   try {
     await ctx.waitUntilResumed?.()
     ctx.signal?.throwIfAborted()
-    if (ctx.statePersistence) {
+    if (ctx.statePersistence && !ctx.reviewPhase) {
       await ctx.statePersistence.markStageRunning(ctx.episodeNum, stage, {
         outputPath: ctx.getStageOutputPath(stage)
       })
@@ -126,6 +168,8 @@ export async function runStageGeneration(
         if (!isMissingFileError(error)) throw error
       }
     }
+    if (ctx.reviewPhase && committedContent === null)
+      throw new Error('待恢复审核的生成产物身份已变化，禁止重新生成覆盖')
     const result =
       committedContent !== null
         ? {
@@ -212,29 +256,6 @@ export async function runStageReview(
     await ctx.waitUntilResumed?.()
     ctx.signal?.throwIfAborted()
     const reviewStage = stage === 'storyboard' ? 'storyboard_review' : stage
-    if (stage === 'storyboard' && ctx.operationId) {
-      const path = assertPathWithinProject(
-        ctx.projectPath,
-        resolveEpisodeArtifactPath(
-          ctx.projectPath,
-          'storyboardReview',
-          ctx.episodeNum,
-          ctx.projectConfig
-        )
-      )
-      try {
-        const saved = (await readRegularFile(path)).toString('utf8')
-        if (saved.includes(`<!-- feicai-operation:${ctx.operationId} -->`)) {
-          const review = parseReviewMarkdown(saved, 'storyboard_review')
-          if (!review) throw new Error('已提交分镜审核收据损坏')
-          ctx.onReviewAppended(review)
-          ctx.onReviewResult({ stage, result: review })
-          return review
-        }
-      } catch (error) {
-        if (!isMissingFileError(error)) throw error
-      }
-    }
     const result = await ctx.workflowEngine.reviewStage(reviewStage, {
       signal: ctx.signal,
       operationId: ctx.operationId,

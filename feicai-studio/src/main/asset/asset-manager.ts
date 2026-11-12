@@ -1,3 +1,4 @@
+import { ProductionCommitStore } from '../io/production-commit-store'
 import { readdir } from 'fs/promises'
 import { join, extname } from 'path'
 import { v4 as uuid } from 'uuid'
@@ -128,6 +129,7 @@ export class AssetManager {
     assertAssetType(assetType)
     assertNonEmptyString(assetName, '素材名')
     if (typeof newPromptText !== 'string') throw new Error('提示词必须为字符串')
+    await new ProductionCommitStore(this.projectPath, this.config).recover()
     const filePath = this.checked(
       resolveProjectArtifactPath(
         this.projectPath,
@@ -182,6 +184,7 @@ export class AssetManager {
       )
     )
     const target = this.checked(join(directory, `${safeName}${extension}`))
+    await new ProductionCommitStore(this.projectPath, this.config).recover()
     await atomicCopyFile(source, target)
     return target
   }
@@ -233,6 +236,7 @@ export class AssetManager {
   async saveScript(episodeNum: number, content: string): Promise<void> {
     assertEpisodeNumber(episodeNum)
     if (typeof content !== 'string') throw new Error('剧本内容必须为字符串')
+    await new ProductionCommitStore(this.projectPath, this.config).recover()
     await atomicWriteFile(
       this.checked(
         resolveEpisodeArtifactPath(

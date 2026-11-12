@@ -1,3 +1,12 @@
+import { recoverProductionCommits } from './production-commit-service'
+import { ProductionCommitStore } from '../io/production-commit-store'
+import { ProjectStatePersistence } from '../engine/project-state'
+import { deriveEpisodeStatusFromStage } from '../engine/state-machine-meta'
+import {
+  acquireExecutionLease,
+  releaseExecutionLease,
+  type ExecutionLease
+} from './batch-execution-lease'
 import {
   resolveEpisodeArtifactPath,
   resolveProjectArtifactPath
@@ -20,11 +29,25 @@ import {
 } from '../security/access-control'
 import { getProjectByPath } from './project-service'
 import { isReviewCurrent } from '../engine/artifact-provenance'
-import { ProjectStatePersistence } from '../engine/project-state'
-import { deriveEpisodeStatusFromStage } from '../engine/state-machine-meta'
 
 /** Recover only a commit bearing this exact main-generated operation ID. */
 export async function recoverBatchCommit(
+  action: string,
+  params: BatchWorkflowBaseParams,
+  operationId: string,
+  existingLease?: ExecutionLease
+): Promise<WorkflowActionResult | PipelineStartResult | null> {
+  const lease = acquireExecutionLease('batch-commit-recovery', existingLease)
+  try {
+    const config = getProjectByPath(params.projectPath)?.config
+    await recoverProductionCommits(params.projectPath, config, lease)
+    return await recoverBatchReceipt(action, params, operationId)
+  } finally {
+    if (!existingLease) releaseExecutionLease(lease)
+  }
+}
+
+async function recoverBatchReceipt(
   action: string,
   params: BatchWorkflowBaseParams,
   operationId: string
@@ -52,18 +75,24 @@ export async function recoverBatchCommit(
       throw new Error('已提交制作阶段的产物已变更，请停止旧队列后重新选择任务')
     }
     if (!snapshot.lastReview.passed) return null
-    const project = getProjectByPath(params.projectPath)
-    if (!project) throw new Error('恢复队列项目不存在')
-    const persistence = new ProjectStatePersistence(
-      params.projectPath,
-      project.id,
-      config
-    )
-    await persistence.load()
-    await persistence.updateEpisodeStatus(
-      params.episodeNum,
-      deriveEpisodeStatusFromStage(stage)
-    )
+    // Legacy receipts predate the state write set. Preserve their controlled
+    // status repair, while journaled receipts must never roll newer status back.
+    if (
+      new ProductionCommitStore(params.projectPath, config).list().length === 0
+    ) {
+      const project = getProjectByPath(params.projectPath)
+      if (!project) throw new Error('恢复队列项目不存在')
+      const persistence = new ProjectStatePersistence(
+        params.projectPath,
+        project.id,
+        config
+      )
+      await persistence.load()
+      await persistence.updateEpisodeStatus(
+        params.episodeNum,
+        deriveEpisodeStatusFromStage(stage)
+      )
+    }
     return {
       success: true,
       state:

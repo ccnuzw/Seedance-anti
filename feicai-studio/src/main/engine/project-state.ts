@@ -14,6 +14,13 @@ import type {
   ReviewResult
 } from '@shared/types'
 import { resolveProjectArtifactPath } from '@shared/path-resolver'
+import {
+  assertNoPreparedProductionWrites,
+  readCommitText,
+  type CommitWrite
+} from '../io/production-commit-store'
+import { deriveEpisodeStatusFromStage } from './state-machine-meta'
+import type { AutomatedPipelineStage } from '@shared/types'
 
 type StageSnapshotUpdate = Partial<
   Omit<EpisodeStageSnapshot, 'stage' | 'updatedAt'>
@@ -70,7 +77,7 @@ export class ProjectStatePersistence {
   constructor(
     private readonly projectPath: string,
     private readonly projectId: string,
-    config?: Partial<ProjectConfig> | null
+    private readonly config?: Partial<ProjectConfig> | null
   ) {
     this.filePath = assertPathWithinProject(
       projectPath,
@@ -85,7 +92,8 @@ export class ProjectStatePersistence {
 
   async load(): Promise<ProjectPipelineState> {
     const state = await readJsonWithRecovery<ProjectPipelineState>(
-      this.filePath
+      this.filePath,
+      { readOnly: true }
     )
     if (state) {
       if (
@@ -105,6 +113,7 @@ export class ProjectStatePersistence {
   }
 
   async save(): Promise<void> {
+    assertNoPreparedProductionWrites(this.projectPath, this.config)
     this.state.updatedAt = new Date().toISOString()
     await atomicWriteFile(this.filePath, JSON.stringify(this.state, null, 2))
   }
@@ -147,6 +156,70 @@ export class ProjectStatePersistence {
     )
   }
 
+  /** Prepare portable state bytes without touching disk or the live instance. */
+  prepareReviewCommit(
+    episodeNum: number,
+    stage: AutomatedPipelineStage,
+    review: ReviewResult,
+    operationId?: string
+  ): CommitWrite {
+    const expected = readCommitText(this.filePath)
+    const state =
+      expected === null
+        ? ({
+            projectId: this.projectId,
+            episodes: {},
+            updatedAt: review.createdAt
+          } as ProjectPipelineState)
+        : normalizeSavedProjectState(
+            JSON.parse(expected),
+            this.projectPath,
+            this.projectId
+          )
+    const existing =
+      state.episodes[episodeNum] || createEmptyEpisodeState(episodeNum)
+    const current = existing.stageStates[stage]
+    if (review.stage !== (stage === 'storyboard' ? 'storyboard_review' : stage))
+      throw new Error('审核收据阶段不匹配')
+    const duplicate = existing.reviews.find(
+      (r) => r.stage === review.stage && r.createdAt === review.createdAt
+    )
+    if (duplicate && JSON.stringify(duplicate) !== JSON.stringify(review))
+      throw new Error('审核收据身份重复但内容不同')
+    state.episodes[episodeNum] = {
+      ...existing,
+      status: review.passed
+        ? deriveEpisodeStatusFromStage(stage)
+        : existing.status,
+      lastStage: stage,
+      updatedAt: review.createdAt,
+      reviews: duplicate ? existing.reviews : [...existing.reviews, review],
+      completedStages: review.passed
+        ? Array.from(new Set([...existing.completedStages, stage]))
+        : existing.completedStages.filter((s) => s !== stage),
+      stageStates: {
+        ...existing.stageStates,
+        [stage]: {
+          ...current,
+          stage,
+          status: review.passed ? 'passed' : 'failed',
+          attempts: current?.attempts || 0,
+          operationId,
+          completedAt: review.createdAt,
+          updatedAt: review.createdAt,
+          lastReview: review,
+          lastError: review.passed ? undefined : review.feedback
+        }
+      }
+    }
+    state.updatedAt = review.createdAt
+    return {
+      path: this.filePath,
+      expected,
+      content: JSON.stringify(state, null, 2)
+    }
+  }
+
   async markStageReviewResult(
     episodeNum: number,
     stage: PipelineStage,
@@ -157,6 +230,31 @@ export class ProjectStatePersistence {
       operationId?: string
     } = {}
   ): Promise<void> {
+    // A publication may already have installed this exact review and status.
+    await this.load()
+    const episode = this.state.episodes[episodeNum]
+    if (review.stage !== (stage === 'storyboard' ? 'storyboard_review' : stage))
+      throw new Error('审核收据阶段不匹配')
+    const duplicate = episode?.reviews.find(
+      (r) => r.stage === review.stage && r.createdAt === review.createdAt
+    )
+    if (duplicate) {
+      const snapshot = episode.stageStates[stage]
+      if (
+        JSON.stringify(duplicate) !== JSON.stringify(review) ||
+        snapshot?.lastReview?.createdAt !== review.createdAt ||
+        snapshot?.operationId !== extra.operationId
+      )
+        throw new Error('审核收据身份、阶段或内容冲突')
+      return
+    }
+    for (const other of Object.values(this.state.episodes)) {
+      if (
+        other.episodeNum !== episodeNum &&
+        other.reviews.some((r) => JSON.stringify(r) === JSON.stringify(review))
+      )
+        throw new Error('审核收据不能跨集复用')
+    }
     // Read/merge review history inside the per-path transaction, not a stale instance snapshot.
     await this.updateStageSnapshot(
       episodeNum,

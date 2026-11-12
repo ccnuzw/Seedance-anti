@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../db/llm-config-repository', () => ({
   getDefaultLLMConfig: mocks.config
 }))
+vi.mock('./production-commit-service', () => ({
+  recoverProductionCommits: vi.fn().mockResolvedValue(undefined)
+}))
 vi.mock('./project-service', () => ({ resolveProjectConfig: mocks.project }))
 vi.mock('../llm/provider-factory', () => ({ createProvider: mocks.provider }))
 vi.mock('fs', async (original) => ({
@@ -444,7 +447,7 @@ describe('pipeline runtime admission and settling', () => {
     )
     provider.model = 'changed'
     mocks.read.mockReturnValue('{"pipelineSettings":{"passScore":10}}')
-    await Promise.resolve()
+    await vi.waitFor(() => expect(mocks.provider).toHaveBeenCalled())
     expect(mocks.provider).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'workflow-model' })
     )

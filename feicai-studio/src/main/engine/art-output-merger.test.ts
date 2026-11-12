@@ -12,6 +12,10 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import type { ProjectConfig } from '@shared/types'
 import { ArtOutputMerger, readArtReference } from './art-output-merger'
+import {
+  ProductionCommitStore,
+  commitHash
+} from '../io/production-commit-store'
 import { parseAssetMarkdown } from '../asset/markdown-parser'
 
 let root: string
@@ -54,12 +58,25 @@ describe('ArtOutputMerger approved publishing', () => {
 
   it('两份共享文件发布中途取消可重试，快照不会把部分发布误认为外部修改', async () => {
     const revised = output('## 林舟\n\n灰衣', '## 院子\n\n白昼')
-    let commits = 0
-    await expect(
-      ArtOutputMerger.parseAndMerge(revised, root, 1, config, async () => {
-        if (++commits === 3) throw new Error('中途取消')
-      })
-    ).rejects.toThrow('中途取消')
+    const prepared = await ArtOutputMerger.parseAndMerge(
+      revised,
+      root,
+      1,
+      config,
+      undefined,
+      true
+    )
+    const store = new ProductionCommitStore(root, config, (point) => {
+      if (point === 'installed:1') throw new Error('中途取消')
+    })
+    const intent = await store.intent(
+      'art-interruption',
+      'art:1',
+      commitHash(revised),
+      [1]
+    )
+    const record = await store.prepare(intent, prepared.writes)
+    await expect(store.install(record)).rejects.toThrow('中途取消')
     expect(readArtReference(root, 'characterPrompts', 1, config)).toBe('')
     expect(readArtReference(root, 'scenePrompts', 1, config)).toBe('')
     await ArtOutputMerger.parseAndMerge(revised, root, 1, config)

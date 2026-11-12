@@ -38,6 +38,8 @@ import {
   markProjectPlotBreakdownEpisodeStatus,
   readPlotBreakdown
 } from '../project/plot-breakdown-store'
+import { ProductionCommitStore } from '../io/production-commit-store'
+import { ProjectStatePersistence } from '../engine/project-state'
 import { WorkflowEngine, type WorkflowEngineContext } from './workflow-engine'
 import type { ILLMProvider } from '../llm/types'
 
@@ -190,10 +192,100 @@ beforeEach(() => {
   engine.setProvider({ generate, generateStream: vi.fn() } as never)
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   rmSync(root, { recursive: true, force: true })
 })
 
 describe('workflow-engine behavior', () => {
+  it.each([
+    ['story_review', 0],
+    ['story_review', 1],
+    ['script_review', 0],
+    ['script_review', 1],
+    ['art', 0],
+    ['art', 1],
+    ['art', 2],
+    ['art', 3]
+  ] as const)(
+    'recovers the whole %s publication after installed:%i without another model call',
+    async (stage, boundary) => {
+      const operationId = 'recover-review'
+      const operationContext = { ...ctx, operationId }
+      if (stage === 'story_review') {
+        put(
+          episode('storyBeat'),
+          '<!-- feicai-story-batch:1 -->\n【剧情1】林舟走进院子，第1集，状态：未用'
+        )
+      } else if (stage === 'script_review') {
+        put(episode('script'), VALID_SCRIPT)
+      } else {
+        productionInputs()
+        const old = JSON.parse(readFileSync(project('pipelineState'), 'utf8'))
+        put(
+          project('pipelineState'),
+          JSON.stringify({
+            projectId: 'project',
+            episodes: {
+              1: {
+                episodeNum: 1,
+                status: 'director_done',
+                completedStages: ['director'],
+                stageStates: old.episodes[1].stageStates,
+                reviews: [],
+                updatedAt: result('art').createdAt
+              }
+            },
+            updatedAt: result('art').createdAt
+          })
+        )
+        engine.setPublicationState(
+          new ProjectStatePersistence(root, 'project', config),
+          operationId
+        )
+      }
+      const originalInstall = ProductionCommitStore.prototype.install
+      vi.spyOn(
+        ProductionCommitStore.prototype,
+        'install'
+      ).mockImplementationOnce(function (record) {
+        const faulty = new ProductionCommitStore(root, config, (point) => {
+          if (point === `installed:${boundary}`)
+            throw new Error('publication crash')
+        })
+        return originalInstall.call(faulty, record)
+      })
+      await expect(engine.reviewStage(stage, operationContext)).rejects.toThrow(
+        'publication crash'
+      )
+      const calls = reviewContent.mock.calls.length
+      const fresh = new ProductionCommitStore(root, config)
+      expect(fresh.list()[0].phase).toBe('prepared')
+      await fresh.recover()
+      const recovered = fresh.list()[0]
+      await new ProductionCommitStore(root, config).recover()
+      expect(fresh.list()[0]).toEqual(recovered)
+      for (const file of recovered.files)
+        expect(readFileSync(join(root, file.path), 'utf8')).toBe(file.content)
+      const receipt = await engine.reviewStage(stage, operationContext)
+      expect(receipt.review.passed).toBe(true)
+      expect(isReviewCurrent(receipt.review, root, 1, config)).toBe(true)
+      expect(reviewContent).toHaveBeenCalledTimes(calls)
+      if (stage === 'script_review')
+        expect(readFileSync(project('plotBreakdown'), 'utf8')).toContain(
+          '状态：已用'
+        )
+      if (stage === 'art') {
+        const persistence = new ProjectStatePersistence(root, 'project', config)
+        await persistence.load()
+        expect(persistence.getEpisode(1)?.reviews).toHaveLength(1)
+        expect(persistence.getEpisode(1)?.stageStates.art).toMatchObject({
+          operationId,
+          status: 'passed'
+        })
+      }
+    }
+  )
+
   it.each([
     { passScore: Infinity },
     { llmTimeoutSec: 0 },

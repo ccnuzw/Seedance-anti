@@ -1,3 +1,4 @@
+import { hasUncommittedProductionWrites } from '../io/production-commit-store'
 import { createHash } from 'crypto'
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
@@ -67,8 +68,13 @@ export function captureReviewProvenance(
   projectPath: string,
   stage: ReviewStage,
   episodeNum: number,
-  config?: Partial<ProjectConfig> | null
+  config?: Partial<ProjectConfig> | null,
+  guardPaths?: Set<string>
 ): ReviewProvenance {
+  const read = (root: string, path: string, required = false) => {
+    guardPaths?.add(assertPathWithinProject(root, path))
+    return readContent(root, path, required)
+  }
   assertEpisodeNumber(episodeNum)
   if (!Object.prototype.hasOwnProperty.call(reviewedArtifact, stage))
     throw new Error('未知审核阶段')
@@ -77,7 +83,7 @@ export function captureReviewProvenance(
     episode = episodeNum,
     required = false
   ) =>
-    readContent(
+    read(
       projectPath,
       resolveEpisodeArtifactPath(projectPath, artifact, episode, config),
       required
@@ -139,7 +145,7 @@ export function captureReviewProvenance(
     if (chapterFiles.length === 0 || chapterWindow === 0) {
       add(
         'sourceNovel',
-        readContent(
+        read(
           projectPath,
           resolveProjectArtifactPath(projectPath, 'sourceNovel', config)
         )
@@ -158,13 +164,13 @@ export function captureReviewProvenance(
       for (const file of selected)
         add(
           `sourceChapter:${file}`,
-          readContent(projectPath, join(chapterDir, file), true)
+          read(projectPath, join(chapterDir, file), true)
         )
     }
   }
 
   if (stage === 'story_review' && entry.requiresInventory) {
-    const inventory = readContent(
+    const inventory = read(
       projectPath,
       resolveProjectArtifactPath(projectPath, 'plotBreakdown', config)
     )
@@ -194,7 +200,7 @@ export function captureReviewProvenance(
       add('storyReview', readEpisode('storyReview'))
     }
     if (entry.requiresInventory) {
-      const inventory = readContent(
+      const inventory = read(
         projectPath,
         resolveProjectArtifactPath(projectPath, 'plotBreakdown', config)
       )
@@ -232,6 +238,10 @@ export function captureReviewProvenance(
     // Both stages depend on the stable art references; storyboard additionally
     // consumes the published shared assets verbatim.
     for (const artifact of ['characterPrompts', 'scenePrompts'] as const) {
+      guardPaths?.add(resolveProjectArtifactPath(projectPath, artifact, config))
+      guardPaths?.add(
+        `${resolveEpisodeArtifactPath(projectPath, 'artDesign', episodeNum, config)}.references.json`
+      )
       add(
         `artReference:${artifact}`,
         readArtReference(projectPath, artifact, episodeNum, config)
@@ -255,6 +265,7 @@ export function isReviewCurrent(
   episodeNum: number,
   config?: Partial<ProjectConfig> | null
 ): boolean {
+  if (hasUncommittedProductionWrites(projectPath, config)) return false
   if (
     review.result !== 'PASS' ||
     review.passed !== true ||
