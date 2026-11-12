@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { createServer } from 'vite'
+import { exportDomArtifacts } from './ui-operation-acceptance-artifacts.mjs'
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const studio = resolve(directory, '..')
@@ -73,5 +74,6 @@ try {
   clearTimeout(timer)
   if (child?.exitCode === null) child.kill('SIGKILL')
   await server?.close()
+  await exportDomArtifacts(temporary, 'novel-draft')
   await rm(temporary, { recursive: true, force: true })
 }

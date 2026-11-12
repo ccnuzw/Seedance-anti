@@ -111,6 +111,7 @@ try {
     !f.calls.some((c: any) => c.method === 'review'),
     'successful generation does not auto review'
   )
+  await w.testCapture('novel-draft-desktop')
   f.fail = true
   await click('保存并审核草稿')
   await until(() => document.body.innerText.includes('审核未通过'))
@@ -153,6 +154,12 @@ try {
   assert(
     !!button('核对既有剧本') && document.body.innerText.includes('拆解已完成'),
     'exhausted chapters show completion instead of refresh loop'
+  )
+  assert(
+    document
+      .querySelectorAll('.document-command-step')[2]
+      .textContent?.includes('核对既有剧本'),
+    'exhausted inventory step asks to inspect existing scripts instead of repeating review'
   )
   f.ready = [12, 13, 14, 15]
   f.used = [12, 13]
@@ -365,6 +372,9 @@ try {
   navigate('/project/a/story?ep=4')
   await until(() => document.body.innerText.includes('从剧本起步'))
   assert(!!button('前往剧本'), 'script entry retains script navigation')
+  await w.testResize(390)
+  await delay()
+  await w.testCapture('novel-draft-390')
   await w.testFinish({ ok: true, checks })
 } catch (error) {
   await w.testFinish({

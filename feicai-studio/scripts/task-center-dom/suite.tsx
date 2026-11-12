@@ -226,6 +226,7 @@ async function main() {
       text().includes('合成审核失败'),
     'Completed queue preserves individual task failure'
   )
+  await w.testCapture('task-center-desktop')
   await w.testResize(390)
   await sleep()
   const drawer = document.querySelector('dialog')!
@@ -233,6 +234,7 @@ async function main() {
     drawer.getBoundingClientRect().width <= 390 && drawer.scrollWidth <= 390,
     '390px drawer has no horizontal overlap/overflow'
   )
+  await w.testCapture('task-center-drawer-390')
   const close = button('关闭')!
   close.focus()
   await w.testKeys('Tab')
@@ -259,6 +261,7 @@ async function main() {
       actionRect.right <= 390,
     '390px global bar does not cover page primary action'
   )
+  await w.testCapture('task-center-bar-390')
   await w.testFinish({ ok: true, checks })
 }
 void main().catch((error) =>

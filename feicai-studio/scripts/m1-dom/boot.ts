@@ -19,12 +19,21 @@ async function read(method: string, id: string, args: any[], value: any) {
 }
 const idFromPath = (p: string) => p.split('/')[2]
 const api = {
+  async listLLMConfigs() {
+    return []
+  },
   async syncProjectStatus(id: string, p: string) {
     return read('syncProjectStatus', id, [id, p], fixtures[id]?.episodes || [])
   },
   async getProject(id: string) {
     record('getProject', [id])
     return structuredClone(fixtures[id]?.project || null)
+  },
+  async listPipelineTasks() {
+    return []
+  },
+  async getExecutionStatus() {
+    return { busy: false, phase: 'idle' }
   },
   async getPipelineState() {
     record('getPipelineState', [])

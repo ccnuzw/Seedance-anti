@@ -14,7 +14,12 @@ export default function ToastContainer() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="toast-container">
+    <div
+      className="toast-container"
+      role="region"
+      aria-label="通知"
+      aria-live="polite"
+    >
       {toasts.map((toast) => (
         <div
           key={toast.id}
@@ -32,7 +37,7 @@ export default function ToastContainer() {
               e.stopPropagation()
               startExit(toast.id)
             }}
-            aria-label="关闭"
+            aria-label={`关闭${toast.type === 'warning' ? '警告' : ''}通知`}
           >
             ✕
           </button>

@@ -108,11 +108,12 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
             </div>
             <div className="pipeline-settings-grid project-settings-grid">
               <div className="ps-item">
-                <label>项目名称</label>
+                <label htmlFor="project-name">项目名称</label>
                 <span className="ps-desc text-secondary">
                   用于项目列表、导出文件和生成上下文
                 </span>
                 <input
+                  id="project-name"
                   className="input input-sm"
                   value={projectDraft.name}
                   onChange={(e) =>
@@ -124,11 +125,12 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
                 />
               </div>
               <div className="ps-item">
-                <label>视觉风格</label>
+                <label htmlFor="project-style">视觉风格</label>
                 <span className="ps-desc text-secondary">
                   会进入导演、服化道与分镜提示词
                 </span>
                 <input
+                  id="project-style"
                   className="input input-sm"
                   list="project-style-options"
                   value={projectDraft.visualStyle}
@@ -146,11 +148,12 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
                 </datalist>
               </div>
               <div className="ps-item">
-                <label>目标媒介</label>
+                <label htmlFor="project-medium">目标媒介</label>
                 <span className="ps-desc text-secondary">
                   会影响输出格式、镜头密度与叙事节奏
                 </span>
                 <input
+                  id="project-medium"
                   className="input input-sm"
                   list="project-medium-options"
                   value={projectDraft.targetMedium}
@@ -168,11 +171,12 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
                 </datalist>
               </div>
               <div className="ps-item">
-                <label>总集数</label>
+                <label htmlFor="project-episodes">总集数</label>
                 <span className="ps-desc text-secondary">
                   用于项目进度和缺失集数检测，0 表示自动检测
                 </span>
                 <input
+                  id="project-episodes"
                   type="number"
                   className="input input-sm"
                   min={0}
@@ -186,11 +190,12 @@ export default function ProjectPipelineSettingsPanel(props: Props) {
                 />
               </div>
               <div className="ps-item">
-                <label>每集章节数</label>
+                <label htmlFor="project-chapters">每集章节数</label>
                 <span className="ps-desc text-secondary">
                   剧情拆解时 EP01 读取第 1-N 章，0 表示读取整本原文
                 </span>
                 <input
+                  id="project-chapters"
                   type="number"
                   className="input input-sm"
                   min={0}

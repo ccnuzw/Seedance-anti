@@ -192,7 +192,7 @@ async function suite() {
   waterline.readyEpisodeNumbers = []
   useProjectStore.setState({ currentProject: project, episodes: [episode] })
   let rejectBackend: any
-  w.feicaiAPI.getPipelineState = () =>
+  w.feicaiAPI.getExecutionStatus = () =>
     new Promise((_resolve, reject) => {
       rejectBackend = reject
     })
@@ -210,21 +210,25 @@ async function suite() {
   rejectBackend(new Error('synthetic background failure'))
   await until(() => document.body.innerText.includes('后台任务状态读取失败'))
   assert(startButton().disabled, 'failed backend read blocks batch start')
-  w.feicaiAPI.getPipelineState = async () => ({
-    state: 'director',
-    projectId: 'another'
+  w.feicaiAPI.getExecutionStatus = async () => ({
+    busy: true,
+    phase: 'running',
+    owner: 'pipeline'
   })
   const recheck = () =>
     [...document.querySelectorAll('button')].find((b) =>
       b.textContent?.includes('重新检查后台任务')
     )!
   recheck().click()
-  await until(() => document.body.innerText.includes('后台有流水线任务'))
+  await until(() => document.body.innerText.includes('后台制作任务正在执行中'))
   assert(
     startButton().disabled,
     'other project backend work blocks batch start'
   )
-  w.feicaiAPI.getPipelineState = async () => ({ state: 'idle' })
+  w.feicaiAPI.getExecutionStatus = async () => ({
+    busy: false,
+    phase: 'idle'
+  })
   // Remount performs the same query after the external task has ended.
   navigate('/other')
   await delay()
@@ -352,6 +356,7 @@ async function suite() {
       ?.textContent?.includes(MODE_MAP.script_review.label)
   )
   assert(true, 'explicit URL mode remains compatible')
+  await w.testCapture('batch-desktop')
   await w.testResize(390)
   await delay()
   assert(
@@ -364,6 +369,7 @@ async function suite() {
     ),
     'no generation or production API used'
   )
+  await w.testCapture('batch-390')
   w.testFinish({ ok: true, checks })
 }
 suite().catch((error) =>

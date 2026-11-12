@@ -74,10 +74,23 @@ describe('renderer observes main-owned queue', () => {
     })
     expect(useBatchStore.getState().snapshot?.status).toBe('running')
   })
+  it('resumes the observed interrupted queue with its identity', async () => {
+    useBatchStore.setState({ snapshot: snapshot('interrupted') })
+    mocks.resume.mockResolvedValue(snapshot('running'))
+    await useBatchStore.getState().resume()
+    expect(mocks.resume).toHaveBeenCalledWith('q')
+    expect(useBatchStore.getState().snapshot?.status).toBe('running')
+  })
+  it('cannot control an unidentified queue through the legacy no-argument path', async () => {
+    await expect(useBatchStore.getState().resume()).rejects.toThrow('队列身份')
+    expect(mocks.resume).not.toHaveBeenCalled()
+  })
   it('stop stays pending until main acknowledges real settlement', async () => {
     const gate = Promise.withResolvers<BatchQueueState>()
     mocks.stop.mockReturnValue(gate.promise)
+    useBatchStore.setState({ snapshot: snapshot('running') })
     const stopping = useBatchStore.getState().stop()
+    expect(mocks.stop).toHaveBeenCalledWith('q')
     expect(useBatchStore.getState().commandPending).toBe(true)
     gate.resolve(snapshot('stopped'))
     await stopping

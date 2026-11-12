@@ -180,11 +180,11 @@ async function suite() {
   await select('novel')
   await ready()
   assert(
-    row(1).textContent?.includes('缺少小说原文'),
+    row(1).textContent?.includes('录入小说原文'),
     'novel missing input is explicit'
   )
   assert(
-    rowAction(1).textContent?.includes('剧情'),
+    rowAction(1).textContent?.includes('录入小说原文'),
     'novel missing source is earliest gate'
   )
   rowAction(1).click()
@@ -211,7 +211,7 @@ async function suite() {
   button('刷新').click()
   await ready()
   assert(
-    row(1).textContent?.includes('库存已使用，需核对') &&
+    row(1).textContent?.includes('核对已用剧情') &&
       rowAction(1).textContent?.includes('剧情'),
     'used inventory without script is not available input'
   )
@@ -236,7 +236,8 @@ async function suite() {
   await w.testKeys('Enter')
   await location('/project/story/story?ep=3')
   await until(
-    () => text().includes('EP03'),
+    () =>
+      document.querySelector('.epnav-active')?.getAttribute('title') === 'EP03',
     'story editor consumes episode query'
   )
   assert(

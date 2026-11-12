@@ -482,7 +482,7 @@ export default function BatchPage() {
         </div>
       )}
       {snapshot &&
-        ['interrupted', 'stopped'].includes(snapshot.status) &&
+        snapshot.status === 'interrupted' &&
         snapshot.cursor < snapshot.tasks.length && (
           <div className="batch-bg-banner">
             <span>
@@ -490,20 +490,20 @@ export default function BatchPage() {
             </span>
             <button
               className="btn btn-primary btn-sm"
-              disabled={commandPending}
+              disabled={
+                commandPending || !!queueError || backgroundState !== 'ready'
+              }
               onClick={() => void controlQueue(resume)}
             >
               恢复未完成队列
             </button>
-            {snapshot.status === 'interrupted' && (
-              <button
-                className="btn btn-sm"
-                disabled={commandPending}
-                onClick={() => void controlQueue(stop)}
-              >
-                停止保留的队列
-              </button>
-            )}
+            <button
+              className="btn btn-sm"
+              disabled={commandPending}
+              onClick={() => void controlQueue(stop)}
+            >
+              停止保留的队列
+            </button>
           </div>
         )}
 
@@ -664,7 +664,12 @@ export default function BatchPage() {
                 </button>
                 <button
                   className="btn btn-sm"
-                  disabled={commandPending || snapshot?.status === 'stopping'}
+                  disabled={
+                    commandPending ||
+                    snapshot?.status === 'stopping' ||
+                    (snapshot?.status === 'paused' &&
+                      (!!queueError || backgroundState !== 'paused'))
+                  }
                   onClick={() =>
                     void controlQueue(
                       snapshot?.status === 'paused' ? resume : pause

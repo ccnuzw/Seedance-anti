@@ -179,6 +179,24 @@ export default function StoryBeatEditorPage() {
     )
   )
   const canScript = novel ? !!scriptEp : passed
+  const scriptStep = canScript
+    ? { description: '已有可制作剧情', stateLabel: '可前往' }
+    : novel && nextAction === 'refresh'
+      ? {
+          description: '库存目标集状态尚未确认，请刷新核对集数',
+          stateLabel: '集数待核对'
+        }
+      : novel && nextAction === 'next'
+        ? {
+            description: '当前可用剧情已用尽，请生成下一批草稿并审核',
+            stateLabel: '等待下一批'
+          }
+        : novel && nextAction === 'complete'
+          ? {
+              description: '当前章节拆解已完成或库存已使用，请核对既有剧本',
+              stateLabel: '核对既有剧本'
+            }
+          : { description: '先完成草稿审核', stateLabel: '等待审核' }
   const review = !passed && latestReview?.passed ? null : latestReview
 
   const act = async (mode: 'generate' | 'review' | 'revise') => {
@@ -439,9 +457,8 @@ export default function StoryBeatEditorPage() {
           {
             id: 'script',
             label: '制作剧本',
-            description: canScript ? '已有可制作剧情' : '先完成草稿审核',
-            state: canScript ? 'ready' : 'blocked',
-            stateLabel: canScript ? '可前往' : '等待审核'
+            ...scriptStep,
+            state: canScript ? 'ready' : 'blocked'
           }
         ],
         primaryAction: {

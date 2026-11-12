@@ -18,6 +18,9 @@ const ep = { id: 'a-4', projectId: 'a', episodeNumber: 4, hasStoryBeat: false }
 const record = (method: string, args: any[]) =>
   state.calls.push({ method, args })
 ;(window as any).feicaiAPI = {
+  listPipelineTasks: async () => [],
+  getBatchState: async () => null,
+  getExecutionStatus: async () => ({ busy: false, phase: 'idle' }),
   readTextFile: async (p: string) => {
     record('read', [p])
     if (state.readFail) throw new Error('合成读取失败')
