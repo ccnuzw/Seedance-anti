@@ -88,6 +88,8 @@ export class ProductionCommitStore {
       !r.key ||
       !hash(r.inputHash) ||
       !['intent', 'prepared', 'committed'].includes(r.phase) ||
+      (r.kind !== undefined &&
+        !['production', 'project-settings'].includes(r.kind)) ||
       typeof r.projected !== 'boolean' ||
       !Array.isArray(r.files) ||
       !Array.isArray(r.episodeNumbers) ||
@@ -96,6 +98,20 @@ export class ProductionCommitStore {
       (r.phase !== 'committed' && r.projected)
     )
       throw new Error('未知或损坏的生产提交日志，禁止写入')
+    if (r.kind === 'project-settings') {
+      const result = r.result as Record<string, unknown>
+      if (
+        !result ||
+        typeof result.id !== 'string' ||
+        typeof result.name !== 'string' ||
+        typeof result.visualStyle !== 'string' ||
+        typeof result.targetMedium !== 'string' ||
+        typeof result.totalEpisodes !== 'number' ||
+        typeof result.configJson !== 'string' ||
+        typeof result.updatedAt !== 'string'
+      )
+        throw new Error('项目设置提交投影内容损坏')
+    }
     const targets = new Set<string>()
     for (const file of r.files) {
       if (
@@ -180,7 +196,9 @@ export class ProductionCommitStore {
     key: string,
     inputHash: string,
     episodeNumbers: number[],
-    guardPaths: string[] = []
+    guardPaths: string[] = [],
+    kind: 'production' | 'project-settings' = 'production',
+    result?: unknown
   ): Promise<ProductionCommitRecord> {
     const existing = this.get(operationId, key)
     if (existing) {
@@ -208,8 +226,10 @@ export class ProductionCommitStore {
       inputHash,
       guards,
       phase: 'intent',
+      kind,
       files: [],
       episodeNumbers,
+      result,
       projected: false
     }
     await this.save(r, null)
@@ -271,7 +291,12 @@ export class ProductionCommitStore {
         content: w.content
       }
     })
-    const prepared = { ...r, phase: 'prepared' as const, files, result }
+    const prepared = {
+      ...r,
+      phase: 'prepared' as const,
+      files,
+      result: result === undefined ? r.result : result
+    }
     this.validate(prepared)
     await this.save(prepared, r)
     this.fault?.('prepared', prepared)
@@ -320,12 +345,20 @@ export class ProductionCommitStore {
     return committed
   }
   async recover(
-    project?: (episodes: number[]) => Promise<void>
+    project?: (
+      episodes: number[],
+      record: ProductionCommitRecord
+    ) => Promise<void>
   ): Promise<void> {
     for (let record of this.list()) {
+      if (record.kind === 'project-settings' && !project)
+        throw new Error('项目设置提交必须由受控项目恢复入口投影')
       if (record.phase === 'prepared') record = await this.install(record)
-      if (record.phase === 'committed' && !record.projected && project) {
-        await project(record.episodeNumbers)
+      if (record.phase === 'committed' && !record.projected) {
+        if (!project && record.kind === 'project-settings')
+          throw new Error('项目设置提交必须由受控项目恢复入口投影')
+        if (!project) continue
+        await project(record.episodeNumbers, record)
         this.fault?.('projection', record)
         await this.save({ ...record, projected: true }, record)
         this.fault?.('receipt', record)

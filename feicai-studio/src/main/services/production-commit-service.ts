@@ -1,4 +1,6 @@
 import type { ProjectConfig } from '@shared/types'
+import type { ProductionCommitRecord } from '@shared/production-commit'
+import { updateProjectRecord } from '../db/project-repository'
 import {
   ProductionCommitStore,
   type CommitWrite
@@ -33,7 +35,11 @@ export async function recoverProductionCommits(
   projectPath: string,
   config?: Partial<ProjectConfig> | null,
   existingLease?: ExecutionLease,
-  projectId?: string
+  projectId?: string,
+  project?: (
+    episodes: number[],
+    record: ProductionCommitRecord
+  ) => Promise<void>
 ): Promise<void> {
   const lease = acquireExecutionLease('production-recovery', existingLease)
   try {
@@ -48,11 +54,33 @@ export async function recoverProductionCommits(
         )
     )
       return
-    const project = await projectionBinding(projectPath, projectId)
+    const boundProject = await projectionBinding(projectPath, projectId)
     const { syncFreshProductionEpisodes } =
       await import('../db/episode-sync-repository')
-    await store.recover((episodes) =>
-      syncFreshProductionEpisodes(project.id, projectPath, episodes)
+    await store.recover(
+      project ||
+        (async (episodes, record) => {
+          if (record.kind === 'project-settings') {
+            const result = record.result as {
+              id: string
+              name: string
+              visualStyle: string
+              targetMedium: string
+              totalEpisodes: number
+              configJson: string
+              updatedAt: string
+            }
+            if (result.id !== boundProject.id)
+              throw new Error('项目设置提交投影身份不一致')
+            updateProjectRecord(result)
+            return
+          }
+          await syncFreshProductionEpisodes(
+            boundProject.id,
+            projectPath,
+            episodes
+          )
+        })
     )
   } finally {
     if (!existingLease) releaseExecutionLease(lease)
@@ -71,6 +99,12 @@ export async function commitProductionFiles(params: {
   episodeNumbers: number[]
   writes: CommitWrite[]
   lease?: ExecutionLease
+  project?: (
+    episodes: number[],
+    record: ProductionCommitRecord
+  ) => Promise<void>
+  kind?: 'production' | 'project-settings'
+  result?: unknown
 }): Promise<void> {
   const lease = acquireExecutionLease('production-commit', params.lease)
   try {
@@ -78,7 +112,8 @@ export async function commitProductionFiles(params: {
       params.projectPath,
       params.config,
       lease,
-      params.projectId
+      params.projectId,
+      params.project
     )
     const store = new ProductionCommitStore(params.projectPath, params.config)
     await projectionBinding(params.projectPath, params.projectId)
@@ -86,15 +121,21 @@ export async function commitProductionFiles(params: {
       params.operationId,
       params.key,
       params.inputHash,
-      params.episodeNumbers
+      params.episodeNumbers,
+      [],
+      params.kind,
+      params.result
     )
     if (intent.phase === 'intent')
-      await store.install(await store.prepare(intent, params.writes))
+      await store.install(
+        await store.prepare(intent, params.writes, params.result)
+      )
     await recoverProductionCommits(
       params.projectPath,
       params.config,
       lease,
-      params.projectId
+      params.projectId,
+      params.project
     )
   } finally {
     if (!params.lease) releaseExecutionLease(lease)

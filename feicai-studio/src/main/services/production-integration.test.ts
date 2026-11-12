@@ -161,6 +161,7 @@ import {
   syncSingleEpisodeStatus
 } from '../db/episode-sync-repository'
 import { recoverProductionCommits } from './production-commit-service'
+import { saveProjectSettings } from './project-service'
 
 let root: string
 function put(path: string, text: string): void {
@@ -202,6 +203,85 @@ afterEach(async () => {
 })
 
 describe('registered project → workflow service → automatic pipeline → asset/export IPC', () => {
+  it('saves settings and existing plot planning as one recoverable T03 commit with SQLite projection', async () => {
+    const config: ProjectConfig = {
+      projectName: '旧名',
+      entryStage: 'novel',
+      totalEpisodes: 2,
+      chaptersPerEpisode: 1,
+      visualStyle: '旧风格',
+      targetMedium: '短剧',
+      createdAt: '2026-01-01'
+    }
+    const db = initDatabase()
+    insertProjectRecord(db, {
+      id: 'settings',
+      name: config.projectName,
+      projectPath: root,
+      visualStyle: config.visualStyle,
+      targetMedium: config.targetMedium,
+      totalEpisodes: config.totalEpisodes,
+      configJson: JSON.stringify(config),
+      createdAt: config.createdAt,
+      updatedAt: config.createdAt
+    })
+    put(
+      resolveProjectArtifactPath(root, 'projectConfig', config),
+      JSON.stringify(config)
+    )
+    const plotPath = resolveProjectArtifactPath(root, 'plotBreakdown', config)
+    put(
+      plotPath,
+      buildDefaultPlotBreakdownTemplate({
+        projectName: config.projectName,
+        projectType: config.targetMedium,
+        totalEpisodes: config.totalEpisodes,
+        chaptersPerEpisode: config.chaptersPerEpisode
+      })
+    )
+    const originalInstall = ProductionCommitStore.prototype.install
+    vi.spyOn(ProductionCommitStore.prototype, 'install').mockImplementationOnce(
+      async function (this: ProductionCommitStore, record) {
+        await originalInstall.call(this, record)
+        throw new Error('simulated crash after T03 install')
+      }
+    )
+    await expect(
+      saveProjectSettings('settings', {
+        name: '新名',
+        totalEpisodes: 4,
+        config: { chaptersPerEpisode: 2 }
+      })
+    ).rejects.toThrow('simulated crash')
+    expect(
+      JSON.parse(
+        readFileSync(
+          resolveProjectArtifactPath(root, 'projectConfig', config),
+          'utf8'
+        )
+      )
+    ).toMatchObject({
+      projectName: '新名',
+      totalEpisodes: 4,
+      chaptersPerEpisode: 2
+    })
+    expect(readFileSync(plotPath, 'utf8')).toContain('《新名》')
+    const beforeRecovery = JSON.parse(
+      readFileSync(
+        resolveProjectArtifactPath(root, 'projectConfig', config),
+        'utf8'
+      )
+    )
+    vi.restoreAllMocks()
+    await recoverProductionCommits(root, config, undefined, 'settings')
+    const { getProject } = await import('../db/project-repository')
+    expect(getProject('settings')?.config).toMatchObject(beforeRecovery)
+    expect(new ProductionCommitStore(root, config).list()[0]).toMatchObject({
+      kind: 'project-settings',
+      phase: 'committed',
+      projected: true
+    })
+  })
   it('drains an older scan, projects to disk SQLite, and recovers after projection before its receipt under the same lease', async () => {
     const config: ProjectConfig = {
       projectName: '恢复',

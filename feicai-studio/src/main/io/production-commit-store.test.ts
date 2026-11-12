@@ -62,6 +62,41 @@ async function prepare(store: ProductionCommitStore) {
 }
 
 describe('recoverable production file installation', () => {
+  it('refuses to install project settings through an unbound direct recovery', async () => {
+    const store = new ProductionCommitStore(root, config)
+    const intent = await store.intent(
+      'settings-operation',
+      'project-settings',
+      commitHash('settings-input'),
+      [],
+      [],
+      'project-settings',
+      {
+        id: 'project-1',
+        name: '项目',
+        visualStyle: '写实',
+        targetMedium: '短剧',
+        totalEpisodes: 1,
+        configJson: '{}',
+        updatedAt: 'now'
+      }
+    )
+    const prepared = await store.prepare(intent, [
+      {
+        path: join(root, 'project-config.json'),
+        expected: null,
+        content: '{}'
+      }
+    ])
+    await expect(
+      new ProductionCommitStore(root, config).recover()
+    ).rejects.toThrow('受控项目恢复入口')
+    expect(existsSync(join(root, 'project-config.json'))).toBe(false)
+    await new ProductionCommitStore(root, config).install(prepared)
+    await expect(
+      new ProductionCommitStore(root, config).recover()
+    ).rejects.toThrow('受控项目恢复入口')
+  })
   it.each([
     'intent',
     'prepared',

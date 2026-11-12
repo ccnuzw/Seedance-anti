@@ -20,7 +20,8 @@ import {
   repairProjectIssues,
   syncRegisteredProjectEpisodeStatus,
   syncRegisteredProjectStatus,
-  updateProject
+  updateProject,
+  saveProjectSettings
 } from '../services/project-service'
 import {
   addLLMConfig,
@@ -260,6 +261,21 @@ export function registerAllHandlers(): void {
       throw new Error('更新结果项目身份不一致')
     return updated
   })
+  mutate(
+    IPC.PROJECT_SAVE_SETTINGS,
+    async (_event, id: unknown, value: unknown) => {
+      const { project, root } = registeredProject(id)
+      const data = parseProjectUpdate(value)
+      assertLayoutPaths(root, data.config || project.config, !!data.config)
+      const updated = await saveProjectSettings(project.id, data)
+      if (
+        !isSameProjectRoot(updated.projectPath, root) ||
+        updated.id !== project.id
+      )
+        throw new Error('更新结果项目身份不一致')
+      return updated
+    }
+  )
   mutate(IPC.PROJECT_DELETE, async (_event, id: unknown) => {
     assertNonEmptyString(id, '项目ID')
     const project = getRegisteredProject(id)

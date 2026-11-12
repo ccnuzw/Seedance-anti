@@ -233,6 +233,7 @@ export interface FeicaiAPI extends BatchAPI, DataManagementAPI {
   inspectProjectDirectory(projectPath: string): Promise<DetectedProjectInfo>
   createProject(data: CreateProjectInput): Promise<Project>
   updateProject(id: string, data: UpdateProjectInput): Promise<Project>
+  saveProjectSettings(id: string, data: UpdateProjectInput): Promise<Project>
   deleteProject(id: string): Promise<BasicSuccessResult | void>
   listProjectEpisodes(projectId: string): Promise<Episode[]>
   syncProjectStatus(projectId: string, projectPath: string): Promise<Episode[]>

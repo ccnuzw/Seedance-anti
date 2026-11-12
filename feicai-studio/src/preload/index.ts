@@ -34,6 +34,8 @@ const api: FeicaiAPI = {
     invoke(IPC.PROJECT_INSPECT, projectPath),
   createProject: (data) => invoke(IPC.PROJECT_CREATE, data),
   updateProject: (id: string, data) => invoke(IPC.PROJECT_UPDATE, id, data),
+  saveProjectSettings: (id: string, data) =>
+    invoke(IPC.PROJECT_SAVE_SETTINGS, id, data),
   deleteProject: (id: string) => invoke(IPC.PROJECT_DELETE, id),
   listProjectEpisodes: (projectId: string) =>
     invoke(IPC.PROJECT_GET_STATUS, projectId),

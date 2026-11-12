@@ -13,10 +13,28 @@ import {
 import type { Episode, Project } from '@shared/types'
 import type {
   PlotBreakdownSummary,
-  SourceChapterItem
+  SourceChapterItem,
+  UpdateProjectInput
 } from '@shared/ipc-contracts'
 import { listSourceChapters } from '../project/novel-importer'
 import { summarizeProjectPlotBreakdown } from '../project/plot-breakdown-store'
+import { readRegularFile } from '../io/atomic-file'
+import { isMissingFileError } from '../security/access-control'
+import { randomUUID } from 'crypto'
+import { commitProductionFiles } from './production-commit-service'
+import { commitHash } from '../io/production-commit-store'
+import { prepareProjectUpdate } from '../db/queries'
+import { updatePlotBreakdownPlanning } from '@shared/plot-breakdown'
+import { resolveProjectArtifactPath } from '@shared/path-resolver'
+
+async function readOptional(path: string): Promise<string | null> {
+  try {
+    return (await readRegularFile(path)).toString('utf8')
+  } catch (error) {
+    if (isMissingFileError(error)) return null
+    throw error
+  }
+}
 
 export interface ProjectIdentity {
   projectId?: string
@@ -142,6 +160,62 @@ export async function updateProject(
   }
 ): Promise<Project> {
   return await updateProjectRecord({ id, ...data })
+}
+
+export async function saveProjectSettings(
+  id: string,
+  data: UpdateProjectInput
+): Promise<Project> {
+  const current = getRegisteredProject(id)
+  if (!current) throw new Error(`项目不存在: ${id}`)
+
+  const prepared = prepareProjectUpdate({ id, ...data })
+  const configPath = prepared.configPath
+  const plotPath = resolveProjectArtifactPath(
+    prepared.currentProject.projectPath,
+    'plotBreakdown',
+    prepared.normalizedConfig
+  )
+  const previousConfig = await readOptional(configPath)
+  const previousPlot = await readOptional(plotPath)
+  const nextConfig = JSON.stringify(prepared.normalizedConfig, null, 2)
+  const nextPlot =
+    previousPlot === null
+      ? null
+      : updatePlotBreakdownPlanning(previousPlot, {
+          projectName: prepared.normalizedConfig.projectName,
+          projectType: prepared.normalizedConfig.targetMedium,
+          totalEpisodes: prepared.normalizedConfig.totalEpisodes,
+          chaptersPerEpisode: prepared.normalizedConfig.chaptersPerEpisode
+        })
+  const writes = [
+    { path: configPath, content: nextConfig, expected: previousConfig },
+    ...(nextPlot !== null && nextPlot !== previousPlot
+      ? [{ path: plotPath, content: nextPlot, expected: previousPlot }]
+      : [])
+  ]
+  const projection = {
+    id: prepared.currentProject.id,
+    name: prepared.normalizedConfig.projectName,
+    visualStyle: prepared.normalizedConfig.visualStyle,
+    targetMedium: prepared.normalizedConfig.targetMedium,
+    totalEpisodes: prepared.normalizedConfig.totalEpisodes,
+    configJson: JSON.stringify(prepared.normalizedConfig),
+    updatedAt: prepared.now
+  }
+  await commitProductionFiles({
+    projectPath: prepared.currentProject.projectPath,
+    projectId: prepared.currentProject.id,
+    config: prepared.currentProject.config,
+    operationId: randomUUID(),
+    key: 'project-settings',
+    inputHash: commitHash(JSON.stringify(writes)),
+    episodeNumbers: [],
+    writes,
+    kind: 'project-settings',
+    result: projection
+  })
+  return getRegisteredProject(id)!
 }
 
 export async function migrateLegacyNovelDirectory(projectPath: string) {

@@ -252,19 +252,23 @@ export async function createProject(data: {
   return getProject(id)!
 }
 
-export async function updateProject(data: {
+export interface PreparedProjectUpdate {
+  currentProject: Project
+  configPath: string
+  normalizedConfig: Project['config']
+  now: string
+}
+
+export function prepareProjectUpdate(data: {
   id: string
   name?: string
   visualStyle?: string
   targetMedium?: string
   totalEpisodes?: number
   config?: Partial<Project['config']>
-}): Promise<Project> {
+}): PreparedProjectUpdate {
   const currentProject = getProject(data.id)
-  if (!currentProject) {
-    throw new Error(`项目不存在: ${data.id}`)
-  }
-
+  if (!currentProject) throw new Error(`项目不存在: ${data.id}`)
   const now = new Date().toISOString()
   const configPath = assertPathWithinProject(
     currentProject.projectPath,
@@ -315,10 +319,14 @@ export async function updateProject(data: {
       data.config?.pipelineSettings
     )
   })
+  return { currentProject, configPath, normalizedConfig, now }
+}
 
-  await atomicWriteFile(configPath, JSON.stringify(normalizedConfig, null, 2))
+export function persistProjectProjection(
+  prepared: PreparedProjectUpdate
+): Project {
+  const { currentProject, normalizedConfig, now } = prepared
   initializeProjectDirectories(currentProject.projectPath, normalizedConfig)
-
   updateProjectRecord({
     id: currentProject.id,
     name: normalizedConfig.projectName,
@@ -328,8 +336,23 @@ export async function updateProject(data: {
     configJson: JSON.stringify(normalizedConfig),
     updatedAt: now
   })
-
   return getProject(currentProject.id)!
+}
+
+export async function updateProject(data: {
+  id: string
+  name?: string
+  visualStyle?: string
+  targetMedium?: string
+  totalEpisodes?: number
+  config?: Partial<Project['config']>
+}): Promise<Project> {
+  const prepared = prepareProjectUpdate(data)
+  await atomicWriteFile(
+    prepared.configPath,
+    JSON.stringify(prepared.normalizedConfig, null, 2)
+  )
+  return persistProjectProjection(prepared)
 }
 
 export {

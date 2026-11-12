@@ -13,6 +13,7 @@ export interface ProductionCommitRecord {
   key: string
   inputHash: string
   phase: 'intent' | 'prepared' | 'committed'
+  kind?: 'production' | 'project-settings'
   files: ProductionCommitFile[]
   guards?: { path: string; hash: string | null }[]
   episodeNumbers: number[]

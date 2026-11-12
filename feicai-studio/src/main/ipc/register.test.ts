@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     repairProject: vi.fn(),
     migrateProject: vi.fn(),
     updateProject: vi.fn(),
+    saveProjectSettings: vi.fn(),
     sync: vi.fn(),
     syncEpisode: vi.fn(),
     llmModels: vi.fn()
@@ -58,6 +59,7 @@ vi.mock('../services/project-service', () => ({
     mocks.projects.find((project) => project.id === id) || null,
   createProject: mocks.createProject,
   updateProject: mocks.updateProject,
+  saveProjectSettings: mocks.saveProjectSettings,
   deleteProject: mocks.deleteProject,
   listProjectEpisodes: vi.fn(() => []),
   listRegisteredProjectSourceChapters: vi.fn(() => []),
@@ -437,6 +439,26 @@ describe('项目变更与制作/备份共用租约', () => {
       releaseExecutionLease(acquireExecutionLease('pipeline'))
     }
   )
+
+  it('受控设置保存持有同一租约，忙碌时整体拒绝且不退回FILE_WRITE', async () => {
+    const root = temporary()
+    const existing = project(root)
+    mocks.projects.push(existing)
+    const pending = Promise.withResolvers<Project>()
+    mocks.saveProjectSettings.mockImplementationOnce(() => pending.promise)
+    const saving = invoke(IPC.PROJECT_SAVE_SETTINGS, existing.id, {
+      config: { totalEpisodes: 3 }
+    })
+    await Promise.resolve()
+    expect(getExecutionLease()?.owner).toBe(IPC.PROJECT_SAVE_SETTINGS)
+    await expect(
+      invoke(IPC.PROJECT_SAVE_SETTINGS, existing.id, {})
+    ).rejects.toThrow('请等待')
+    expect(mocks.saveProjectSettings).toHaveBeenCalledTimes(1)
+    pending.resolve({ ...existing, totalEpisodes: 3 })
+    await expect(saving).resolves.toMatchObject({ totalEpisodes: 3 })
+    expect(getExecutionLease()).toBeNull()
+  })
 
   it('同步验证失败释放租约，未授权 sender 在取得租约之前被拒绝', async () => {
     await expect(invoke(IPC.PROJECT_DELETE, 'missing')).rejects.toThrow(

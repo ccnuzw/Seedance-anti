@@ -42,6 +42,13 @@ export async function updateProject(
   return await window.feicaiAPI.updateProject(id, data)
 }
 
+export async function saveProjectSettings(
+  id: string,
+  data: UpdateProjectInput
+): Promise<Project> {
+  return await window.feicaiAPI.saveProjectSettings(id, data)
+}
+
 export async function deleteProject(id: string): Promise<void> {
   await window.feicaiAPI.deleteProject(id)
 }
