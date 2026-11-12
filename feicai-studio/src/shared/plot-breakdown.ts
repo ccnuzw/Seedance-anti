@@ -311,6 +311,19 @@ export function updatePlotBreakdownEntryStatus(
   }
 }
 
+// 人工旧库存可以没有集数绑定；有效内容与正整数序号足以证明批次已发布。
+// 空标题/空内容不能推进水位，已消费剧情仍然属于已发布库存。
+function getPublishedBatches(doc: PlotBreakdownDocument): PlotBreakdownBatch[] {
+  return doc.batches.filter((batch) =>
+    batch.entries.some(
+      (entry) =>
+        Number.isSafeInteger(entry.index) &&
+        entry.index > 0 &&
+        entry.content.trim().length > 0
+    )
+  )
+}
+
 export function summarizePlotBreakdown(doc: PlotBreakdownDocument): {
   totalEntries: number
   usedEntries: number
@@ -323,7 +336,7 @@ export function summarizePlotBreakdown(doc: PlotBreakdownDocument): {
     totalEntries: entries.length,
     usedEntries,
     unusedEntries: entries.length - usedEntries,
-    totalBatches: doc.batches.length
+    totalBatches: getPublishedBatches(doc).length
   }
 }
 
@@ -341,10 +354,11 @@ export function summarizePlotBreakdownWaterline(
     if (entry.status === '已用') usedEpisodeNumbers.add(entry.episode)
   }
 
-  const chapterStarts = doc.batches
+  const publishedBatches = getPublishedBatches(doc)
+  const chapterStarts = publishedBatches
     .map((batch) => batch.chapterStart)
     .filter((value): value is number => typeof value === 'number')
-  const chapterEnds = doc.batches
+  const chapterEnds = publishedBatches
     .map((batch) => batch.chapterEnd)
     .filter((value): value is number => typeof value === 'number')
 
@@ -352,17 +366,19 @@ export function summarizePlotBreakdownWaterline(
     totalEntries: entries.length,
     usedEntries,
     unusedEntries: entries.length - usedEntries,
-    totalBatches: doc.batches.length,
+    totalBatches: publishedBatches.length,
     readyEpisodeCount: readyEpisodeNumbers.size,
     readyEpisodeNumbers: [...readyEpisodeNumbers].sort((a, b) => a - b),
     usedEpisodeCount: usedEpisodeNumbers.size,
     usedEpisodeNumbers: [...usedEpisodeNumbers].sort((a, b) => a - b),
     chapterStart: chapterStarts.length > 0 ? Math.min(...chapterStarts) : null,
     chapterEnd: chapterEnds.length > 0 ? Math.max(...chapterEnds) : null,
+    // 仅显式发布的数字编号推进下一批；旧版章节标题/未分组库存不推断批次。
+    // 稀疏编号保持原有最大编号续编规则，空占位标题无论编号多大都忽略。
     nextBatchNumber:
       Math.max(
-        doc.batches.length,
-        ...doc.batches.map(
+        0,
+        ...publishedBatches.map(
           (batch) => Number(batch.heading.match(/^###\s+第(\d+)批/u)?.[1]) || 0
         )
       ) + 1
