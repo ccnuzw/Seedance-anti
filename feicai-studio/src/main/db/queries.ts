@@ -60,7 +60,7 @@ function readProjectConfigFromDisk(
   return config as Partial<Project['config']>
 }
 
-function initializeProjectDirectories(
+export function initializeProjectDirectories(
   projectPath: string,
   config: Project['config']
 ): void {
@@ -252,14 +252,22 @@ export async function createProject(data: {
   return getProject(id)!
 }
 
-export async function updateProject(data: {
+export interface ProjectUpdatePlan {
+  currentProject: Project
+  configPath: string
+  normalizedConfig: Project['config']
+  now: string
+}
+
+/** Resolve the exact legacy update semantics without mutating disk or SQLite. */
+export function resolveProjectUpdate(data: {
   id: string
   name?: string
   visualStyle?: string
   targetMedium?: string
   totalEpisodes?: number
   config?: Partial<Project['config']>
-}): Promise<Project> {
+}): ProjectUpdatePlan {
   const currentProject = getProject(data.id)
   if (!currentProject) {
     throw new Error(`项目不存在: ${data.id}`)
@@ -315,7 +323,19 @@ export async function updateProject(data: {
       data.config?.pipelineSettings
     )
   })
+  return { currentProject, configPath, normalizedConfig, now }
+}
 
+export async function updateProject(data: {
+  id: string
+  name?: string
+  visualStyle?: string
+  targetMedium?: string
+  totalEpisodes?: number
+  config?: Partial<Project['config']>
+}): Promise<Project> {
+  const { currentProject, configPath, normalizedConfig, now } =
+    resolveProjectUpdate(data)
   await atomicWriteFile(configPath, JSON.stringify(normalizedConfig, null, 2))
   initializeProjectDirectories(currentProject.projectPath, normalizedConfig)
 

@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     repairProject: vi.fn(),
     migrateProject: vi.fn(),
     updateProject: vi.fn(),
+    saveProjectSettings: vi.fn(),
     sync: vi.fn(),
     syncEpisode: vi.fn(),
     llmModels: vi.fn()
@@ -58,6 +59,7 @@ vi.mock('../services/project-service', () => ({
     mocks.projects.find((project) => project.id === id) || null,
   createProject: mocks.createProject,
   updateProject: mocks.updateProject,
+  saveProjectSettings: mocks.saveProjectSettings,
   deleteProject: mocks.deleteProject,
   listProjectEpisodes: vi.fn(() => []),
   listRegisteredProjectSourceChapters: vi.fn(() => []),
@@ -435,6 +437,36 @@ describe('项目变更与制作/备份共用租约', () => {
       }
       expect(getExecutionLease()).toBeNull()
       releaseExecutionLease(acquireExecutionLease('pipeline'))
+    }
+  )
+
+  it.each([false, true])(
+    '设置保存整个 IPC 持有单一执行租约（失败=%s）',
+    async (fails) => {
+      const root = temporary()
+      const existing = project(root)
+      mocks.projects.push(existing)
+      const pending = Promise.withResolvers<Project>()
+      const started = Promise.withResolvers<void>()
+      mocks.saveProjectSettings.mockImplementationOnce(() => {
+        expect(getExecutionLease()?.owner).toBe(IPC.PROJECT_SAVE_SETTINGS)
+        started.resolve()
+        return pending.promise
+      })
+      const saving = invoke(IPC.PROJECT_SAVE_SETTINGS, existing.id, {
+        name: 'changed'
+      })
+      await started.promise
+      expect(() => acquireExecutionLease('pipeline')).toThrow('请等待')
+      if (fails) {
+        const rejected = expect(saving).rejects.toThrow('disk failure')
+        pending.reject(new Error('disk failure'))
+        await rejected
+      } else {
+        pending.resolve({ ...existing, name: 'changed' })
+        await expect(saving).resolves.toMatchObject({ name: 'changed' })
+      }
+      expect(getExecutionLease()).toBeNull()
     }
   )
 

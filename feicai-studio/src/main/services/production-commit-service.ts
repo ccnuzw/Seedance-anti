@@ -1,4 +1,8 @@
 import type { ProjectConfig } from '@shared/types'
+import type {
+  ProductionCommitKind,
+  ProductionCommitRecord
+} from '@shared/production-commit'
 import {
   ProductionCommitStore,
   type CommitWrite
@@ -6,6 +10,7 @@ import {
 import { assertPathWithinProject } from '../security/access-control'
 import {
   acquireExecutionLease,
+  getExecutionLease,
   releaseExecutionLease,
   type ExecutionLease
 } from './batch-execution-lease'
@@ -29,18 +34,23 @@ async function projectionBinding(projectPath: string, projectId?: string) {
   return project
 }
 
-export async function recoverProductionCommits(
+export async function recoverProjectCommits(
+  kind: ProductionCommitKind,
   projectPath: string,
   config?: Partial<ProjectConfig> | null,
   existingLease?: ExecutionLease,
-  projectId?: string
+  projectId?: string,
+  project?: (
+    episodes: number[],
+    record: ProductionCommitRecord
+  ) => Promise<void>
 ): Promise<void> {
-  const lease = acquireExecutionLease('production-recovery', existingLease)
+  const lease = acquireExecutionLease(`${kind}-recovery`, existingLease)
   try {
     const store = new ProductionCommitStore(projectPath, config)
     if (
       !store
-        .list()
+        .list(kind)
         .some(
           (record) =>
             record.phase === 'prepared' ||
@@ -48,15 +58,88 @@ export async function recoverProductionCommits(
         )
     )
       return
-    const project = await projectionBinding(projectPath, projectId)
-    const { syncFreshProductionEpisodes } =
-      await import('../db/episode-sync-repository')
-    await store.recover((episodes) =>
-      syncFreshProductionEpisodes(project.id, projectPath, episodes)
+    if (project) {
+      await store.recover(project, kind)
+    } else {
+      const binding = await projectionBinding(projectPath, projectId)
+      const { syncFreshProductionEpisodes } =
+        await import('../db/episode-sync-repository')
+      await store.recover(
+        (episodes) =>
+          syncFreshProductionEpisodes(binding.id, projectPath, episodes),
+        kind
+      )
+    }
+  } finally {
+    if (!existingLease) releaseExecutionLease(lease)
+  }
+}
+
+export async function recoverProductionCommits(
+  projectPath: string,
+  config?: Partial<ProjectConfig> | null,
+  existingLease?: ExecutionLease,
+  projectId?: string
+): Promise<void> {
+  const lease = acquireExecutionLease('project-recovery', existingLease)
+  try {
+    await recoverProjectCommits(
+      'production',
+      projectPath,
+      config,
+      lease,
+      projectId
+    )
+    await recoverProjectSettingsAtBoundary(
+      projectPath,
+      config,
+      lease,
+      projectId
     )
   } finally {
     if (!existingLease) releaseExecutionLease(lease)
   }
+}
+
+export async function recoverProjectSettingsCommits(
+  projectPath: string,
+  config?: Partial<ProjectConfig> | null,
+  existingLease?: ExecutionLease,
+  projectId?: string,
+  project?: (
+    episodes: number[],
+    record: ProductionCommitRecord
+  ) => Promise<void>
+): Promise<void> {
+  const projection =
+    project ||
+    (async (episodes: number[], record: ProductionCommitRecord) => {
+      const service = await import('./project-service')
+      await service.projectSettingsRecord(episodes, record)
+    })
+  return recoverProjectCommits(
+    'project-settings',
+    projectPath,
+    config,
+    existingLease,
+    projectId,
+    projection
+  )
+}
+
+/** Reconcile settings before ordinary production work at a shared recovery boundary. */
+export async function recoverProjectSettingsAtBoundary(
+  projectPath: string,
+  config?: Partial<ProjectConfig> | null,
+  existingLease?: ExecutionLease,
+  projectId?: string
+): Promise<void> {
+  return recoverProjectSettingsCommits(
+    projectPath,
+    config,
+    existingLease || getExecutionLease() || undefined,
+    projectId
+  )
 }
 
 /** Controlled extension point for future manifest updates. The IO layer always

@@ -10,6 +10,7 @@
 //
 
 import { ProductionCommitStore } from '../io/production-commit-store'
+import { recoverProjectSettingsAtBoundary } from '../services/production-commit-service'
 import type { ProductionCommitRecord } from '@shared/production-commit'
 import { ProjectStatePersistence } from './project-state'
 //   任何 reviewing 状态:
@@ -210,6 +211,10 @@ export class PipelineStateMachine extends EventEmitter {
     params: Parameters<PipelineStateMachine['start']>[0]
   ): Promise<void> {
     await this.checkpoint()
+    await recoverProjectSettingsAtBoundary(
+      params.projectPath,
+      params.projectConfig
+    )
     await new ProductionCommitStore(
       params.projectPath,
       params.projectConfig

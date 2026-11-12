@@ -1,20 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  readTextFile,
-  selectDirectory,
-  writeTextFile
-} from '@renderer/services/file-io'
+import { readTextFile, selectDirectory } from '@renderer/services/file-io'
 import {
   detectProjectDirectory,
   getPlotBreakdownSummary,
-  getProjectPipelineState
+  getProjectPipelineState,
+  saveProjectSettings
 } from '@renderer/services/project-service'
 import { getExceptionMessage } from '@renderer/services/service-contracts'
-import {
-  invalidateCachedTextFile,
-  readCachedTextFile
-} from '@renderer/services/file-cache'
+import { invalidateCachedTextFile } from '@renderer/services/file-cache'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useToastStore } from '@renderer/stores/toastStore'
 import type {
@@ -23,6 +17,7 @@ import type {
   ProjectPipelineState
 } from '@shared/types'
 import { buildProductionRows } from '@renderer/utils/project-production-view'
+import { refreshSettingsSummary } from '@renderer/utils/refresh-settings-summary'
 import {
   pipelineSettingsDraft,
   validatePipelineSettingsDraft,
@@ -36,7 +31,6 @@ import {
   normalizeProjectConfig
 } from '@shared/project-config'
 import { resolveProjectArtifactPath } from '@shared/path-resolver'
-import { updatePlotBreakdownPlanning } from '@shared/plot-breakdown'
 import { useShallow } from 'zustand/react/shallow'
 import {
   getProjectEntryLabel,
@@ -292,7 +286,7 @@ export function useProjectPageController() {
         0,
         Number(projectDraft.chaptersPerEpisode) || 0
       )
-      await useProjectStore.getState().updateProject(currentProject.id, {
+      const updated = await saveProjectSettings(currentProject.id, {
         name: config.projectName as string,
         visualStyle: config.visualStyle as string,
         targetMedium: config.targetMedium as string,
@@ -304,31 +298,30 @@ export function useProjectPageController() {
           pipelineSettings: settings
         }
       })
-      invalidateCachedTextFile(configPath)
-      try {
-        await syncPlotBreakdownPlanningIfPresent(
-          currentProject.projectPath,
-          { ...currentProject.config, ...config, pipelineSettings: settings },
-          {
-            projectName: config.projectName as string,
-            projectType: config.targetMedium as string,
-            totalEpisodes: config.totalEpisodes as number,
-            chaptersPerEpisode: config.chaptersPerEpisode as number
-          }
+      addToast('success', '项目设置已保存')
+      if (useProjectStore.getState().currentProject?.id === currentProject.id) {
+        useProjectStore.setState((state) => ({
+          currentProject: updated,
+          projects: state.projects.map((item) =>
+            item.id === updated.id ? updated : item
+          )
+        }))
+        invalidateCachedTextFile(configPath)
+        const refreshed = await refreshSettingsSummary(() =>
+          getPlotBreakdownSummary(currentProject.id)
         )
-        const summary = await getPlotBreakdownSummary(currentProject.id)
-        if (useProjectStore.getState().currentProject?.id === currentProject.id)
+        if (refreshed.ok) {
           setProduction((previous) =>
             previous?.projectId === currentProject.id
-              ? { ...previous, waterline: summary }
+              ? { ...previous, waterline: refreshed.summary }
               : previous
           )
-        addToast('success', '项目设置已保存')
-      } catch (error) {
-        addToast(
-          'error',
-          `配置已保存，剧情规划同步失败；可再次保存重试：${getExceptionMessage(error, '同步失败')}`
-        )
+        } else {
+          addToast(
+            'warning',
+            `项目设置已保存，但剧情规划状态刷新失败：${getExceptionMessage(refreshed.error, '刷新失败')}`
+          )
+        }
       }
     } catch (error) {
       addToast('error', getExceptionMessage(error, '保存失败'))
@@ -432,27 +425,4 @@ export function useProjectPageController() {
     targetMediums: TARGET_MEDIUMS,
     navigate
   }
-}
-
-async function syncPlotBreakdownPlanningIfPresent(
-  projectPath: string,
-  config: Partial<ProjectConfig>,
-  planning: {
-    projectName: string
-    projectType: string
-    totalEpisodes: number
-    chaptersPerEpisode: number
-  }
-): Promise<void> {
-  const plotBreakdownPath = resolveProjectArtifactPath(
-    projectPath,
-    'plotBreakdown',
-    config
-  )
-  const raw = await readCachedTextFile(plotBreakdownPath)
-  if (!raw) return
-  const next = updatePlotBreakdownPlanning(raw, planning)
-  if (next === raw) return
-  await writeTextFile(plotBreakdownPath, next)
-  invalidateCachedTextFile(plotBreakdownPath)
 }

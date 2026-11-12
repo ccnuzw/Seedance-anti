@@ -2,10 +2,12 @@ import {
   createProject as createProjectRecord,
   deleteProject as deleteProjectRecord,
   getProject,
+  initializeProjectDirectories,
   listEpisodes,
   listProjects,
   migrateLegacyNovelDirectory as migrateLegacyNovelDirectoryRecord,
   repairProjectIssues as repairProjectIssuesRecord,
+  resolveProjectUpdate,
   syncEpisodeStatus,
   syncSingleEpisodeStatus,
   updateProject as updateProjectRecord
@@ -13,10 +15,29 @@ import {
 import type { Episode, Project } from '@shared/types'
 import type {
   PlotBreakdownSummary,
-  SourceChapterItem
+  SourceChapterItem,
+  UpdateProjectInput
 } from '@shared/ipc-contracts'
 import { listSourceChapters } from '../project/novel-importer'
 import { summarizeProjectPlotBreakdown } from '../project/plot-breakdown-store'
+import {
+  readCommitText,
+  ProductionCommitStore,
+  commitHash
+} from '../io/production-commit-store'
+import { updatePlotBreakdownPlanning } from '@shared/plot-breakdown'
+import { resolveProjectArtifactPath } from '@shared/path-resolver'
+import { randomUUID } from 'crypto'
+import { FileConflictError } from '../io/atomic-file'
+import { updateProjectRecord as updateProjectProjection } from '../db/project-repository'
+import {
+  acquireExecutionLease,
+  getExecutionLease,
+  releaseExecutionLease
+} from './batch-execution-lease'
+import { recoverProjectSettingsCommits } from './production-commit-service'
+import type { ProductionCommitRecord } from '@shared/production-commit'
+import { assertPathWithinProject } from '../security/access-control'
 
 export interface ProjectIdentity {
   projectId?: string
@@ -142,6 +163,191 @@ export async function updateProject(
   }
 ): Promise<Project> {
   return await updateProjectRecord({ id, ...data })
+}
+
+interface SettingsProjection {
+  projectId: string
+  projectPath: string
+  previous: {
+    name: string
+    visualStyle: string
+    targetMedium: string
+    totalEpisodes: number
+    configJson: string
+    updatedAt: string
+  }
+  next: {
+    name: string
+    visualStyle: string
+    targetMedium: string
+    totalEpisodes: number
+    configJson: string
+    updatedAt: string
+  }
+}
+
+function settingsProjectionFromRecord(
+  record: ProductionCommitRecord
+): SettingsProjection {
+  const result = record.result
+  if (!result || typeof result !== 'object' || Array.isArray(result))
+    throw new Error('项目设置提交投影损坏')
+  const projection = result as Partial<SettingsProjection>
+  if (
+    typeof projection.projectId !== 'string' ||
+    typeof projection.projectPath !== 'string' ||
+    !projection.previous ||
+    !projection.next
+  )
+    throw new Error('项目设置提交投影损坏')
+  return projection as SettingsProjection
+}
+
+export async function projectSettingsRecord(
+  _episodes: number[],
+  record: ProductionCommitRecord
+): Promise<void> {
+  const projection = settingsProjectionFromRecord(record)
+  const current = getRegisteredProject(projection.projectId)
+  if (
+    !current ||
+    assertPathWithinProject(current.projectPath, current.projectPath) !==
+      assertPathWithinProject(projection.projectPath, projection.projectPath)
+  )
+    throw new Error('项目设置恢复要求当前登记项目与真实路径匹配')
+
+  const matches = (value: typeof projection.previous) =>
+    current.name === value.name &&
+    current.visualStyle === value.visualStyle &&
+    current.targetMedium === value.targetMedium &&
+    current.totalEpisodes === value.totalEpisodes &&
+    JSON.stringify(current.config) === value.configJson &&
+    current.updatedAt === value.updatedAt
+  const alreadyProjected = matches(projection.next)
+  if (!alreadyProjected && !matches(projection.previous))
+    throw new FileConflictError()
+
+  let nextConfig: unknown
+  try {
+    nextConfig = JSON.parse(projection.next.configJson)
+  } catch {
+    throw new Error('项目设置提交配置投影损坏')
+  }
+  if (
+    !nextConfig ||
+    typeof nextConfig !== 'object' ||
+    Array.isArray(nextConfig)
+  )
+    throw new Error('项目设置提交配置投影损坏')
+  const config = nextConfig as Project['config']
+  if (
+    config.projectName !== projection.next.name ||
+    config.visualStyle !== projection.next.visualStyle ||
+    config.targetMedium !== projection.next.targetMedium ||
+    config.totalEpisodes !== projection.next.totalEpisodes
+  )
+    throw new Error('项目设置提交配置投影不匹配')
+  initializeProjectDirectories(current.projectPath, config)
+  if (alreadyProjected) return
+  updateProjectProjection({ id: current.id, ...projection.next })
+}
+
+export async function saveProjectSettings(
+  id: string,
+  data: UpdateProjectInput
+): Promise<Project> {
+  const initial = getRegisteredProject(id)
+  if (!initial) throw new Error(`项目不存在: ${id}`)
+  const existingLease = getExecutionLease()
+  const lease = acquireExecutionLease(
+    'project-settings',
+    existingLease || undefined
+  )
+  const ownsLease = !existingLease
+  try {
+    await recoverProjectSettingsCommits(
+      initial.projectPath,
+      initial.config,
+      lease,
+      initial.id,
+      projectSettingsRecord
+    )
+    const { currentProject, configPath, normalizedConfig, now } =
+      resolveProjectUpdate({ id, ...data })
+    const plotPath = resolveProjectArtifactPath(
+      currentProject.projectPath,
+      'plotBreakdown',
+      currentProject.config
+    )
+    const currentConfig = readCommitText(configPath)
+    const currentPlot = readCommitText(plotPath)
+    const nextConfig = JSON.stringify(normalizedConfig, null, 2)
+    let nextPlot: string | null = null
+    if (currentPlot !== null) {
+      nextPlot = updatePlotBreakdownPlanning(currentPlot, {
+        projectName: normalizedConfig.projectName,
+        projectType: normalizedConfig.targetMedium,
+        totalEpisodes: normalizedConfig.totalEpisodes,
+        chaptersPerEpisode: normalizedConfig.chaptersPerEpisode
+      })
+      if (nextPlot === currentPlot) nextPlot = null
+    }
+    const next = {
+      name: normalizedConfig.projectName,
+      visualStyle: normalizedConfig.visualStyle,
+      targetMedium: normalizedConfig.targetMedium,
+      totalEpisodes: normalizedConfig.totalEpisodes,
+      configJson: JSON.stringify(normalizedConfig),
+      updatedAt: now
+    }
+    const previous = {
+      name: currentProject.name,
+      visualStyle: currentProject.visualStyle,
+      targetMedium: currentProject.targetMedium,
+      totalEpisodes: currentProject.totalEpisodes,
+      configJson: JSON.stringify(currentProject.config),
+      updatedAt: currentProject.updatedAt
+    }
+    const projection: SettingsProjection = {
+      projectId: currentProject.id,
+      projectPath: currentProject.projectPath,
+      previous,
+      next
+    }
+    const writes = [
+      { path: configPath, expected: currentConfig, content: nextConfig },
+      ...(nextPlot === null
+        ? []
+        : [{ path: plotPath, expected: currentPlot, content: nextPlot }])
+    ]
+    const operationId = randomUUID()
+    const store = new ProductionCommitStore(
+      currentProject.projectPath,
+      currentProject.config
+    )
+    const intent = await store.intent(
+      operationId,
+      'project-settings',
+      commitHash(JSON.stringify({ nextConfig, nextPlot })),
+      [],
+      [configPath, ...(nextPlot === null ? [] : [plotPath])],
+      'project-settings'
+    )
+    if (intent.phase === 'intent') {
+      const prepared = await store.prepare(intent, writes, projection)
+      await store.install(prepared)
+    }
+    await recoverProjectSettingsCommits(
+      currentProject.projectPath,
+      currentProject.config,
+      lease,
+      currentProject.id,
+      projectSettingsRecord
+    )
+    return getRegisteredProject(id)!
+  } finally {
+    if (ownsLease) releaseExecutionLease(lease)
+  }
 }
 
 export async function migrateLegacyNovelDirectory(projectPath: string) {
